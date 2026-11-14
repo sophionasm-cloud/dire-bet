@@ -1,0 +1,8 @@
+{
+  "name": "@dire-bet/engines",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "exports": { "./xo": "./src/xo.ts" }
+}

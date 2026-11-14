@@ -1,0 +1,27 @@
+{
+  "name": "dire-bet",
+  "private": true,
+  "version": "0.1.0",
+  "engines": { "node": ">=20.19.0" },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -k -n web,worker \"npm run dev --workspace @dire-bet/web\" \"wrangler dev --ip 127.0.0.1\"",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "build": "npm run build --workspace @dire-bet/web && npm run build --workspace @dire-bet/worker",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply dire-bet-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply dire-bet-db --remote",
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check:i18n": "node scripts/check-i18n.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0",
+    "concurrently": "^9.1.0"
+  }
+}
