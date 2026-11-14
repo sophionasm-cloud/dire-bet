@@ -20,7 +20,7 @@
     {
       "binding": "DB",
       "database_name": "dire-bet-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "dc2fa118-8ddc-4cdb-b228-745c32659d83",
       "migrations_dir": "migrations"
     }
   ],

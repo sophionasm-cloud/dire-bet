@@ -29,17 +29,18 @@ The local Worker is served alongside Vite at port 8787. The Vite server forwards
 
 ## Cloudflare setup
 
-Cloudflare access was not available to inspect during this build. The configuration keeps the existing Worker name `dire-bet`, but its remote D1 ID is still a local placeholder. After legal review and private-repository setup, sign in with:
+The demo preview is deployed to `https://dire-bet.sophionasm.workers.dev`. Its D1 database is configured, and the live health check reports demo mode with live money off. It uses the existing Worker named `dire-bet`.
 
 ```powershell
 npx wrangler login
 ./scripts/setup.ps1
-npx wrangler secret put TELEGRAM_BOT_TOKEN
+npm run deploy
+./scripts/connect-telegram.ps1
 ```
 
-Type the bot token only into Wrangler’s prompt. The setup script generates the webhook and session secrets in memory and writes each through Wrangler stdin. It asks for a strong one-time `SETUP_KEY` securely; keep that key in a password manager until Telegram setup is complete. It never sets live-money flags. Then test locally and review `STATUS.md` before any deployment. No production deploy has been performed from this checkout.
+The Telegram script checks that the deployed Worker is still in demo mode, asks for the BotFather token in a hidden prompt, saves it and generated secrets directly to Cloudflare, and configures the bot menu and webhook. Never paste the token into chat, a source file or command arguments. The bot can open the demo; Telegram sign-in inside the app is still unfinished.
 
-After a reviewed deployment, run `./scripts/complete-telegram-setup.ps1`. It asks for the HTTPS Worker URL and one-time setup key in PowerShell prompts, then configures the webhook, bot commands and menu once. The player UI has no owner setup screen. Never paste the key into chat, source files or command arguments.
+For local checks, run `npm run dev` and use the Vite address printed by PowerShell. The deployed app remains demo-only; its money routes are disabled.
 
 ## Commands
 
@@ -53,9 +54,9 @@ After a reviewed deployment, run `./scripts/complete-telegram-setup.ps1`. It ask
 - `npm run seed:demo` — insert clearly labeled local dashboard sample rows; refuses remote flags
 - `npm run check:secrets` — scan repository text files for Telegram token patterns and private keys
 - `npm run check:i18n` — verify the four translation files have identical keys
-- `./scripts/complete-telegram-setup.ps1` — complete one-time Telegram bot setup after the Worker is deployed
+- `./scripts/connect-telegram.ps1` — securely add the bot token and connect the bot after deployment
 
-`npm run deploy` updates the Worker named `dire-bet`. The current Worker, the owner’s activation evidence and production state were not verified here. Do not deploy until the focused security checks and the owner’s legal/platform gate are complete. Production money endpoints remain disabled in this preview.
+`npm run deploy` updates the Worker named `dire-bet`. It deploys the demo preview and does not turn on live funds. Do not enable money features.
 
 ## Backups and troubleshooting
 

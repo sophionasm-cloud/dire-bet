@@ -8,12 +8,13 @@ Actions are ordered. The platform is a free-play preview until every applicable 
 4. **Get written merchant approval.** Each provider must approve this exact gaming activity and merchant account. Confirm applicable National Bank of Ethiopia rules. Do not use personal accounts for customer funds without written authorization.
 5. **Confirm privacy, age and retention rules.** Set the minimum age only from qualified legal review. Define age verification, self-exclusion, cooling-off, data access/deletion and retention before production accounts are accepted.
 6. **Install Node.js LTS and Git on Windows.** Use a current Node 20.19+ release. Open PowerShell in the project folder and run `npm install`.
-7. **Set up Cloudflare access.** Run `npx wrangler login`, then `./scripts/setup.ps1`. The script creates or reuses `dire-bet-db`, saves the D1 ID, applies migrations and uploads the webhook/session secrets through Wrangler stdin. It asks you to enter a strong, one-time `SETUP_KEY` securely; keep it in a password manager until Telegram setup is complete.
-8. **Set the bot token only in Wrangler.** Run `npx wrangler secret put TELEGRAM_BOT_TOKEN` and type the token only into Wrangler’s prompt. Never paste it into Codex, a script, a source file or a chat. If it was ever shared, revoke and replace it with BotFather first.
-9. **Check the preview locally.** Run `npm run dev`, open the local URL printed by Vite, and check that `/api/health` reports `mode: demo` and `realMoneyAvailable: false`.
-10. **Review translations and legal drafts.** Ask native speakers to review `docs/TRANSLATION_REVIEW.md`; ask counsel to review the draft Terms and Privacy material before publishing it.
-11. **Do not activate money features yet.** Multiplayer, admin MFA/RBAC, agent isolation, payment integrations and all required focused checks are still incomplete. The production activation record cannot be created by the current UI or API.
-12. **Before any later deployment**, run the required reviews and focused checks, inspect the exact Worker target in Cloudflare, confirm the legal checklist is complete, and verify the published health endpoint. After an approved free-play deployment, run `./scripts/complete-telegram-setup.ps1` once to configure the bot webhook/menu. The current Worker target and login could not be inspected in this build session.
+7. **Set up Cloudflare.** Run `npx wrangler login`, then `./scripts/setup.ps1`. It creates or reuses `dire-bet-db`, saves the D1 ID and applies migrations.
+8. **Deploy the demo preview.** Run `npm run deploy`. The current preview is already at `https://dire-bet.sophionasm.workers.dev`; its live health check reports demo mode and no real-money access.
+9. **Connect Telegram.** After deployment, run `./scripts/connect-telegram.ps1`. It asks for the BotFather token in a hidden prompt, saves it directly to Cloudflare, and configures the bot menu/webhook. Never paste the token into Codex or chat. Telegram sign-in inside the app is still unfinished.
+10. **Check locally if needed.** Run `npm run dev` and open the local URL printed by Vite.
+11. **Review translations and product documents.** Ask native speakers to review `docs/TRANSLATION_REVIEW.md`.
+12. **Keep money features off.** Multiplayer, admin MFA/RBAC, agent isolation and payment integrations are still incomplete. The current UI cannot enable real-money mode.
+13. **Before later deployments**, rerun checks, confirm the intended Worker in Cloudflare, and verify its health endpoint.
 
 ## Cost notes
 

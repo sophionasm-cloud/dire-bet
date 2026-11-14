@@ -32,59 +32,9 @@ $configText = $config | ConvertTo-Json -Depth 50
 [System.IO.File]::WriteAllText((Resolve-Path '.\wrangler.jsonc'), $configText, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host 'Applying database migrations...'
-& npx wrangler d1 migrations apply dire-bet-db --remote --yes
+& npx wrangler d1 migrations apply dire-bet-db --remote
 if ($LASTEXITCODE -ne 0) { throw 'Remote migrations failed. The D1 database ID remains saved in wrangler.jsonc.' }
 
-function New-SecretValue {
-  $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-  return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
-}
-
-function Set-WranglerSecretFromInput([string] $Name, [string] $Value) {
-  $start = [System.Diagnostics.ProcessStartInfo]::new()
-  $start.FileName = 'cmd.exe'
-  $start.Arguments = "/d /s /c `"npx wrangler secret put $Name`""
-  $start.UseShellExecute = $false
-  $start.RedirectStandardInput = $true
-  $start.RedirectStandardOutput = $true
-  $start.RedirectStandardError = $true
-  $process = [System.Diagnostics.Process]::new()
-  $process.StartInfo = $start
-  [void]$process.Start()
-  $process.StandardInput.WriteLine($Value)
-  $process.StandardInput.Close()
-  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-  $stderrTask = $process.StandardError.ReadToEndAsync()
-  $process.WaitForExit()
-  $stdout = $stdoutTask.Result
-  $stderr = $stderrTask.Result
-  if ($process.ExitCode -ne 0) {
-    throw "Uploading $Name failed. Wrangler output was: $($stderr.Trim())"
-  }
-}
-
-Write-Host 'Creating session and webhook secrets in memory and uploading them to Wrangler...'
-foreach ($name in @('TELEGRAM_WEBHOOK_SECRET','SESSION_SECRET')) {
-  $value = New-SecretValue
-  Set-WranglerSecretFromInput -Name $name -Value $value
-  $value = $null
-  Write-Host "Uploaded $name."
-}
-
-$secureSetupKey = Read-Host 'Paste a strong one-time SETUP_KEY from your password manager; keep it until Telegram setup is complete' -AsSecureString
-$setupKeyPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSetupKey)
-try {
-  $setupKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($setupKeyPtr)
-  if ($setupKey.Length -lt 32) { throw 'SETUP_KEY must be at least 32 characters.' }
-  Set-WranglerSecretFromInput -Name 'SETUP_KEY' -Value $setupKey
-  Write-Host 'Uploaded SETUP_KEY.'
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($setupKeyPtr)
-  $setupKey = $null
-  $secureSetupKey.Dispose()
-}
-
 Write-Host ''
-Write-Host "OWNER ACTION: run npx wrangler secret put TELEGRAM_BOT_TOKEN and type the bot token only into the Wrangler prompt."
-Write-Host 'After a safe deployment, run ./scripts/complete-telegram-setup.ps1 and enter the Worker URL and SETUP_KEY securely.'
-Write-Host 'The bot token is not read by this script. Live-money settings remain disabled.'
+Write-Host 'Database setup is complete. Deploy the demo first, then run ./scripts/connect-telegram.ps1.'
+Write-Host 'The Telegram script asks for the bot token in a hidden prompt and keeps money features disabled.'
