@@ -7,6 +7,7 @@ Updated: 2026-11-15
 - Deployed to `https://dire-bet.sophionasm.workers.dev` on the existing `dire-bet` Worker.
 - Remote D1 database `dire-bet-db` exists in region EEUR; migration `0001_core.sql` applied successfully.
 - Live `/api/health` verified `{ "ok": true, "mode": "demo", "realMoneyAvailable": false }`.
+- The four-poster carousel update is deployed. The live home page and Ludo JPEG returned HTTP 200; all four game images loaded in the live phone-sized preview.
 - Live `/api/games` verified. XO is marked playable for practice; Ludo, Dominoes and Poker are preview-only; Ethiopian 41 is unavailable.
 - Telegram bot setup succeeded: Cloudflare has the required secrets, and Telegram accepted the webhook, commands and menu. The token was entered through a hidden local prompt and was not shared in chat.
 - Telegram login inside the player app is still unfinished. The bot's `/start` and menu open the demo.
@@ -16,23 +17,24 @@ Updated: 2026-11-15
 
 - React/Vite player preview, Cloudflare Worker, shared packages and D1 schema.
 - Four languages (English, Amharic, Somali, Afaan Oromoo), guest navigation, wallet lock screen and local XO practice against a bot.
+- The home carousel now rotates through the supplied Ludo, Dominoes, Poker and XO posters, with animated transitions and accessible slide controls. Poster art also appears on the matching game cards.
 - Telegram init-data verification and short-lived session code, bot webhook/setup endpoints, health/catalog endpoints and disabled live-money routes.
 - Responsive browser previews for player, wallet, admin and agent. Screenshots are in `docs/screenshots/`.
 
 ## Checks
 
-- All four languages checked at 360×740; no horizontal overflow observed.
+- All four languages checked at 360×740; no horizontal overflow observed. The updated poster carousel and images were checked locally at 1440×900.
 - Wallet checked at 390×844 and 1440×900. Admin and agent previews checked at phone and desktop sizes.
 - XO practice played to a finished round.
 - `npm run test`: 10 unit tests passed (i18n 2, Worker security 4, XO engine 4).
-- `npm run typecheck`, `npm run lint`, `npm run build`, `npm run check:i18n`, `npm run check:secrets` passed. The lint command is currently a TypeScript check. Translation parity is 78 keys × 4 languages; secret scan covered 65 repository files.
+- `npm run typecheck`, `npm run lint`, `npm run build`, `npm run check:i18n`, `npm run check:secrets` passed. The lint command is currently a TypeScript check. Translation parity is 89 keys × 4 languages; the latest secret scan covered 71 repository files. The updated build deployed successfully.
 - PowerShell scripts parsed successfully. Local D1 migration and live remote migration both completed.
 
 ## Not implemented
 
 - **Peer-to-peer games complete: 0.** XO is single-player practice against a local bot. Online rooms and matchmaking do not exist.
-- Telegram login is not wired into the player UI. The bot token has not been added, so the bot has not been connected yet.
-- Admin MFA/RBAC and operational APIs, agent onboarding/isolation, wallet endpoints, payment integrations, referrals/promos, multiplayer, voice, notifications, support backend and PNG export remain unfinished. Admin and agent routes are locked previews.
+- Telegram login is not wired into the player UI.
+- Admin MFA/RBAC and operational APIs, agent onboarding/isolation, wallet endpoints, payment integrations, referrals/promos, multiplayer, voice, notifications, support backend and PNG export remain unfinished. Admin and agent routes are locked previews; there is no admin username or password yet.
 - Translation review by native speakers remains pending.
 - The GitHub repository is public. Owner may make it private in GitHub Settings if needed.
 

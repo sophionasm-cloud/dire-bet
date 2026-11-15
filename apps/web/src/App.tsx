@@ -13,6 +13,12 @@ type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
 
 const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', om: 'OM' };
+const bannerSlides: { game: string; title: TranslationKey; copy: TranslationKey; action: 'quick'|'board'|'cards' }[] = [
+  { game: 'xo', title: 'bannerXoTitle', copy: 'bannerXoCopy', action: 'quick' },
+  { game: 'ludo', title: 'bannerLudoTitle', copy: 'bannerLudoCopy', action: 'board' },
+  { game: 'dominoes', title: 'bannerDominoesTitle', copy: 'bannerDominoesCopy', action: 'board' },
+  { game: 'poker', title: 'bannerPokerTitle', copy: 'bannerPokerCopy', action: 'cards' },
+];
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
   const paths: Record<string, ReactNode> = {
@@ -36,11 +42,8 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 
 function GameArt({ id }: { id: string }) {
   if (id === 'ethiopian-41') return <div className="art art-disabled"><span>41</span></div>;
-  return <div className={`art art-${id}`} aria-hidden="true">
-    {id === 'xo' && <svg viewBox="0 0 100 100"><path d="M24 24 76 76M76 24 24 76"/><circle cx="50" cy="50" r="33"/></svg>}
-    {id === 'ludo' && <svg viewBox="0 0 100 100"><rect x="20" y="20" width="60" height="60" rx="12"/><path d="M20 50h60M50 20v60"/><circle cx="35" cy="35" r="6"/><circle cx="65" cy="35" r="6"/><circle cx="35" cy="65" r="6"/><circle cx="65" cy="65" r="6"/></svg>}
-    {id === 'dominoes' && <svg viewBox="0 0 100 100"><g transform="rotate(-25 50 50)"><rect x="24" y="18" width="52" height="64" rx="10"/><path d="M26 50h48"/><circle cx="39" cy="35" r="3"/><circle cx="61" cy="35" r="3"/><circle cx="39" cy="65" r="3"/><circle cx="50" cy="58" r="3"/><circle cx="61" cy="71" r="3"/></g></svg>}
-    {id === 'poker' && <svg viewBox="0 0 100 100"><g transform="rotate(-12 48 50)"><rect x="23" y="17" width="52" height="68" rx="9"/><path d="M37 36h.01M61 66h.01"/><path d="M49 44c-8-9-17 2 0 15 17-13 8-24 0-15Z"/></g></svg>}
+  return <div className={`art art-${id} art-poster`} aria-hidden="true">
+    <img src={`/posters/${id}.jpg`} alt="" loading="lazy" decoding="async" />
   </div>;
 }
 
@@ -57,6 +60,7 @@ function App() {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Game | null>(null);
   const [banner, setBanner] = useState(0);
+  const [bannerPaused, setBannerPaused] = useState(false);
   const [round, setRound] = useState(0);
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem('direbet.recent') || '[]') as string[]);
   const [reduceEffects, setReduceEffects] = useState(() => localStorage.getItem('direbet.reduceEffects') === 'true');
@@ -125,10 +129,18 @@ function App() {
   }, [page]);
 
   useEffect(() => {
-    if (reduceEffects || navigator.hardwareConcurrency <= 4) return;
-    const timer = window.setInterval(() => setBanner((current) => (current + 1) % 2), 6000);
-    return () => window.clearInterval(timer);
-  }, [reduceEffects]);
+    if (reduceEffects || bannerPaused) return;
+    let timer = 0;
+    const stop = () => { if (timer) window.clearInterval(timer); timer = 0; };
+    const start = () => {
+      stop();
+      if (!document.hidden) timer = window.setInterval(() => setBanner((current) => (current + 1) % bannerSlides.length), 7200);
+    };
+    const onVisibilityChange = () => document.hidden ? stop() : start();
+    start();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibilityChange); };
+  }, [reduceEffects, bannerPaused]);
 
   const filteredGames = useMemo(() => PUBLIC_GAMES.filter((game) => {
     const matchesSearch = `${game.title} ${game.id}`.toLowerCase().includes(query.toLowerCase());
@@ -152,6 +164,14 @@ function App() {
   const updateLanguage = (value: Language) => {
     setLanguage(value); setOverlay(null);
     if (sessionToken) fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } }).catch(() => undefined);
+  };
+  const activateBanner = () => {
+    const slide = bannerSlides[banner];
+    if (slide.action === 'quick') { openXo(); return; }
+    const nextCategory = slide.action;
+    setCategory(nextCategory);
+    setQuery('');
+    window.requestAnimationFrame(() => document.querySelector('.game-grid')?.scrollIntoView({ behavior: reduceEffects ? 'auto' : 'smooth', block: 'center' }));
   };
   const setEffectPreference = () => {
     const value = !reduceEffects; setReduceEffects(value); localStorage.setItem('direbet.reduceEffects', String(value));
@@ -179,10 +199,11 @@ function App() {
 
     {page === 'home' && <section className="screen home-screen">
       {!isTelegram && <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a></div>}
-      <section className={`hero hero-${banner}`} aria-label={t('tagline')}>
-        <div className="hero-copy"><span className="eyebrow">DIRE BET · {t('freePractice')}</span><h1>{banner === 0 ? t('chooseGame') : t('tagline')}</h1><p>{t('guestDescription')}</p><button className="primary-button" onClick={openXo}>{t('quickPlay')}<span>↗</span></button></div>
-        <div className="hero-art" aria-hidden="true"><span className="hero-orb orb-one"/><span className="hero-orb orb-two"/><div className="hero-die"><i/><i/><i/><i/><i/></div><span className="hero-x">×</span><span className="hero-o">○</span></div>
-        <div className="hero-dots"><button aria-label="Slide 1" className={banner === 0 ? 'active' : ''} onClick={() => setBanner(0)}/><button aria-label="Slide 2" className={banner === 1 ? 'active' : ''} onClick={() => setBanner(1)}/></div>
+      <section className={`hero hero-${banner}`} aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }}>
+        <img key={bannerSlides[banner].game} className="hero-poster" src={`/posters/${bannerSlides[banner].game}.jpg`} alt="" fetchPriority="high" />
+        <div className="hero-copy" key={banner}><span className="eyebrow">DIRE BET · {t('freePractice')}</span><h1>{t(bannerSlides[banner].title)}</h1><p>{t(bannerSlides[banner].copy)}</p><button className="primary-button" onClick={activateBanner}>{t(bannerSlides[banner].action === 'quick' ? 'quickPlay' : bannerSlides[banner].action === 'cards' ? 'browseCardGames' : 'browseBoardGames')}<span>{bannerSlides[banner].action === 'quick' ? '↗' : '⌄'}</span></button></div>
+        <div className="hero-shade" aria-hidden="true" />
+        <div className="hero-dots" role="group" aria-label={t('chooseGame')}>{bannerSlides.map((slide, index) => <button key={slide.game} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => setBanner(index)} />)}</div>
       </section>
 
       <div className="section-head"><div><span className="eyebrow">{t('tagline')}</span><h2>{t('chooseGame')}</h2></div><button className="text-button" onClick={() => setOverlay('menu')}>{t('seeAll')}<Icon name="chevron" size={15}/></button></div>
