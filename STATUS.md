@@ -8,7 +8,8 @@ Updated: 2026-11-15
 - Remote D1 database `dire-bet-db` exists in region EEUR; migration `0001_core.sql` applied successfully.
 - Live `/api/health` verified `{ "ok": true, "mode": "demo", "realMoneyAvailable": false }`.
 - Live `/api/games` verified. XO is marked playable for practice; Ludo, Dominoes and Poker are preview-only; Ethiopian 41 is unavailable.
-- Cloudflare has no Telegram Worker secrets yet. The bot token and bot webhook/menu setup remain owner actions. Run `./scripts/connect-telegram.ps1` after deployment; it prompts for the token privately.
+- Telegram bot setup succeeded: Cloudflare has the required secrets, and Telegram accepted the webhook, commands and menu. The token was entered through a hidden local prompt and was not shared in chat.
+- Telegram login inside the player app is still unfinished. The bot's `/start` and menu open the demo.
 - `REAL_MONEY_ENABLED=false`, `DEMO_MODE=true`. No deposit, withdrawal, stake, prize or cash-commission feature is enabled.
 
 ## Built

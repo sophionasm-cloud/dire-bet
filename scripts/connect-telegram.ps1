@@ -28,21 +28,38 @@ function Set-WranglerSecretFromInput([string] $Name, [string] $Value) {
 }
 
 function New-SecretValue {
-  $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-  return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  $bytes = New-Object byte[] 32
+  try {
+    $rng.GetBytes($bytes)
+    return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+  } finally {
+    [Array]::Clear($bytes, 0, $bytes.Length)
+    $rng.Dispose()
+  }
 }
 
-$secureToken = Read-Host 'Paste the BotFather token for @Dire_Bet_bot here. Typing is hidden; do not send it in chat.' -AsSecureString
-$tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+$secretListOutput = (& npx wrangler secret list --name dire-bet 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) { throw 'Could not check Cloudflare secrets. Run npx wrangler login and try again.' }
+try { $secretNames = @((ConvertFrom-Json -InputObject $secretListOutput) | ForEach-Object { $_.name }) }
+catch { throw 'Cloudflare returned an unreadable secret list. Stop and check the Wrangler setup.' }
+
+$secureToken = $null
+$tokenPtr = $null
 $token = $null
 $setupKey = $null
 try {
-  $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPtr)
-  if ($token -notmatch '^\d{5,}:[A-Za-z0-9_-]{20,}$') { throw 'That does not look like a Telegram bot token. Check it in BotFather and try again.' }
-
-  Set-WranglerSecretFromInput -Name 'TELEGRAM_BOT_TOKEN' -Value $token
-  $token = $null
-  Write-Host 'Saved the bot token directly to Cloudflare.'
+  if ($secretNames -notcontains 'TELEGRAM_BOT_TOKEN') {
+    $secureToken = Read-Host 'Paste the BotFather token for @Dire_Bet_bot here. Typing is hidden; do not send it in chat.' -AsSecureString
+    $tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+    $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPtr)
+    if ($token -notmatch '^\d{5,}:[A-Za-z0-9_-]{20,}$') { throw 'That does not look like a Telegram bot token. Check it in BotFather and try again.' }
+    Set-WranglerSecretFromInput -Name 'TELEGRAM_BOT_TOKEN' -Value $token
+    $token = $null
+    Write-Host 'Saved the bot token directly to Cloudflare.'
+  } else {
+    Write-Host 'Found the saved bot token in Cloudflare; reusing it without asking you to type it again.'
+  }
 
   foreach ($name in @('TELEGRAM_WEBHOOK_SECRET','SESSION_SECRET')) {
     $value = New-SecretValue
@@ -60,8 +77,8 @@ try {
 } catch {
   throw "Telegram setup stopped: $($_.Exception.Message)"
 } finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr)
-  $secureToken.Dispose()
+  if ($tokenPtr) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr) }
+  if ($secureToken) { $secureToken.Dispose() }
   $token = $null
   $setupKey = $null
 }
