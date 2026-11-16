@@ -33,7 +33,7 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-The checked-in settings keep `REAL_MONEY_ENABLED=false` and `DEMO_MODE=true`. Do not change them. If a Telegram token has been pasted into chat, revoke it in BotFather and enter a fresh token only through `./scripts/connect-telegram.ps1`, where typing is hidden.
+The checked-in settings keep `REAL_MONEY_ENABLED=false` and `DEMO_MODE=true`. Do not change them. Telegram tokens stay in Cloudflare secrets. Run `./scripts/connect-telegram.ps1` to reconnect the bot; use `./scripts/connect-telegram.ps1 -ReplaceBotToken` only when replacing its token. Both prompts hide token typing.
 
 ## Project commands
 

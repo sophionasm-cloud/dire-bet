@@ -1,3 +1,5 @@
+param([switch] $ReplaceBotToken)
+
 $ErrorActionPreference = 'Stop'
 $workerOrigin = 'https://dire-bet.sophionasm.workers.dev'
 
@@ -49,7 +51,7 @@ $tokenPtr = $null
 $token = $null
 $setupKey = $null
 try {
-  if ($secretNames -notcontains 'TELEGRAM_BOT_TOKEN') {
+  if ($ReplaceBotToken -or ($secretNames -notcontains 'TELEGRAM_BOT_TOKEN')) {
     $secureToken = Read-Host 'Paste the BotFather token for @Dire_Bet_bot here. Typing is hidden; do not send it in chat.' -AsSecureString
     $tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
     $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPtr)
@@ -62,10 +64,14 @@ try {
   }
 
   foreach ($name in @('TELEGRAM_WEBHOOK_SECRET','SESSION_SECRET')) {
-    $value = New-SecretValue
-    Set-WranglerSecretFromInput -Name $name -Value $value
-    $value = $null
-    Write-Host "Created $name in Cloudflare."
+    if ($secretNames -notcontains $name) {
+      $value = New-SecretValue
+      Set-WranglerSecretFromInput -Name $name -Value $value
+      $value = $null
+      Write-Host "Created $name in Cloudflare."
+    } else {
+      Write-Host "Reusing saved $name."
+    }
   }
 
   $setupKey = New-SecretValue
@@ -73,7 +79,7 @@ try {
   $response = Invoke-RestMethod -Method Post -Uri "$workerOrigin/telegram/setup" `
     -Headers @{ Authorization = "Bearer $setupKey" } -ContentType 'application/json' -Body '{}'
   if (-not $response.ok) { throw 'The Telegram setup endpoint did not return success.' }
-  Write-Host 'Telegram bot is connected. Its /start button and menu now open the DIRE BET demo.'
+  Write-Host 'Telegram bot connection is current. Its /start button and menu open DIRE BET.'
 } catch {
   throw "Telegram setup stopped: $($_.Exception.Message)"
 } finally {

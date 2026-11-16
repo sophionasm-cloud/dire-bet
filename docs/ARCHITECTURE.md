@@ -33,4 +33,4 @@ Admin and agent pages remain locked. There is no default admin credential. Staff
 
 ## Remaining operational work
 
-The free-play build and migration are deployed. Two Telegram accounts are needed to verify an online match end-to-end; the bot token must first be rotated and re-entered through the hidden setup prompt. Native-speaker translation review, staff authentication, admin/agent operations, monitoring and any future wallet service remain outside this free-play release. Ethiopian 41 has no engine and stays unavailable.
+The free-play build and migration are deployed. Two Telegram accounts are needed to verify an online match end-to-end; use the protected setup script to refresh the bot webhook. Native-speaker translation review, staff authentication, admin/agent operations, monitoring and any future wallet service remain outside this free-play release. Ethiopian 41 has no engine and stays unavailable.

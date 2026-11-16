@@ -17,7 +17,7 @@ DIRE BET is a free-play web app that can also open as a Telegram Mini App. Guest
 
 - `REAL_MONEY_ENABLED=false`, `DEMO_MODE=true`. Wallet UI is informational/demo-only. No deposits, withdrawals, wagers, prizes, commissions or payment providers are active.
 - Admin and agent pages remain locked previews. There is no default admin username or password. Do not invent or publish one; secure staff sign-in, MFA, RBAC and isolated agent records still need implementation and owner setup.
-- The latest BotFather token was pasted into chat. Revoke it in BotFather and enter a fresh token only through the hidden local setup prompt before relying on the bot.
+- Telegram token and webhook secrets are stored in Cloudflare. The connection script successfully refreshed the webhook, bot commands and menu using the saved token; `-ReplaceBotToken` opens a hidden prompt if it needs updating.
 - The GitHub repository is public. The owner can change its visibility in GitHub Settings.
 
 ## Cloudflare deployment
@@ -26,7 +26,7 @@ DIRE BET is a free-play web app that can also open as a Telegram Mini App. Guest
 - Existing Worker: `dire-bet`; D1: `dire-bet-db`.
 - Migration `0002_enable_freeplay_games.sql` is applied remotely; Ludo, Dominoes and Poker are enabled in D1.
 - Live checks: home page HTTP 200, Ludo poster HTTP 200, health reports demo mode and no real money, and all four games report playable. Ethiopian 41 reports unavailable.
-- Telegram sign-in and two-account multiplayer have not been verified end to end. The BotFather token shared in chat must be revoked and replaced through the hidden local setup prompt before relying on Telegram login.
+- Telegram sign-in and two-account multiplayer have not been verified end to end. Use the local connection script to refresh the webhook, then test with two Telegram accounts.
 
 ## Checks
 

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { moneyActivationRecorded, validateInitData } from './index';
+import { describe, expect, it, vi } from 'vitest';
+import worker, { moneyActivationRecorded, validateInitData } from './index';
 
 const token = 'test-bot-token';
 const encoder = new TextEncoder();
@@ -57,5 +57,31 @@ describe('real-money activation gate', () => {
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:JSON.stringify(evidence)}))).toBe(false);
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:'{}',audit:true}))).toBe(false);
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:JSON.stringify(evidence),audit:true}))).toBe(true);
+  });
+});
+
+describe('Telegram setup recovery', () => {
+  it('can refresh the bot webhook after setup has already run', async () => {
+    const telegram = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const env = {
+      SETUP_KEY: 'setup-key',
+      TELEGRAM_BOT_TOKEN: 'saved-token',
+      TELEGRAM_WEBHOOK_SECRET: 'webhook-secret',
+      DB: { prepare: () => ({ run: async () => ({ success: true }) }) },
+      ASSETS: { fetch: async () => new Response('') },
+    } as never;
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await worker.fetch(new Request('https://dire-bet.test/telegram/setup', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer setup-key', 'Content-Type': 'application/json' },
+          body: '{}',
+        }), env);
+        expect(response.status, `${await response.clone().text()} (${telegram.mock.calls.length} Telegram calls)`).toBe(200);
+      }
+      expect(telegram).toHaveBeenCalledTimes(8);
+    } finally {
+      telegram.mockRestore();
+    }
   });
 });

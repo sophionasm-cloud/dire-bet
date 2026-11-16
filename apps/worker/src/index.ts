@@ -374,8 +374,6 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
 async function setupTelegram(request: Request, env: Env): Promise<Response> {
   if (!env.SETUP_KEY || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) return json({ error: 'Setup secrets are not configured' }, 503);
   if (request.headers.get('Authorization') !== `Bearer ${env.SETUP_KEY}`) return json({ error: 'Unauthorized' }, 401);
-  const used = await env.DB.prepare("SELECT value FROM application_settings WHERE key = 'telegram_setup_used'").first<{ value: string }>();
-  if (used?.value === 'true') return json({ error: 'Telegram setup has already been completed' }, 409);
   const origin = new URL(request.url).origin;
   const base = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
   const call = async (method: string, body: unknown) => {
