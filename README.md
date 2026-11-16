@@ -1,6 +1,6 @@
 # DIRE BET
 
-DIRE BET is a free-play game app for browser and Telegram. Guests can practice on this device; Telegram sign-in is needed for private online rooms. **It is not a real-money betting or wallet service.**
+DIRE BET is a free-play game app for browser and Telegram. Guests can practice on this device. Telegram users can share their own contact to complete registration and play online. **It is not a real-money betting or wallet service.**
 
 ## Games available now
 
@@ -47,6 +47,8 @@ The checked-in settings keep `REAL_MONEY_ENABLED=false` and `DEMO_MODE=true`. Do
 - `npm run check:i18n` — check English, Amharic, Somali and Afaan Oromoo key parity
 - `npm run check:secrets` — scan repository text files for exposed credentials
 
-## Still locked
+## Staff preview and money status
 
-Admin and agent pages have no production sign-in or data APIs yet. There is no real-money wallet or payment provider. Secure staff access, native-speaker translation review, and operational monitoring remain unfinished. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).
+In Telegram, use **Share contact** to link your own phone contact to your Telegram account. After that, open **Account** in the app to choose a username and 8-digit PIN for optional web sign-in. The PIN is stored as a salted hash; login attempts are rate-limited. Avoid reusing a bank PIN. Phone numbers are encrypted in D1 and are not shown in the app.
+
+Open `/admin` to create a browser-local demo login. Username: `demo-admin`; the page generates a random password and provides a copy button. Its fake receipt queue stays in that browser. `/agent` shows sample metrics only. These staff previews do not connect to user or payment records. There is no real-money wallet or payment provider. Production staff authentication, native-speaker translation review, and operational monitoring remain unfinished. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).

@@ -10,10 +10,10 @@ The current app is a free-play release with four games. This checklist covers re
 6. **Install Node.js LTS and Git on Windows.** Use a current Node 20.19+ release. Open PowerShell in the project folder and run `npm install`.
 7. **Set up Cloudflare.** Run `npx wrangler login`, then `./scripts/setup.ps1`. It creates or reuses `dire-bet-db`, saves the D1 ID and applies migrations.
 8. **Deploy the free-play app.** Apply migrations with `npm run db:migrate:remote`, then run `npm run deploy`. Verify the four-game catalog, home posters and health endpoint at `https://dire-bet.sophionasm.workers.dev`.
-9. **Connect Telegram.** Run `./scripts/connect-telegram.ps1` to refresh the webhook. Use `./scripts/connect-telegram.ps1 -ReplaceBotToken` only if the token needs replacing; typing is hidden. Telegram sign-in is implemented; online rooms require two Telegram accounts.
+9. **Connect Telegram.** Run `./scripts/connect-telegram.ps1` to refresh the webhook and bot menu. Users can share their own contact in the private bot chat, then optionally set a web username and 8-digit PIN in Account. Use `./scripts/connect-telegram.ps1 -ReplaceBotToken` only if the token needs replacing; typing is hidden. Verify contact registration and online rooms with two Telegram accounts.
 10. **Check locally if needed.** Run `npm run dev` and open the local URL printed by Vite.
 11. **Review translations and product documents.** Ask native speakers to review `docs/TRANSLATION_REVIEW.md`.
-12. **Keep money features off.** The app has no real-money wallet, payment provider, deposit, withdrawal, wager, prize or commission flow. Admin and agent pages remain locked until secure staff authentication, MFA and permissions are built.
+12. **Keep money features off.** The app has no real-money wallet, payment provider, deposit, withdrawal, wager, prize or commission flow. `/admin` and `/agent` are browser-local previews only: admin can review fake receipts stored in that browser, and the agent page shows sample metrics. They are not production staff accounts or tools. Production staff access needs server-side authentication, MFA and permissions.
 13. **Before later deployments**, rerun checks, confirm the intended Worker in Cloudflare, and verify its health endpoint and game catalog.
 
 ## Cost notes

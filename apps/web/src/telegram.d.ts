@@ -9,6 +9,7 @@ interface Window {
       setBackgroundColor(color: string): void;
       disableVerticalSwipes?(): void;
       enableClosingConfirmation?(): void;
+      requestContact?(callback?: (shared: boolean) => void): void;
       HapticFeedback?: { impactOccurred(style: 'light'|'medium'|'heavy'): void; notificationOccurred(type: 'success'|'warning'|'error'): void };
       BackButton?: { show(): void; hide(): void; onClick(callback: () => void): void; offClick(callback: () => void): void };
     };

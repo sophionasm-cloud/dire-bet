@@ -1,15 +1,16 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
 import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
 import { languageFromTelegram, languageNames, translate, type Language, type TranslationKey } from './i18n';
 import { xoRules } from './i18n/rules';
 import { DominoesPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
+import { readDemoDeposits, writeDemoDeposits, type DemoDepositRequest } from './staff/demo';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
 const AgentApp = lazy(() => import('./agent/AgentApp'));
 
-type Page = 'home'|'matches'|'online'|'wallet'|'rank'|'menu'|GameId;
+type Page = 'home'|'matches'|'online'|'wallet'|'rank'|'menu'|'account'|'login'|GameId;
 type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
@@ -50,13 +51,14 @@ function GameArt({ id }: { id: string }) {
 }
 
 function App() {
+  const requestedPage = new URLSearchParams(location.search).get('page');
   const [language, setLanguage] = useState<Language>(() => {
     const saved = localStorage.getItem('direbet.language') as Language | null;
     return saved && ['en','am','so','om'].includes(saved) ? saved : languageFromTelegram(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code);
   });
-  const [page, setPage] = useState<Page>('home');
+  const [page, setPage] = useState<Page>(() => requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu' ? requestedPage : 'home');
   const [overlay, setOverlay] = useState<Overlay>(null);
-  const [onboarding, setOnboarding] = useState(() => !localStorage.getItem('direbet.onboarded'));
+  const [onboarding, setOnboarding] = useState(() => !localStorage.getItem('direbet.onboarded') && requestedPage !== 'account' && requestedPage !== 'login');
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [category, setCategory] = useState<Category>('all');
   const [query, setQuery] = useState('');
@@ -67,12 +69,19 @@ function App() {
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem('direbet.recent') || '[]') as string[]);
   const [reduceEffects, setReduceEffects] = useState(() => localStorage.getItem('direbet.reduceEffects') === 'true');
   const [displayName, setDisplayName] = useState('Guest');
-  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(() => sessionStorage.getItem('direbet.session'));
+  const [account, setAccount] = useState<{ webUsername: string | null; phoneShared: boolean } | null>(null);
+  const [accountUsername, setAccountUsername] = useState('');
+  const [accountPin, setAccountPin] = useState('');
+  const [accountMessage, setAccountMessage] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPin, setLoginPin] = useState('');
+  const [loginMessage, setLoginMessage] = useState('');
   const [roomConfig, setRoomConfig] = useState<RoomConfig | null>(null);
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
-  const isTelegram = Boolean(sessionToken);
+  const telegramAuthPending = Boolean(window.Telegram?.WebApp?.initData && !sessionToken);
 
   useEffect(() => {
     localStorage.setItem('direbet.language', language);
@@ -93,10 +102,34 @@ function App() {
     let live = true;
     fetch('/api/auth/telegram', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData }) })
       .then(async (r) => { if (!r.ok) throw new Error(); return r.json() as Promise<{ token: string; user: { displayName?: string } }> })
-      .then((data) => { if (live) { setSessionToken(data.token); setDisplayName(data.user.displayName || 'Player'); } })
+      .then((data) => { if (live) { sessionStorage.setItem('direbet.session', data.token); setSessionToken(data.token); setDisplayName(data.user.displayName || 'Player'); } })
       .catch(() => { if (live) setDisplayName('Guest'); });
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    if (!sessionToken) { setAccount(null); return; }
+    let live = true;
+    fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Session expired. Sign in again.');
+        return response.json() as Promise<{ user: { displayName: string; webUsername: string | null; phoneShared: boolean } }>;
+      })
+      .then((data) => {
+        if (!live) return;
+        setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
+        setDisplayName(data.user.displayName || 'Player');
+        if (data.user.webUsername) setAccountUsername(data.user.webUsername);
+      })
+      .catch((cause) => {
+        if (!live) return;
+        sessionStorage.removeItem('direbet.session');
+        setSessionToken(null);
+        setAccount(null);
+        setAccountMessage(cause instanceof Error ? cause.message : 'Sign in again to continue.');
+      });
+    return () => { live = false; };
+  }, [sessionToken]);
 
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
@@ -200,6 +233,51 @@ function App() {
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
   const enterOnlineRoom = (room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); };
   const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); if (next !== 'online') setRoomConfig(null); };
+  const signInWithWebLogin = async (event: FormEvent) => {
+    event.preventDefault(); setLoginMessage('');
+    if (!/^\d{8}$/.test(loginPin)) { setLoginMessage('Enter your 8-digit PIN.'); return; }
+    try {
+      const response = await fetch('/api/auth/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: loginUsername, password: loginPin }) });
+      const data = await response.json() as { token?: string; user?: { displayName?: string }; error?: string };
+      if (!response.ok || !data.token) throw new Error(data.error || 'Could not sign in.');
+      sessionStorage.setItem('direbet.session', data.token);
+      setSessionToken(data.token); setDisplayName(data.user?.displayName || loginUsername); setLoginPin(''); setPage('home');
+      history.replaceState(null, '', location.pathname);
+    } catch (cause) { setLoginMessage(cause instanceof Error ? cause.message : 'Could not sign in.'); }
+  };
+  const saveWebLogin = async (event: FormEvent) => {
+    event.preventDefault(); setAccountMessage('');
+    if (!sessionToken) { setAccountMessage('Open DIRE BET in Telegram to register.'); return; }
+    if (!/^\d{8}$/.test(accountPin)) { setAccountMessage('Choose an 8-digit PIN for web sign-in.'); return; }
+    try {
+      const response = await fetch('/api/account/web-login', { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify({ username: accountUsername, password: accountPin }) });
+      const data = await response.json() as { username?: string; error?: string };
+      if (!response.ok) throw new Error(data.error || 'Could not save web login.');
+      setAccount({ webUsername: data.username || accountUsername, phoneShared: Boolean(account?.phoneShared) });
+      setAccountUsername(data.username || accountUsername); setAccountPin('');
+      setAccountMessage('Web login saved. You can now sign in from a browser.');
+    } catch (cause) { setAccountMessage(cause instanceof Error ? cause.message : 'Could not save web login.'); }
+  };
+  const requestPhoneContact = () => {
+    const webApp = window.Telegram?.WebApp;
+    if (!webApp?.requestContact) { setAccountMessage('Open the DIRE BET bot in Telegram and tap Share contact.'); return; }
+    setAccountMessage('Telegram will ask whether to share your contact with the bot.');
+    webApp.requestContact((shared) => setAccountMessage(shared ? 'Contact sent to the bot. Refresh the status here in a moment.' : 'Contact was not shared. You can try again when ready.'));
+  };
+  const refreshAccount = async () => {
+    if (!sessionToken) return;
+    setAccountMessage('Checking your account…');
+    try {
+      const response = await fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } });
+      const data = await response.json() as { user?: { displayName: string; webUsername: string | null; phoneShared: boolean }; error?: string };
+      if (!response.ok || !data.user) throw new Error(data.error || 'Could not check account status.');
+      setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
+      setDisplayName(data.user.displayName || 'Player');
+      if (data.user.webUsername) setAccountUsername(data.user.webUsername);
+      setAccountMessage(data.user.phoneShared ? 'Contact linked to your Telegram account.' : 'The bot has not received your contact yet.');
+    } catch (cause) { setAccountMessage(cause instanceof Error ? cause.message : 'Could not check account status.'); }
+  };
+  const signOutWeb = () => { sessionStorage.removeItem('direbet.session'); setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); };
 
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp /></Suspense>;
@@ -220,7 +298,7 @@ function App() {
     <div className="demo-ribbon"><span className="ribbon-spark">✦</span><span>{t('demoNotice')}</span></div>
 
     {page === 'home' && <section className="screen home-screen">
-      {!isTelegram && <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a></div>}
+      {!sessionToken && <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><div className="guest-actions"><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a><button className="guest-login" onClick={() => nav('login')}>{t('webLogin')}</button></div></div>}
       <section className={`hero hero-${banner}`} aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }}>
         <img key={bannerSlides[banner].game} className="hero-poster" src={`/posters/${bannerSlides[banner].game}.jpg`} alt="" fetchPriority="high" />
         <div className="hero-copy" key={banner}><span className="eyebrow">DIRE BET · {t('freePractice')}</span><h1>{t(bannerSlides[banner].title)}</h1><p>{t(bannerSlides[banner].copy)}</p><button className="primary-button" onClick={activateBanner}>{t(bannerSlides[banner].action === 'quick' ? 'quickPlay' : bannerSlides[banner].action === 'cards' ? 'browseCardGames' : 'browseBoardGames')}<span>{bannerSlides[banner].action === 'quick' ? '↗' : '⌄'}</span></button></div>
@@ -269,12 +347,14 @@ function App() {
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletScreen t={t} onSupport={() => setOverlay('support')} />}
-    {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} />}
+    {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} onAccount={() => nav('account')} />}
+    {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
+    {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}
 
-    {page !== 'xo' && <button className="support-float" aria-label={t('support')} onClick={() => setOverlay('support')}><Icon name="question" size={21}/></button>}
-    <nav className="bottom-nav" aria-label={t('menu')}>
+    {page !== 'xo' && page !== 'account' && page !== 'login' && <button className="support-float" aria-label={t('support')} onClick={() => setOverlay('support')}><Icon name="question" size={21}/></button>}
+    {page !== 'account' && page !== 'login' && <nav className="bottom-nav" aria-label={t('menu')}>
       {(['home','matches','wallet','rank','menu'] as Page[]).map((item) => <button key={item} className={page === item ? 'active' : ''} onClick={() => nav(item)} aria-current={page === item ? 'page' : undefined}><Icon name={item === 'menu' ? 'menu' : item} size={20}/><span>{t(item as TranslationKey)}</span></button>)}
-    </nav>
+    </nav>}
 
     {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : openPractice(selected.id as GameId)} />}
     {overlay && <OverlaySheet overlay={overlay} t={t} language={language} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
@@ -288,11 +368,54 @@ function EmptyScreen({ icon, title, copy, action, onAction }: { icon:string; tit
 }
 
 function WalletScreen({ t, onSupport }: { t:(key:TranslationKey)=>string; onSupport:()=>void }) {
-  return <section className="screen wallet-screen"><span className="eyebrow">{t('testMode')}</span><h1>{t('walletTitle')}</h1><div className="wallet-card"><div className="wallet-card-top"><span>{t('demoCredits')}</span><span className="demo-tag">{t('demoLabel')}</span></div><strong>—</strong><small>{t('liveFundsOff')}</small><div className="wallet-glow"/></div><div className="locked-actions"><button disabled><span>＋</span>{t('deposit')}<small>{t('disabled')}</small></button><button disabled><span>↗</span>{t('withdraw')}<small>{t('disabled')}</small></button></div><div className="callout"><span className="callout-icon">!</span><p>{t('walletCopy')}</p></div><div className="section-head compact"><div><span className="eyebrow">{t('wallet')}</span><h2>{t('transactionHistory')}</h2></div></div><div className="empty-inline"><span className="empty-icon">↻</span><span>{t('matchesEmpty')}</span></div><button className="text-button wallet-help" onClick={onSupport}>{t('support')}<Icon name="chevron" size={15}/></button></section>;
+  const [requests, setRequests] = useState<DemoDepositRequest[]>(readDemoDeposits);
+  const [showForm, setShowForm] = useState(false);
+  const [amount, setAmount] = useState('100');
+  const [smsReference, setSmsReference] = useState('');
+  const [receipt, setReceipt] = useState<File | null>(null);
+  const [message, setMessage] = useState('');
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const credits = Number(amount);
+    if (!receipt || !receipt.type.startsWith('image/') || receipt.size > 300_000 || !Number.isInteger(credits) || credits < 1 || credits > 10_000) {
+      setMessage('Choose an image up to 300 KB and enter 1–10,000 demo credits.');
+      return;
+    }
+    if (requests.length >= 10) { setMessage('This browser already has 10 demo requests. Clear one in the admin preview.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') { setMessage('Could not read that sample image.'); return; }
+      const request: DemoDepositRequest = {
+        id: `DEMO-${Date.now().toString(36).toUpperCase()}`,
+        amount: credits,
+        receiptName: receipt.name.slice(0, 80),
+        receiptData: reader.result,
+        smsReference: smsReference.trim().slice(0, 80),
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      const next = [request, ...requests];
+      try {
+        writeDemoDeposits(next);
+        setRequests(next); setShowForm(false); setReceipt(null); setSmsReference(''); setMessage(t('demoReceiptPending'));
+      } catch { setMessage('Browser storage is full. Remove an old demo request and try again.'); }
+    };
+    reader.onerror = () => setMessage('Could not read that sample image.');
+    reader.readAsDataURL(receipt);
+  };
+  return <section className="screen wallet-screen"><span className="eyebrow">{t('testMode')}</span><h1>{t('walletTitle')}</h1><div className="wallet-card"><div className="wallet-card-top"><span>{t('demoCredits')}</span><span className="demo-tag">{t('demoLabel')}</span></div><strong>—</strong><small>{t('liveFundsOff')}</small><div className="wallet-glow"/></div><div className="locked-actions"><button onClick={() => { setShowForm((open) => !open); setMessage(''); }}><span>＋</span>{t('demoRequestTitle')}<small>{t('demoLabel')}</small></button><button disabled><span>↗</span>{t('withdraw')}<small>{t('disabled')}</small></button></div><div className="callout"><span className="callout-icon">!</span><p>{t('walletCopy')}</p></div>{showForm && <form className="demo-deposit-form" onSubmit={submit}><h2>{t('demoRequestTitle')}</h2><p>{t('demoRequestHelp')}</p><label>{t('demoAmountLabel')}<input type="number" min="1" max="10000" step="1" value={amount} onChange={(event) => setAmount(event.target.value)}/></label><label>{t('demoReceiptLabel')}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setReceipt(event.target.files?.[0] || null)}/></label><label>{t('demoSmsReference')}<input value={smsReference} maxLength={80} onChange={(event) => setSmsReference(event.target.value)}/></label><p className="demo-safety-note">{t('demoReceiptSafety')}</p><button className="primary-button wide" type="submit">{t('demoRequestSubmit')}<span>→</span></button></form>}{message && <p className="demo-inline-message" role="status">{message}</p>}<div className="section-head compact"><div><span className="eyebrow">{t('wallet')}</span><h2>{t('transactionHistory')}</h2></div></div>{requests.length ? <div className="demo-request-list">{requests.map((request) => <article className="demo-request-row" key={request.id}><img src={request.receiptData} alt={request.receiptName}/><div><strong>{request.amount} {t('demoCredits')}</strong><small>{request.id} · {request.smsReference || '—'}</small></div><span className={`demo-request-status ${request.status}`}>{t(request.status === 'pending' ? 'demoPending' : request.status === 'approved' ? 'demoApproved' : 'demoDeclined')}</span></article>)}</div> : <div className="empty-inline"><span className="empty-icon">↻</span><span>{t('noDemoRequests')}</span></div>}<button className="text-button wallet-help" onClick={onSupport}>{t('support')}<Icon name="chevron" size={15}/></button></section>;
 }
 
-function MenuScreen({ t, language, onLanguage, onTerms, onPrivacy, onSupport, onEffect, reduceEffects, displayName }: { t:(key:TranslationKey)=>string; language:Language; onLanguage:()=>void; onTerms:()=>void; onPrivacy:()=>void; onSupport:()=>void; onEffect:()=>void; reduceEffects:boolean; displayName:string }) {
-  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{t('guestTitle')}</span></div><span className="guest-pill">{t('demoLabel')}</span></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · PREVIEW 0.1.0</div></section>;
+function WebLoginScreen({ t, username, pin, message, setUsername, setPin, onSubmit, onBack }: { t:(key:TranslationKey)=>string; username:string; pin:string; message:string; setUsername:(value:string)=>void; setPin:(value:string)=>void; onSubmit:(event:FormEvent)=>void; onBack:()=>void }) {
+  return <section className="screen auth-screen"><button className="back-button" onClick={onBack}><Icon name="back" size={19}/>{t('home')}</button><span className="eyebrow">DIRE BET</span><h1>{t('webLogin')}</h1><p className="auth-intro">{t('webLoginIntro')}</p><form className="auth-form" onSubmit={onSubmit}><label>{t('username')}<input autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z][A-Za-z0-9_]{2,23}" required value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{t('eightDigitPin')}<input autoComplete="current-password" type="password" inputMode="numeric" pattern="[0-9]{8}" minLength={8} maxLength={8} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))} /></label>{message && <p className="auth-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit">{t('signIn')}<span>→</span></button></form><p className="auth-footnote">{t('needTelegramAccount')} <a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}</a></p></section>;
+}
+
+function AccountScreen({ t, displayName, authenticated, authPending, account, username, pin, message, setUsername, setPin, onSave, onShareContact, onRefresh, onLogin, onSignOut, onBack }: { t:(key:TranslationKey)=>string; displayName:string; authenticated:boolean; authPending:boolean; account:{webUsername:string|null;phoneShared:boolean}|null; username:string; pin:string; message:string; setUsername:(value:string)=>void; setPin:(value:string)=>void; onSave:(event:FormEvent)=>void; onShareContact:()=>void; onRefresh:()=>void; onLogin:()=>void; onSignOut:()=>void; onBack:()=>void }) {
+  return <section className="screen auth-screen account-screen"><button className="back-button" onClick={onBack}><Icon name="back" size={19}/>{t('menuTitle')}</button><span className="eyebrow">DIRE BET</span><h1>{t('account')}</h1>{authenticated ? <><p className="auth-intro">{t('telegramAccount')} <strong>{displayName}</strong>. {t('webLoginOptional')}</p><div className="account-contact"><div><strong>{t('contactSharing')}</strong><span>{account?.phoneShared ? t('contactLinked') : account ? t('contactNotLinked') : t('onlineConnecting')}</span></div><div className="account-actions">{account && !account.phoneShared && <button className="secondary-button" type="button" onClick={onShareContact}>{t('shareContact')}</button>}<button className="text-button" type="button" onClick={onRefresh}>{t('refreshStatus')}</button></div></div><p className="auth-footnote">{t('contactPrivacy')}</p>{account?.phoneShared ? <form className="auth-form" onSubmit={onSave}><label>{t('username')}<input autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z][A-Za-z0-9_]{2,23}" required value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{t('eightDigitPin')}<input autoComplete="new-password" type="password" inputMode="numeric" pattern="[0-9]{8}" minLength={8} maxLength={8} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))} /></label><small className="auth-footnote">{t('pinTip')}</small>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button wide" type="submit">{account.webUsername ? t('updateWebLogin') : t('saveWebLogin')}<span>→</span></button></form> : account ? <div className="account-prompt"><p>{t('contactNeeded')}</p><a className="secondary-button" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}</a>{message && <p className="auth-message" role="status">{message}</p>}</div> : <p className="auth-message" role="status">{t('onlineConnecting')}</p>}<button className="text-button account-signout" type="button" onClick={onSignOut}>{t('signOut')}</button></> : authPending ? <p className="auth-message" role="status">{t('onlineConnecting')}</p> : <><p className="auth-intro">{t('accountNeedsTelegram')}</p><a className="primary-button wide auth-telegram-link" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}<span>↗</span></a><button className="text-button" onClick={onLogin}>{t('webLogin')}</button>{message && <p className="auth-message" role="status">{message}</p>}</>}</section>;
+}
+
+function MenuScreen({ t, language, onLanguage, onTerms, onPrivacy, onSupport, onEffect, reduceEffects, displayName, onAccount }: { t:(key:TranslationKey)=>string; language:Language; onLanguage:()=>void; onTerms:()=>void; onPrivacy:()=>void; onSupport:()=>void; onEffect:()=>void; reduceEffects:boolean; displayName:string; onAccount:()=>void }) {
+  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{t('guestTitle')}</span></div><span className="guest-pill">{t('demoLabel')}</span></div><div className="menu-group"><button onClick={onAccount}><span className="menu-icon"><Icon name="person"/></span><span><strong>{t('account')}</strong><small>{t('webLogin')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · PREVIEW 0.1.0</div></section>;
 }
 
 function GameSheet({ game, t, onClose, onRules, onPlay }: { game:Game; t:(key:TranslationKey)=>string; onClose:()=>void; onRules:()=>void; onPlay:()=>void }) {

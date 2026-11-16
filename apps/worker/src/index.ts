@@ -25,6 +25,7 @@ interface Env {
 const enc = new TextEncoder();
 const ONE_HOUR = 60 * 60;
 const SESSION_LIFETIME = 15 * 60;
+const PASSWORD_SESSION_LIFETIME = 12 * 60 * 60;
 const MAX_WEBHOOK_BYTES = 64 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_TTL_MS = 15 * 60 * 1000;
@@ -190,16 +191,40 @@ async function readRoomTicket(value: string, secret?: string): Promise<RoomTicke
   } catch { return null; }
 }
 
+async function hashWebPassword(password: string, salt: string, secret: string): Promise<Uint8Array> {
+  const material = await crypto.subtle.importKey('raw', enc.encode(`${secret}\u0000${password}`), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: Uint8Array.from(decodeBase64url(salt), (character) => character.charCodeAt(0)), iterations: 600_000, hash: 'SHA-256' }, material, 256));
+}
+
+async function encryptContact(phone: string, secret: string): Promise<string> {
+  const keyMaterial = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(`dire-bet-contact-v1:${secret}`)));
+  const key = await crypto.subtle.importKey('raw', ownedBuffer(keyMaterial), { name: 'AES-GCM' }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(phone)));
+  const packed = new Uint8Array(iv.length + ciphertext.length);
+  packed.set(iv); packed.set(ciphertext, iv.length);
+  return base64url(packed);
+}
+
 async function gameDisplayName(env: Env, userId: number): Promise<string | null> {
-  const user = await env.DB.prepare('SELECT first_name, username FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ first_name: string; username: string | null }>();
+  const user = await env.DB.prepare('SELECT first_name, username, web_username FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ first_name: string; username: string | null; web_username: string | null }>();
   if (!user) return null;
-  return (user.username ? `@${user.username}` : user.first_name).slice(0, 32);
+  return (user.web_username || (user.username ? `@${user.username}` : user.first_name)).slice(0, 32);
+}
+
+async function hasRegisteredContact(env: Env, userId: number): Promise<boolean> {
+  const row = await env.DB.prepare('SELECT user_id FROM user_contacts WHERE user_id = ?').bind(userId).first();
+  return Boolean(row);
 }
 
 async function allowRoomAction(env: Env, userId: number, action: string): Promise<boolean> {
-  const id = env.RATE_LIMITER.idFromName(`room-user:${userId}`);
+  return allowRateLimit(env, `room-user:${userId}`, action);
+}
+
+async function allowRateLimit(env: Env, bucket: string, action: string, limit = 30, windowSeconds = 60): Promise<boolean> {
+  const id = env.RATE_LIMITER.idFromName(bucket);
   const limiter = env.RATE_LIMITER.get(id);
-  const response = await limiter.fetch(`https://rate-limit/?key=${encodeURIComponent(action)}`);
+  const response = await limiter.fetch(`https://rate-limit/?key=${encodeURIComponent(action)}&limit=${limit}&window=${windowSeconds}`);
   if (!response.ok) return false;
   const result = await response.json() as { allowed?: boolean };
   return result.allowed === true;
@@ -209,6 +234,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
   const userId = await readSession(request, env.SESSION_SECRET);
   if (!userId) return json({ error: 'Open DIRE BET in Telegram to create an online room.' }, 401);
+  if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your contact with the DIRE BET bot to finish registration.' }, 403);
   if (!(await allowRoomAction(env, userId, 'create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   let body: { gameId?: unknown };
   try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
@@ -240,6 +266,7 @@ async function joinRoom(request: Request, env: Env, code: string): Promise<Respo
   if (!/^[23456789A-HJ-NP-Z]{6}$/i.test(code)) return json({ error: 'Room code is invalid.' }, 400);
   const userId = await readSession(request, env.SESSION_SECRET);
   if (!userId) return json({ error: 'Open DIRE BET in Telegram to join an online room.' }, 401);
+  if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your contact with the DIRE BET bot to finish registration.' }, 403);
   if (!(await allowRoomAction(env, userId, 'join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   const row = await env.DB.prepare('SELECT id, game_id, status, expires_at FROM game_rooms WHERE code = ?').bind(code.toUpperCase()).first<{ id: string; game_id: string; status: string; expires_at: string | null }>();
   if (!row || (row.expires_at && Date.parse(row.expires_at) < Date.now())) return json({ error: 'Room not found or expired.' }, 404);
@@ -265,10 +292,10 @@ async function connectRoom(request: Request, env: Env, code: string): Promise<Re
   return stub.fetch(new Request(request, { headers }));
 }
 
-async function issueSession(userId: number, secret: string): Promise<string> {
+async function issueSession(userId: number, secret: string, lifetime = SESSION_LIFETIME): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(enc.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
-  const payload = base64url(enc.encode(JSON.stringify({ sub: String(userId), iat: now, exp: now + SESSION_LIFETIME })));
+  const payload = base64url(enc.encode(JSON.stringify({ sub: String(userId), iat: now, exp: now + lifetime })));
   const body = `${header}.${payload}`;
   const signature = await hmac(secret, body);
   return `${body}.${base64url(signature)}`;
@@ -334,9 +361,13 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > MAX_WEBHOOK_BYTES) return json({ error: 'Request too large' }, 413);
   const text = new TextDecoder().decode(bytes);
-  let update: { message?: { text?: string; chat?: { id?: number }; from?: { language_code?: string } } };
+  let update: { message?: { text?: string; chat?: { id?: number }; from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; contact?: { user_id?: number; phone_number?: string; first_name?: string } } };
   try { update = JSON.parse(text) as typeof update; } catch { return json({ ok: true }); }
   const message = update.message;
+  if (message?.contact) {
+    await storeTelegramContact(message, env, new URL(request.url).origin);
+    return json({ ok: true });
+  }
   if (!message?.text || typeof message.chat?.id !== 'number') return json({ ok: true });
   const parts = message.text.trim().split(/\s+/);
   const command = parts[0].split('@')[0].toLowerCase();
@@ -354,6 +385,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     '/play': welcome[lang],
     '/games': gameList[lang],
     '/profile': 'Open DIRE BET to view your player profile.',
+    '/account': 'Share your contact with this bot, then open Account in DIRE BET to set an optional web username and 8-digit PIN.',
     '/wallet': 'TEST MODE · Demo credits are not ETB cash. Live deposits and withdrawals are disabled.',
     '/leaderboard': 'The public leaderboard is not available yet.',
     '/help': 'DIRE BET free-play preview. Use /support for help.',
@@ -362,12 +394,45 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   };
   const reply_markup = ['/start', '/play', '/games'].includes(command) ? {
     inline_keyboard: [[{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : base } }]],
+  } : command === '/account' ? {
+    inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${base}/?page=account` } }]],
+  } : command === '/wallet' ? {
+    inline_keyboard: [[{ text: 'Open demo wallet', web_app: { url: `${base}/?page=wallet` } }]],
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
     text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : responses[command] || 'Use /play to open free practice games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
+  if (command === '/start') {
+    const registrationText: Record<string, string> = {
+      en: 'Optional web login: share your own contact, then open Account to choose a username and 8-digit PIN. Your contact is used only to link your account. Live payments are off.',
+      am: 'የድር መግቢያ አማራጭ ነው፦ የራስዎን እውቂያ ያጋሩ፣ ከዚያ መለያ ውስጥ የተጠቃሚ ስምና 8 አሃዝ PIN ይምረጡ። እውቂያዎ መለያዎን ለማገናኘት ብቻ ይጠቀማል። ቀጥታ ክፍያዎች የሉም።',
+      so: 'Gelitaanka webka waa ikhtiyaari: la wadaag xiriirkaaga, kadib fur Account oo dooro magac iyo PIN 8-god ah. Xiriirka waxaa loo isticmaalaa oo keliya isku xidhka akoonkaaga. Lacag-bixin toos ah ma jirto.',
+      om: 'Seensi weebii filannoo dha: quunnamtii kee qoodi, achiis Herrega baniitii maqaa fayyadamaa fi PIN lakkoofsa 8 filadhu. Quunnamtiin kee herrega kee walitti hidhuuf qofa fayyada. Kaffaltiin kallattiin hin jiru.',
+    };
+    const keyboardLabels: Record<string, { play: string; contact: string; wallet: string; more: string }> = {
+      en: { play: '🎮 Play', contact: 'Share contact', wallet: 'Demo wallet', more: 'More' },
+      am: { play: '🎮 መጫወት', contact: 'እውቂያ አጋራ', wallet: 'የማሳያ ዋሌት', more: 'ተጨማሪ' },
+      so: { play: '🎮 Ciyaar', contact: 'La wadaag xiriirka', wallet: 'Wallet tijaabo', more: 'Wax badan' },
+      om: { play: '🎮 Taphadhu', contact: 'Quunnamtii qoodi', wallet: 'Wallet shaakalaa', more: 'Dabalata' },
+    };
+    const labels = keyboardLabels[lang];
+    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: registrationText[lang],
+      reply_markup: {
+        keyboard: [
+          [{ text: labels.play, web_app: { url: base } }],
+          [{ text: labels.contact, request_contact: true }],
+          [{ text: labels.wallet, web_app: { url: `${base}/?page=wallet` } }, { text: labels.more, web_app: { url: `${base}/?page=menu` } }],
+        ],
+        resize_keyboard: true,
+        is_persistent: true,
+        input_field_placeholder: 'Choose an option',
+      },
+    });
+  }
   return json({ ok: true });
 }
 
@@ -386,6 +451,7 @@ async function setupTelegram(request: Request, env: Env): Promise<Response> {
     await call('setMyCommands', { commands: [
       { command: 'start', description: 'Open DIRE BET' }, { command: 'play', description: 'Play free games' },
       { command: 'games', description: 'See available games' }, { command: 'profile', description: 'View your profile' },
+      { command: 'account', description: 'Set up optional web login' },
       { command: 'wallet', description: 'View demo wallet status' }, { command: 'leaderboard', description: 'View rankings' },
       { command: 'help', description: 'Get help' }, { command: 'support', description: 'Contact support' },
       { command: 'stop', description: 'Turn off promotions' },
@@ -427,6 +493,102 @@ async function authenticate(request: Request, env: Env): Promise<Response> {
   }
 }
 
+function normalizeWebUsername(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const username = value.trim().toLowerCase();
+  return /^[a-z][a-z0-9_]{2,23}$/.test(username) ? username : null;
+}
+
+async function setWebLogin(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const userId = await readSession(request, env.SESSION_SECRET);
+  if (!userId) return json({ error: 'Sign in through Telegram first.' }, 401);
+  if (!env.SESSION_SECRET) return json({ error: 'Account setup is unavailable.' }, 503);
+  if (!(await allowRateLimit(env, `web-login-setup:${userId}`, 'setup', 5, 900))) return json({ error: 'Too many setup attempts. Try again in 15 minutes.' }, 429);
+  let body: { username?: unknown; password?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request.' }, 400); }
+  const username = normalizeWebUsername(body.username);
+  if (!username || typeof body.password !== 'string' || !/^\d{8}$/.test(body.password)) return json({ error: 'Use a username with 3–24 letters, numbers or underscores, and an 8-digit PIN.' }, 400);
+  const contact = await env.DB.prepare('SELECT user_id FROM user_contacts WHERE user_id = ?').bind(userId).first();
+  if (!contact) return json({ error: 'Share your phone number with the DIRE BET bot first.' }, 409);
+  const taken = await env.DB.prepare('SELECT id FROM users WHERE web_username = ? COLLATE NOCASE AND id != ?').bind(username, userId).first();
+  if (taken) return json({ error: 'That username is already in use.' }, 409);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const saltText = base64url(salt);
+  const hash = base64url(await hashWebPassword(body.password, saltText, env.SESSION_SECRET));
+  try {
+    await env.DB.prepare('UPDATE users SET web_username = ?, password_salt = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(username, saltText, hash, userId).run();
+    return json({ ok: true, username });
+  } catch {
+    return json({ error: 'That username is already in use.' }, 409);
+  }
+}
+
+async function authenticatePassword(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!env.SESSION_SECRET) return json({ error: 'Web login is not configured.' }, 503);
+  let body: { username?: unknown; password?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request.' }, 400); }
+  const username = normalizeWebUsername(body.username);
+  if (!username || typeof body.password !== 'string' || !/^\d{8}$/.test(body.password)) return json({ error: 'Username or PIN did not match.' }, 401);
+  if (!(await allowRateLimit(env, 'web-password-logins', `login:${username}`, 6, 900))) return json({ error: 'Too many attempts. Try again in 15 minutes.' }, 429);
+  const clientIp = request.headers.get('CF-Connecting-IP');
+  if (clientIp) {
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(clientIp)));
+    const fingerprint = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 32);
+    if (!(await allowRateLimit(env, 'web-password-logins', `ip:${fingerprint}`, 30, 900))) return json({ error: 'Too many attempts from this network. Try again in 15 minutes.' }, 429);
+  }
+  const user = await env.DB.prepare('SELECT id, first_name, web_username, password_salt, password_hash FROM users WHERE web_username = ? COLLATE NOCASE AND status = ?')
+    .bind(username, 'active').first<{ id: number; first_name: string; web_username: string; password_salt: string | null; password_hash: string | null }>();
+  const salt = user?.password_salt || base64url(new Uint8Array(16));
+  const candidate = await hashWebPassword(body.password, salt, env.SESSION_SECRET);
+  const stored = user?.password_hash ? Uint8Array.from(decodeBase64url(user.password_hash), (character) => character.charCodeAt(0)) : new Uint8Array(32);
+  if (!user || !user.password_salt || !user.password_hash || !equalBytes(candidate, stored)) return json({ error: 'Username or PIN did not match.' }, 401);
+  const token = await issueSession(user.id, env.SESSION_SECRET, PASSWORD_SESSION_LIFETIME);
+  return json({ token, expiresIn: PASSWORD_SESSION_LIFETIME, user: { displayName: user.web_username } });
+}
+
+async function storeTelegramContact(message: { chat?: { id?: number }; from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; contact?: { user_id?: number; phone_number?: string; first_name?: string } }, env: Env, origin: string): Promise<void> {
+  const telegramId = message.from?.id;
+  const phone = message.contact?.phone_number?.trim();
+  const language = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
+  if (!env.SESSION_SECRET || !Number.isSafeInteger(telegramId) || telegramId! <= 0 || message.contact?.user_id !== telegramId || !phone || !/^[+\d().\s-]{7,24}$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15) {
+    const prompts: Record<string, string> = {
+      en: 'To register, use the Share contact button in this chat and share your own number.',
+      am: 'ለመመዝገብ በዚህ ውይይት ያለውን እውቂያ አጋራ ቁልፍ ተጠቅመው የራስዎን ቁጥር ያጋሩ።',
+      so: 'Si aad isu diiwaangeliso, taabo La wadaag xiriirka oo la wadaag lambarkaaga.',
+      om: 'Galmaa’uuf, Quunnamtii qoodi jedhu tuqiitii lakkoofsa bilbilaa kee qoodi.',
+    };
+    if (typeof message.chat?.id === 'number' && env.TELEGRAM_BOT_TOKEN) await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: message.chat.id, text: prompts[language] });
+    return;
+  }
+  const firstName = (message.from?.first_name || message.contact?.first_name || 'Player').slice(0, 128);
+  const lastName = message.from?.last_name?.slice(0, 128) || null;
+  const username = message.from?.username?.slice(0, 64) || null;
+  const user = await env.DB.prepare(`INSERT INTO users (telegram_id, username, first_name, last_name, language, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(telegram_id) DO UPDATE SET username = COALESCE(excluded.username, users.username), first_name = excluded.first_name,
+    last_name = excluded.last_name, updated_at = CURRENT_TIMESTAMP RETURNING id`).bind(telegramId, username, firstName, lastName, language).first<{ id: number }>();
+  if (!user) throw new Error('Could not link Telegram contact');
+  const encrypted = await encryptContact(phone, env.SESSION_SECRET);
+  await env.DB.prepare(`INSERT INTO user_contacts (user_id, phone_ciphertext, shared_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id) DO UPDATE SET phone_ciphertext = excluded.phone_ciphertext, shared_at = CURRENT_TIMESTAMP`).bind(user.id, encrypted).run();
+  if (typeof message.chat?.id === 'number' && env.TELEGRAM_BOT_TOKEN) {
+    const confirmations: Record<string, string> = {
+      en: 'Your contact is linked. Open DIRE BET to choose a web username and 8-digit PIN. No live payments are enabled.',
+      am: 'እውቂያዎ ተገናኝቷል። DIRE BET ን ከፍተው የድር የተጠቃሚ ስምና 8 አሃዝ PIN ይምረጡ። ቀጥታ ክፍያዎች የሉም።',
+      so: 'Xiriirkaaga waa la xidhay. Fur DIRE BET oo dooro magac web iyo PIN 8-god ah. Lacag-bixin toos ah ma jirto.',
+      om: 'Quunnamtiin kee walitti hidhameera. DIRE BET baniitii maqaa weebii fi PIN lakkoofsa 8 filadhu. Kaffaltiin kallattiin hin jiru.',
+    };
+    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: confirmations[language],
+      reply_markup: { inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${origin}/?page=account` } }]] },
+    });
+  }
+}
+
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: securityHeaders });
@@ -437,11 +599,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return json({ games: PUBLIC_GAMES, liveMoney: false });
   }
   if (url.pathname === '/api/auth/telegram' && request.method === 'POST') return authenticate(request, env);
+  if (url.pathname === '/api/auth/password' && request.method === 'POST') return authenticatePassword(request, env);
+  if (url.pathname === '/api/account/web-login' && request.method === 'POST') return setWebLogin(request, env);
   if (url.pathname === '/api/me' && request.method === 'GET') {
     const id = await readSession(request, env.SESSION_SECRET);
     if (!id) return json({ error: 'Authentication required' }, 401);
-    const user = await env.DB.prepare('SELECT id, username, first_name, language FROM users WHERE id = ?').bind(id).first();
-    return user ? json({ user }) : json({ error: 'Session is no longer valid' }, 401);
+    const user = await env.DB.prepare(`SELECT id, first_name, web_username, language,
+      EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
+    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
   }
   if (url.pathname === '/api/rooms' && request.method === 'POST') return createRoom(request, env);
   const join = url.pathname.match(/^\/api\/rooms\/([23456789A-HJ-NP-Z]{6})\/join$/i);
@@ -674,18 +839,20 @@ export class Presence {
 export class RateLimiter {
   constructor(private readonly state: DurableObjectState, _env: Env) {}
   async fetch(request: Request): Promise<Response> {
-    const key = new URL(request.url).searchParams.get('key');
-    if (!key || key.length > 128) return json({ error: 'Invalid rate-limit key' }, 400);
+    const params = new URL(request.url).searchParams;
+    const key = params.get('key');
+    const limit = Number(params.get('limit') || 30);
+    const windowSeconds = Number(params.get('window') || 60);
+    if (!key || key.length > 128 || !Number.isInteger(limit) || limit < 1 || limit > 60 || !Number.isInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 3600) return json({ error: 'Invalid rate-limit settings' }, 400);
     const now = Math.floor(Date.now() / 1000);
     await this.state.storage.sql.exec('CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, hits INTEGER NOT NULL, expires_at INTEGER NOT NULL)');
-    const row = await this.state.storage.sql.exec<{ hits: number; expires_at: number }>('SELECT hits, expires_at FROM limits WHERE key = ?', key).toArray();
-    const current = row[0];
-    if (!current || current.expires_at <= now) {
-      await this.state.storage.sql.exec('INSERT INTO limits (key, hits, expires_at) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET hits = 1, expires_at = excluded.expires_at', key, now + 60);
-      return json({ allowed: true, remaining: 29 });
-    }
-    if (current.hits >= 30) return json({ allowed: false, remaining: 0 }, 429);
-    await this.state.storage.sql.exec('UPDATE limits SET hits = hits + 1 WHERE key = ?', key);
-    return json({ allowed: true, remaining: 29 - current.hits });
+    const rows = await this.state.storage.sql.exec<{ hits: number }>(`INSERT INTO limits (key, hits, expires_at) VALUES (?, 1, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        hits = CASE WHEN limits.expires_at <= ? THEN 1 ELSE MIN(?, limits.hits + 1) END,
+        expires_at = CASE WHEN limits.expires_at <= ? THEN ? ELSE limits.expires_at END
+      RETURNING hits`, key, now + windowSeconds, now, limit + 1, now, now + windowSeconds).toArray();
+    const hits = rows[0]?.hits ?? limit + 1;
+    const allowed = hits <= limit;
+    return json({ allowed, remaining: Math.max(0, limit - hits) }, allowed ? 200 : 429);
   }
 }
