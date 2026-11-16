@@ -1,43 +1,33 @@
 # DIRE BET status
 
-Updated: 2026-11-15
+Updated: 2026-11-16
 
-## Live demo preview
+## Current product
 
-- Deployed to `https://dire-bet.sophionasm.workers.dev` on the existing `dire-bet` Worker.
-- Remote D1 database `dire-bet-db` exists in region EEUR; migration `0001_core.sql` applied successfully.
-- Live `/api/health` verified `{ "ok": true, "mode": "demo", "realMoneyAvailable": false }`.
-- The four-poster carousel update is deployed. The live home page and Ludo JPEG returned HTTP 200; all four game images loaded in the live phone-sized preview.
-- Live `/api/games` verified. XO is marked playable for practice; Ludo, Dominoes and Poker are preview-only; Ethiopian 41 is unavailable.
-- Telegram bot setup succeeded: Cloudflare has the required secrets, and Telegram accepted the webhook, commands and menu. The token was entered through a hidden local prompt and was not shared in chat.
-- Telegram login inside the player app is still unfinished. The bot's `/start` and menu open the demo.
-- `REAL_MONEY_ENABLED=false`, `DEMO_MODE=true`. No deposit, withdrawal, stake, prize or cash-commission feature is enabled.
+DIRE BET is a free-play web app that can also open as a Telegram Mini App. Guest users can play practice games locally. Telegram sign-in creates a player account and is required to create or join an online room.
 
-## Built
+## Games
 
-- React/Vite player preview, Cloudflare Worker, shared packages and D1 schema.
-- Four languages (English, Amharic, Somali, Afaan Oromoo), guest navigation, wallet lock screen and local XO practice against a bot.
-- The home carousel now rotates through the supplied Ludo, Dominoes, Poker and XO posters, with animated transitions and accessible slide controls. Poster art also appears on the matching game cards.
-- Telegram init-data verification and short-lived session code, bot webhook/setup endpoints, health/catalog endpoints and disabled live-money routes.
-- Responsive browser previews for player, wallet, admin and agent. Screenshots are in `docs/screenshots/`.
+- XO, Ludo, Dominoes and heads-up Texas Hold’em each have a playable browser practice mode against a bot.
+- Those four games also have private, two-player online rooms. The Cloudflare Worker checks turns and legal moves, and records match events in D1. Poker and Dominoes hands are hidden from the other player; poker hands are shown at showdown.
+- Ethiopian 41 remains unavailable.
+- The four supplied posters appear in the animated home carousel and game cards.
+
+## Security and money status
+
+- `REAL_MONEY_ENABLED=false`, `DEMO_MODE=true`. Wallet UI is informational/demo-only. No deposits, withdrawals, wagers, prizes, commissions or payment providers are active.
+- Admin and agent pages remain locked previews. There is no default admin username or password. Do not invent or publish one; secure staff sign-in, MFA, RBAC and isolated agent records still need implementation and owner setup.
+- The latest BotFather token was pasted into chat. Revoke it in BotFather and enter a fresh token only through the hidden local setup prompt before relying on the bot.
+- The GitHub repository is public. The owner can change its visibility in GitHub Settings.
+
+## Cloudflare deployment
+
+- Updated site: `https://dire-bet.sophionasm.workers.dev`; deployment completed on 2026-11-16.
+- Existing Worker: `dire-bet`; D1: `dire-bet-db`.
+- Migration `0002_enable_freeplay_games.sql` is applied remotely; Ludo, Dominoes and Poker are enabled in D1.
+- Live checks: home page HTTP 200, Ludo poster HTTP 200, health reports demo mode and no real money, and all four games report playable. Ethiopian 41 reports unavailable.
+- Telegram sign-in and two-account multiplayer have not been verified end to end. The BotFather token shared in chat must be revoked and replaced through the hidden local setup prompt before relying on Telegram login.
 
 ## Checks
 
-- All four languages checked at 360×740; no horizontal overflow observed. The updated poster carousel and images were checked locally at 1440×900.
-- Wallet checked at 390×844 and 1440×900. Admin and agent previews checked at phone and desktop sizes.
-- XO practice played to a finished round.
-- `npm run test`: 10 unit tests passed (i18n 2, Worker security 4, XO engine 4).
-- `npm run typecheck`, `npm run lint`, `npm run build`, `npm run check:i18n`, `npm run check:secrets` passed. The lint command is currently a TypeScript check. Translation parity is 89 keys × 4 languages; the latest secret scan covered 71 repository files. The updated build deployed successfully.
-- PowerShell scripts parsed successfully. Local D1 migration and live remote migration both completed.
-
-## Not implemented
-
-- **Peer-to-peer games complete: 0.** XO is single-player practice against a local bot. Online rooms and matchmaking do not exist.
-- Telegram login is not wired into the player UI.
-- Admin MFA/RBAC and operational APIs, agent onboarding/isolation, wallet endpoints, payment integrations, referrals/promos, multiplayer, voice, notifications, support backend and PNG export remain unfinished. Admin and agent routes are locked previews; there is no admin username or password yet.
-- Translation review by native speakers remains pending.
-- The GitHub repository is public. Owner may make it private in GitHub Settings if needed.
-
-## Costs and safeguards
-
-Cloudflare use may remain $0 within its free quotas. Provider fees, licensing and other service costs are separate. The deployment is demo-only; keep money features off.
+Run `npm run typecheck`, `npm run test`, `npm run check:i18n`, `npm run check:secrets`, and `npm run build` before release. Native-speaker translation review is still pending.

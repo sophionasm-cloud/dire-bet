@@ -1,6 +1,6 @@
 # Owner checklist
 
-Actions are ordered. The platform is a free-play preview until every applicable review and implementation step is complete.
+The current app is a free-play release with four games. This checklist covers repository privacy, deployment and any later product expansion.
 
 1. **Make the GitHub repository private.** The current `sophionasm-cloud/dire-bet` repository is public. In GitHub, open **Settings → General → Danger Zone → Change repository visibility → Make private**. Then confirm access is limited to the intended people.
 2. **Obtain Ethiopian legal review.** Ask qualified Ethiopian counsel about this exact P2P game model, Telegram distribution, age requirements, game rules, entry fees, prizes, deposits, withdrawals, agent commissions, licensing and responsible-play duties. Record the signed written opinion and required approvals in `docs/LEGAL_ACTIVATION_CHECKLIST.md`.
@@ -9,12 +9,12 @@ Actions are ordered. The platform is a free-play preview until every applicable 
 5. **Confirm privacy, age and retention rules.** Set the minimum age only from qualified legal review. Define age verification, self-exclusion, cooling-off, data access/deletion and retention before production accounts are accepted.
 6. **Install Node.js LTS and Git on Windows.** Use a current Node 20.19+ release. Open PowerShell in the project folder and run `npm install`.
 7. **Set up Cloudflare.** Run `npx wrangler login`, then `./scripts/setup.ps1`. It creates or reuses `dire-bet-db`, saves the D1 ID and applies migrations.
-8. **Deploy the demo preview.** Run `npm run deploy`. The current preview is already at `https://dire-bet.sophionasm.workers.dev`; its live health check reports demo mode and no real-money access.
-9. **Connect Telegram.** After deployment, run `./scripts/connect-telegram.ps1`. It asks for the BotFather token in a hidden prompt, saves it directly to Cloudflare, and configures the bot menu/webhook. Never paste the token into Codex or chat. Telegram sign-in inside the app is still unfinished.
+8. **Deploy the free-play app.** Apply migrations with `npm run db:migrate:remote`, then run `npm run deploy`. Verify the four-game catalog, home posters and health endpoint at `https://dire-bet.sophionasm.workers.dev`.
+9. **Connect Telegram safely.** If a BotFather token has appeared in chat, revoke it first in BotFather. Then run `./scripts/connect-telegram.ps1` and enter a fresh token only in its hidden prompt. Telegram sign-in is implemented; online rooms require two Telegram accounts.
 10. **Check locally if needed.** Run `npm run dev` and open the local URL printed by Vite.
 11. **Review translations and product documents.** Ask native speakers to review `docs/TRANSLATION_REVIEW.md`.
-12. **Keep money features off.** Multiplayer, admin MFA/RBAC, agent isolation and payment integrations are still incomplete. The current UI cannot enable real-money mode.
-13. **Before later deployments**, rerun checks, confirm the intended Worker in Cloudflare, and verify its health endpoint.
+12. **Keep money features off.** The app has no real-money wallet, payment provider, deposit, withdrawal, wager, prize or commission flow. Admin and agent pages remain locked until secure staff authentication, MFA and permissions are built.
+13. **Before later deployments**, rerun checks, confirm the intended Worker in Cloudflare, and verify its health endpoint and game catalog.
 
 ## Cost notes
 

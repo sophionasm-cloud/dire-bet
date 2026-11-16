@@ -1,4 +1,8 @@
 import { PUBLIC_GAMES, TelegramAuthRequestSchema } from '@dire-bet/shared';
+import { applyXO, initXO, type Mark, type XOState } from '@dire-bet/engines/xo';
+import { initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
+import { applyDominoAction, newDominoesGame, nextDominoesRound, viewDominoes, type DominoAction, type DominoesState } from '@dire-bet/engines/dominoes';
+import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type PokerState } from '@dire-bet/engines/poker';
 
 interface Env {
   ASSETS: Fetcher;
@@ -22,6 +26,15 @@ const enc = new TextEncoder();
 const ONE_HOUR = 60 * 60;
 const SESSION_LIFETIME = 15 * 60;
 const MAX_WEBHOOK_BYTES = 64 * 1024;
+const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const ROOM_TTL_MS = 15 * 60 * 1000;
+const RECONNECT_GRACE_MS = 60 * 1000;
+
+type RoomGame = 'xo' | 'ludo' | 'dominoes' | 'poker';
+type RoomState = XOState | LudoState | DominoesState | PokerState;
+type RoomPlayer = { id: number; name: string; mark: Mark | null; online: boolean };
+type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number };
+type RoomTicket = { userId: number; displayName: string; code: string; expiresAt: number };
 
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
@@ -93,6 +106,163 @@ function base64url(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function decodeBase64url(value: string): string {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+  return atob(padded);
+}
+
+function randomCode(length = 6): string {
+  const limit = Math.floor(256 / ROOM_ALPHABET.length) * ROOM_ALPHABET.length;
+  let result = '';
+  while (result.length < length) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length * 2));
+    for (const byte of bytes) if (byte < limit) result += ROOM_ALPHABET[byte % ROOM_ALPHABET.length];
+  }
+  return result.slice(0, length);
+}
+
+function secureRandom(): number {
+  const ceiling = 0x1_0000_0000;
+  const limit = Math.floor(ceiling / 1_000_000) * 1_000_000;
+  let value: number;
+  do { value = crypto.getRandomValues(new Uint32Array(1))[0]; } while (value >= limit);
+  return (value % 1_000_000) / 1_000_000;
+}
+
+function secureInt(minimum: number, maximum: number): number {
+  return minimum + Math.floor(secureRandom() * (maximum - minimum + 1));
+}
+
+function createGame(gameId: RoomGame): RoomState {
+  if (gameId === 'xo') return initXO();
+  if (gameId === 'ludo') return initLudo();
+  if (gameId === 'dominoes') return newDominoesGame(secureRandom);
+  return initTexasHoldem(secureRandom, [1000, 1000]);
+}
+
+function gameTurn(room: StoredRoom): number | null {
+  if (room.gameId === 'xo') return room.players.findIndex((player) => player.mark === (room.game as XOState).turn);
+  if (room.gameId === 'ludo') return (room.game as LudoState).turn;
+  if (room.gameId === 'dominoes') return (room.game as DominoesState).turn;
+  return (room.game as PokerState).turn;
+}
+
+function gameComplete(room: StoredRoom): { done: boolean; winner: number | 'draw' | null } {
+  if (room.gameId === 'xo') {
+    const game = room.game as XOState;
+    return { done: game.winner !== null, winner: game.winner === 'draw' ? 'draw' : game.winner ? room.players.findIndex((player) => player.mark === game.winner) : null };
+  }
+  if (room.gameId === 'ludo') { const game = room.game as LudoState; return { done: game.winner !== null, winner: game.winner }; }
+  if (room.gameId === 'dominoes') { const game = room.game as DominoesState; return { done: game.status === 'finished', winner: game.winner }; }
+  const game = room.game as PokerState;
+  return { done: game.street === 'showdown' || game.street === 'folded', winner: game.winner === 'split' ? 'draw' : game.winner };
+}
+
+function roomAuditView(room: StoredRoom): unknown {
+  if (room.gameId === 'xo' || room.gameId === 'ludo') return room.game;
+  if (room.gameId === 'dominoes') {
+    const { hands, boneyard, ...publicState } = room.game as DominoesState;
+    return { ...publicState, hands: hands.map((hand) => hand.length), boneyardCount: boneyard.length };
+  }
+  const { deck, players, ...publicState } = room.game as PokerState;
+  return { ...publicState, players: players.map(({ stack, invested }) => ({ stack, invested })), deckCount: deck.length };
+}
+
+async function issueRoomTicket(userId: number, displayName: string, code: string, secret: string): Promise<string> {
+  const payload = base64url(enc.encode(JSON.stringify({ userId, displayName, code, expiresAt: Math.floor(Date.now() / 1000) + 90 })));
+  const signature = base64url(await hmac(secret, payload));
+  return `${payload}.${signature}`;
+}
+
+async function readRoomTicket(value: string, secret?: string): Promise<RoomTicket | null> {
+  if (!secret || value.length > 2048) return null;
+  const [payload, signature, extra] = value.split('.');
+  if (!payload || !signature || extra) return null;
+  try {
+    const expected = await hmac(secret, payload);
+    const received = Uint8Array.from(decodeBase64url(signature), (character) => character.charCodeAt(0));
+    if (!equalBytes(expected, received)) return null;
+    const decoded = JSON.parse(decodeBase64url(payload)) as Partial<RoomTicket>;
+    if (!Number.isSafeInteger(decoded.userId) || typeof decoded.displayName !== 'string' || !/^[23456789A-HJ-NP-Z]{6}$/.test(decoded.code || '') || !Number.isInteger(decoded.expiresAt) || (decoded.expiresAt || 0) < Date.now() / 1000) return null;
+    return decoded as RoomTicket;
+  } catch { return null; }
+}
+
+async function gameDisplayName(env: Env, userId: number): Promise<string | null> {
+  const user = await env.DB.prepare('SELECT first_name, username FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ first_name: string; username: string | null }>();
+  if (!user) return null;
+  return (user.username ? `@${user.username}` : user.first_name).slice(0, 32);
+}
+
+async function allowRoomAction(env: Env, userId: number, action: string): Promise<boolean> {
+  const id = env.RATE_LIMITER.idFromName(`room-user:${userId}`);
+  const limiter = env.RATE_LIMITER.get(id);
+  const response = await limiter.fetch(`https://rate-limit/?key=${encodeURIComponent(action)}`);
+  if (!response.ok) return false;
+  const result = await response.json() as { allowed?: boolean };
+  return result.allowed === true;
+}
+
+async function createRoom(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const userId = await readSession(request, env.SESSION_SECRET);
+  if (!userId) return json({ error: 'Open DIRE BET in Telegram to create an online room.' }, 401);
+  if (!(await allowRoomAction(env, userId, 'create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
+  let body: { gameId?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
+  if (body.gameId !== 'xo' && body.gameId !== 'ludo' && body.gameId !== 'dominoes' && body.gameId !== 'poker') return json({ error: 'This game cannot be played online.' }, 409);
+  const displayName = await gameDisplayName(env, userId);
+  if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+  const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(body.gameId).first<{ enabled: number }>();
+  if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomCode();
+    try {
+      await env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at)
+        VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?)`)
+        .bind(code, code, body.gameId, userId, new Date(Date.now() + ROOM_TTL_MS).toISOString()).run();
+    } catch { continue; }
+    const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(code));
+    const init = await stub.fetch('https://room/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, gameId: body.gameId, userId, displayName, expiresAt: Date.now() + ROOM_TTL_MS }) });
+    if (!init.ok) {
+      await env.DB.prepare('DELETE FROM game_rooms WHERE id = ? AND status = ?').bind(code, 'waiting').run();
+      return json({ error: 'Could not create room. Try again.' }, 503);
+    }
+    return json({ code, ticket: await issueRoomTicket(userId, displayName, code, env.SESSION_SECRET || ''), gameId: body.gameId }, 201);
+  }
+  return json({ error: 'Could not reserve a room code. Try again.' }, 503);
+}
+
+async function joinRoom(request: Request, env: Env, code: string): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!/^[23456789A-HJ-NP-Z]{6}$/i.test(code)) return json({ error: 'Room code is invalid.' }, 400);
+  const userId = await readSession(request, env.SESSION_SECRET);
+  if (!userId) return json({ error: 'Open DIRE BET in Telegram to join an online room.' }, 401);
+  if (!(await allowRoomAction(env, userId, 'join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
+  const row = await env.DB.prepare('SELECT id, game_id, status, expires_at FROM game_rooms WHERE code = ?').bind(code.toUpperCase()).first<{ id: string; game_id: string; status: string; expires_at: string | null }>();
+  if (!row || (row.expires_at && Date.parse(row.expires_at) < Date.now())) return json({ error: 'Room not found or expired.' }, 404);
+  if (row.game_id !== 'xo' && row.game_id !== 'ludo' && row.game_id !== 'dominoes' && row.game_id !== 'poker') return json({ error: 'This game is not available online yet.' }, 409);
+  const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(row.game_id).first<{ enabled: number }>();
+  if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
+  const displayName = await gameDisplayName(env, userId);
+  if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+  const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(row.id));
+  const response = await stub.fetch('https://room/join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: row.id, userId, displayName }) });
+  if (!response.ok) return json(await response.json(), response.status);
+  return json({ code: row.id, ticket: await issueRoomTicket(userId, displayName, row.id, env.SESSION_SECRET || ''), gameId: row.game_id });
+}
+
+async function connectRoom(request: Request, env: Env, code: string): Promise<Response> {
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'WebSocket upgrade required.' }, 426);
+  const ticket = await readRoomTicket(new URL(request.url).searchParams.get('ticket') || '', env.SESSION_SECRET);
+  if (!ticket || ticket.code !== code) return json({ error: 'Room ticket is invalid or expired.' }, 401);
+  const headers = new Headers(request.headers);
+  headers.set('X-Game-User', String(ticket.userId));
+  headers.set('X-Game-Name', ticket.displayName);
+  const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(code));
+  return stub.fetch(new Request(request, { headers }));
 }
 
 async function issueSession(userId: number, secret: string): Promise<string> {
@@ -168,13 +338,21 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   try { update = JSON.parse(text) as typeof update; } catch { return json({ ok: true }); }
   const message = update.message;
   if (!message?.text || typeof message.chat?.id !== 'number') return json({ ok: true });
-  const command = message.text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
+  const parts = message.text.trim().split(/\s+/);
+  const command = parts[0].split('@')[0].toLowerCase();
+  const roomPayload = command === '/start' && /^room_[23456789A-HJ-NP-Z]{6}$/i.test(parts[1] || '') ? parts[1].slice(5).toUpperCase() : null;
   const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
   const base = new URL(request.url).origin;
+  const gameList: Record<string, string> = {
+    en: 'Free practice vs a bot: XO, Ludo, Dominoes and Texas Hold’em. Create a private online room for any of the four games.',
+    am: 'በነፃ ከቦት ጋር ይለማመዱ፦ XO፣ Ludo፣ Dominoes እና Texas Hold’em። ከአራቱ ጨዋታዎች ለማንኛውም የግል ኦንላይን ክፍል ይፍጠሩ።',
+    so: 'Tababar bilaash ah la ciyaar bot: XO, Ludo, Dominoes iyo Texas Hold’em. U samee qol gaar ah mid kasta oo ka mid ah afarta ciyaarood.',
+    om: 'Shaakala bilisaa bot waliin: XO, Ludo, Dominoes fi Texas Hold’em. Tapha afran keessaa kamiyyuu irratti kutaa dhuunfaa uumi.',
+  };
   const responses: Record<string, string> = {
     '/start': welcome[lang],
     '/play': welcome[lang],
-    '/games': 'XO is available for free practice. Ludo, Dominoes and Poker are being prepared. Ethiopian 41 is unavailable.',
+    '/games': gameList[lang],
     '/profile': 'Open DIRE BET to view your player profile.',
     '/wallet': 'TEST MODE · Demo credits are not ETB cash. Live deposits and withdrawals are disabled.',
     '/leaderboard': 'The public leaderboard is not available yet.',
@@ -183,11 +361,11 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     '/stop': 'Promotional messages are not sent in this preview.',
   };
   const reply_markup = ['/start', '/play', '/games'].includes(command) ? {
-    inline_keyboard: [[{ text: 'Play DIRE BET', web_app: { url: base } }]],
+    inline_keyboard: [[{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : base } }]],
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
-    text: responses[command] || 'Use /play to open free practice games, or /help for help.',
+    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : responses[command] || 'Use /play to open free practice games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
   return json({ ok: true });
@@ -267,23 +445,29 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const user = await env.DB.prepare('SELECT id, username, first_name, language FROM users WHERE id = ?').bind(id).first();
     return user ? json({ user }) : json({ error: 'Session is no longer valid' }, 401);
   }
+  if (url.pathname === '/api/rooms' && request.method === 'POST') return createRoom(request, env);
+  const join = url.pathname.match(/^\/api\/rooms\/([23456789A-HJ-NP-Z]{6})\/join$/i);
+  if (join && request.method === 'POST') return joinRoom(request, env, join[1]);
   if (url.pathname === '/api/ws-ticket' && request.method === 'POST') {
     if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-    const id = await readSession(request, env.SESSION_SECRET);
-    if (!id) return json({ error: 'Authentication required' }, 401);
-    return json({ error: 'Online rooms are not enabled yet' }, 503);
+    let body: { code?: unknown };
+    try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
+    if (typeof body.code !== 'string') return json({ error: 'Room code is required.' }, 400);
+    return joinRoom(request, env, body.code);
   }
   if (url.pathname.startsWith('/api/money') || url.pathname.startsWith('/api/deposit') || url.pathname.startsWith('/api/withdraw')) {
     return (await moneyActivationRecorded(env))
       ? json({ error: 'Provider-approved money flows are not implemented' }, 503)
       : json({ error: 'Live funds are disabled pending verified approvals' }, 403);
   }
+  const roomSocket = url.pathname.match(/^\/ws\/room\/([23456789A-HJ-NP-Z]{6})$/i);
+  if (roomSocket && request.method === 'GET') return connectRoom(request, env, roomSocket[1].toUpperCase());
   if (url.pathname === '/telegram/webhook' && request.method === 'POST') return handleTelegramWebhook(request, env);
   if (url.pathname === '/telegram/setup' && request.method === 'POST') {
     if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
     return setupTelegram(request, env);
   }
-  if (url.pathname.startsWith('/ws/')) return json({ error: 'Online rooms are not enabled yet' }, 503);
+  if (url.pathname.startsWith('/ws/')) return json({ error: 'Room not found.' }, 404);
   return env.ASSETS.fetch(request);
 }
 
@@ -298,11 +482,185 @@ export default {
 };
 
 export class GameRoom {
-  constructor(private readonly state: DurableObjectState, _env: Env) {}
-  async fetch(): Promise<Response> { return json({ error: 'Room protocol is not enabled yet' }, 503); }
-  webSocketMessage(_socket: WebSocket, _message: string | ArrayBuffer): void {}
-  webSocketClose(_socket: WebSocket): void {}
-  async alarm(): Promise<void> {}
+  constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path === '/create' && request.method === 'POST') {
+      const existing = await this.state.storage.get<StoredRoom>('room');
+      if (existing) return json({ error: 'Room code is already in use.' }, 409);
+      let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown };
+      try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
+      if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'dominoes' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
+      const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId), matchId: null, sequence: 0, expiresAt: input.expiresAt as number };
+      await this.state.storage.put('room', room);
+      await this.state.storage.setAlarm(room.expiresAt);
+      return json({ ok: true });
+    }
+    if (path === '/join' && request.method === 'POST') return this.joinRoom(request);
+    if (path === '/connect' && request.method === 'GET') return this.connect(request);
+    return json({ error: 'Room route not found.' }, 404);
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const attachment = socket.deserializeAttachment() as { userId?: number } | null;
+    const userId = attachment?.userId;
+    const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    if (!userId || text.length > 512) return this.sendError(socket, 'Move could not be read.');
+    let input: { type?: unknown; index?: unknown; token?: unknown; action?: unknown };
+    try { input = JSON.parse(text) as typeof input; } catch { return this.sendError(socket, 'Move could not be read.'); }
+    if (typeof input.type !== 'string') return this.sendError(socket, 'Move is not allowed.');
+    const room = await this.state.storage.get<StoredRoom>('room');
+    if (!room || room.status !== 'active' || !room.matchId) return this.sendError(socket, 'This room is not active.');
+    const player = room.players.find((entry) => entry.id === userId);
+    const playerIndex = room.players.findIndex((entry) => entry.id === userId);
+    if (!player || playerIndex < 0) return this.sendError(socket, 'You are not seated in this room.');
+    if (input.type !== 'next-round' && gameTurn(room) !== playerIndex) return this.sendError(socket, 'Please wait for your turn.');
+    const previous = room.game;
+    try {
+      if (room.gameId === 'xo' && input.type === 'move' && Number.isInteger(input.index) && player.mark) room.game = applyXO(room.game as XOState, player.mark, input.index as number);
+      else if (room.gameId === 'ludo' && input.type === 'roll') room.game = rollLudo(room.game as LudoState, secureInt(1, 6));
+      else if (room.gameId === 'ludo' && input.type === 'move' && Number.isInteger(input.token)) room.game = moveLudo(room.game as LudoState, input.token as number);
+      else if (room.gameId === 'dominoes' && input.type === 'action' && input.action && typeof input.action === 'object') room.game = applyDominoAction(room.game as DominoesState, input.action as DominoAction);
+      else if (room.gameId === 'dominoes' && input.type === 'next-round') room.game = nextDominoesRound(room.game as DominoesState, secureRandom);
+      else if (room.gameId === 'poker' && input.type === 'action' && input.action && typeof input.action === 'object') room.game = applyPokerAction(room.game as PokerState, playerIndex as 0 | 1, input.action as PokerAction);
+      else return this.sendError(socket, 'Move is not allowed for this game.');
+    } catch { return this.sendError(socket, 'That move is not allowed.'); }
+    room.sequence++;
+    const completion = gameComplete(room);
+    if (completion.done) room.status = 'finished';
+    try {
+      await this.recordMove(room, player.id, { type: input.type, ...(Number.isInteger(input.index) ? { index: input.index } : {}), ...(Number.isInteger(input.token) ? { token: input.token } : {}), ...(input.action && typeof input.action === 'object' ? { action: input.action } : {}) }, completion.winner);
+      await this.state.storage.put('room', room);
+    } catch {
+      room.game = previous;
+      room.sequence--;
+      room.status = 'active';
+      return this.sendError(socket, 'Move could not be saved. Please try again.');
+    }
+    this.broadcast(room);
+  }
+
+  async webSocketClose(socket: WebSocket): Promise<void> { await this.disconnect(socket); }
+  async webSocketError(socket: WebSocket): Promise<void> { await this.disconnect(socket); }
+
+  async alarm(): Promise<void> {
+    const room = await this.state.storage.get<StoredRoom>('room');
+    if (!room) return;
+    if (room.status === 'waiting' && room.expiresAt <= Date.now()) {
+      room.status = 'cancelled';
+      await this.state.storage.put('room', room);
+      await this.env.DB.prepare("UPDATE game_rooms SET status = 'cancelled' WHERE id = ? AND status = 'waiting'").bind(room.code).run();
+      this.broadcast(room);
+      return;
+    }
+    if (room.status === 'active' && room.players.some((player) => !player.online)) {
+      room.status = 'cancelled';
+      await this.state.storage.put('room', room);
+      await this.env.DB.batch([
+        this.env.DB.prepare("UPDATE game_rooms SET status = 'cancelled' WHERE id = ?").bind(room.code),
+        this.env.DB.prepare("UPDATE matches SET status = 'voided', ended_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(room.matchId),
+        this.env.DB.prepare("UPDATE match_players SET result = 'void' WHERE match_id = ? AND result IS NULL").bind(room.matchId),
+      ]);
+      this.broadcast(room);
+    }
+  }
+
+  private async joinRoom(request: Request): Promise<Response> {
+    let input: { code?: unknown; userId?: unknown; displayName?: unknown };
+    try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
+    if (typeof input.code !== 'string' || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string') return json({ error: 'Invalid room request.' }, 400);
+    const room = await this.state.storage.get<StoredRoom>('room');
+    if (!room || room.code !== input.code) return json({ error: 'Room not found or expired.' }, 404);
+    const userId = input.userId as number;
+    const existing = room.players.find((player) => player.id === userId);
+    if (existing) return json({ mark: existing.mark, status: room.status });
+    if (room.status !== 'waiting' || room.players.length >= 2) return json({ error: 'Room is already full.' }, 409);
+    if (room.hostId === userId) return json({ error: 'Join from the other player’s account.' }, 409);
+    const hostMark: Mark = secureInt(0, 1) ? 'X' : 'O';
+    room.players[0].mark = room.gameId === 'xo' ? hostMark : null;
+    room.players.push({ id: userId, name: (input.displayName as string).slice(0, 32), mark: room.gameId === 'xo' ? (hostMark === 'X' ? 'O' : 'X') : null, online: false });
+    room.game = room.gameId === 'xo' ? initXO(room.players.find((player) => player.mark === 'X')?.mark || 'X') : createGame(room.gameId);
+    room.status = 'active';
+    room.matchId = `${room.gameId}-${room.code}`;
+    room.sequence = 0;
+    await this.env.DB.batch([
+      this.env.DB.prepare("UPDATE game_rooms SET status = 'active' WHERE id = ? AND status = 'waiting'").bind(room.code),
+      this.env.DB.prepare("INSERT INTO matches (id, room_id, game_id, status, bot_match) VALUES (?, ?, ?, 'active', 0)").bind(room.matchId, room.code, room.gameId),
+      ...room.players.map((player, seat) => this.env.DB.prepare('INSERT INTO match_players (match_id, user_id, seat) VALUES (?, ?, ?)').bind(room.matchId, player.id, seat)),
+    ]);
+    await this.state.storage.put('room', room);
+    await this.state.storage.setAlarm(Date.now() + RECONNECT_GRACE_MS);
+    this.broadcast(room);
+    return json({ mark: room.players[1].mark, status: room.status });
+  }
+
+  private async connect(request: Request): Promise<Response> {
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'WebSocket upgrade required.' }, 426);
+    const userId = Number(request.headers.get('X-Game-User'));
+    const name = request.headers.get('X-Game-Name') || '';
+    const room = await this.state.storage.get<StoredRoom>('room');
+    if (!room || !Number.isSafeInteger(userId) || !room.players.some((player) => player.id === userId)) return json({ error: 'You are not seated in this room.' }, 403);
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.serializeAttachment({ userId, name: name.slice(0, 32) });
+    this.state.acceptWebSocket(server);
+    const seat = room.players.find((player) => player.id === userId)!;
+    seat.online = true;
+    await this.state.storage.put('room', room);
+    if (room.status === 'waiting' || room.players.some((player) => !player.online)) await this.state.storage.setAlarm(room.status === 'waiting' ? room.expiresAt : Date.now() + RECONNECT_GRACE_MS);
+    else await this.state.storage.deleteAlarm();
+    this.broadcast(room);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private async disconnect(socket: WebSocket): Promise<void> {
+    const attachment = socket.deserializeAttachment() as { userId?: number } | null;
+    if (!attachment?.userId) return;
+    const room = await this.state.storage.get<StoredRoom>('room');
+    if (!room) return;
+    const stillConnected = this.state.getWebSockets().some((candidate) => (candidate.deserializeAttachment() as { userId?: number } | null)?.userId === attachment.userId);
+    const player = room.players.find((entry) => entry.id === attachment.userId);
+    if (player) player.online = stillConnected;
+    await this.state.storage.put('room', room);
+    if (!stillConnected && room.status === 'active') await this.state.storage.setAlarm(Date.now() + RECONNECT_GRACE_MS);
+    this.broadcast(room);
+  }
+
+  private async recordMove(room: StoredRoom, userId: number, action: unknown, winner: number | 'draw' | null): Promise<void> {
+    if (!room.matchId) return;
+    const stateText = JSON.stringify(room.game);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(stateText)));
+    const stateHash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const event = this.env.DB.prepare('INSERT INTO match_events (match_id, sequence, actor_user_id, event_type, payload_json, state_hash) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(room.matchId, room.sequence, userId, 'action', JSON.stringify({ action, state: roomAuditView(room) }), stateHash);
+    const statements = [event];
+    if (room.status === 'finished' && winner !== null) {
+      const result = winner === 'draw' ? [ 'draw', 'draw' ] : room.players.map((_player, seat) => seat === winner ? 'win' : 'loss');
+      statements.push(this.env.DB.prepare("UPDATE matches SET status = 'completed', ended_at = CURRENT_TIMESTAMP, result_json = ? WHERE id = ?")
+        .bind(JSON.stringify({ winner, gameId: room.gameId }), room.matchId));
+      statements.push(...room.players.map((player, seat) => this.env.DB.prepare('UPDATE match_players SET result = ? WHERE match_id = ? AND seat = ?').bind(result[seat], room.matchId, seat)));
+      statements.push(this.env.DB.prepare("UPDATE game_rooms SET status = 'finished' WHERE id = ?").bind(room.code));
+    }
+    await this.env.DB.batch(statements);
+  }
+
+  private broadcast(room: StoredRoom): void {
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as { userId?: number } | null;
+      const seat = room.players.findIndex((player) => player.id === attachment?.userId);
+      let game: unknown = room.game;
+      if (room.gameId === 'dominoes' && seat >= 0) game = viewDominoes(room.game as DominoesState, seat as 0 | 1);
+      if (room.gameId === 'poker' && seat >= 0) game = viewPoker(room.game as PokerState, seat as 0 | 1);
+      try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat })); }
+      catch { socket.close(1011, 'Unable to send room update'); }
+    }
+  }
+
+  private sendError(socket: WebSocket, message: string): void {
+    try { socket.send(JSON.stringify({ type: 'error', error: message })); } catch { socket.close(1011, 'Unable to send room error'); }
+  }
 }
 
 export class Matchmaker {

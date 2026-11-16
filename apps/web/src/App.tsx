@@ -1,13 +1,15 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
-import { PUBLIC_GAMES } from '@dire-bet/shared';
+import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
 import { languageFromTelegram, languageNames, translate, type Language, type TranslationKey } from './i18n';
 import { xoRules } from './i18n/rules';
+import { DominoesPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
+import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
 const AgentApp = lazy(() => import('./agent/AgentApp'));
 
-type Page = 'home'|'matches'|'wallet'|'rank'|'menu'|'xo';
+type Page = 'home'|'matches'|'online'|'wallet'|'rank'|'menu'|GameId;
 type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
@@ -66,6 +68,7 @@ function App() {
   const [reduceEffects, setReduceEffects] = useState(() => localStorage.getItem('direbet.reduceEffects') === 'true');
   const [displayName, setDisplayName] = useState('Guest');
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [roomConfig, setRoomConfig] = useState<RoomConfig | null>(null);
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
@@ -94,6 +97,20 @@ function App() {
       .catch(() => { if (live) setDisplayName('Guest'); });
     return () => { live = false; };
   }, []);
+
+  useEffect(() => {
+    const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
+    if (!sessionToken || !code || roomConfig || !/^[23456789A-HJ-NP-Z]{6}$/.test(code)) return;
+    let live = true;
+    fetch(`/api/rooms/${code}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' })
+      .then(async (response) => {
+        const result = await response.json() as { code?: string; ticket?: string; gameId?: GameId; error?: string };
+        if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
+        if (live) { setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' }); setPage('online'); history.replaceState(null, '', `${location.pathname}${location.hash}`); }
+      })
+      .catch((cause) => { if (live) showUnavailable(cause instanceof Error ? cause.message : t('onlineDisconnected')); });
+    return () => { live = false; };
+  }, [sessionToken, roomConfig, t]);
 
   useEffect(() => {
     const names = ['/admin', '/admin/'];
@@ -152,7 +169,11 @@ function App() {
     setSelected(null); setXo(initXO()); setRound(0); setPage('xo');
     window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');
   };
-  const leaveGame = () => { setPage('home'); setRound(0); };
+  const openPractice = (game: GameId) => {
+    setSelected(null); setPage(game);
+    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');
+  };
+  const leaveGame = () => { setPage('home'); setRound(0); setRoomConfig(null); };
   const selectGame = (game: Game) => {
     if (game.id === 'ethiopian-41') return;
     setSelected(game);
@@ -177,7 +198,8 @@ function App() {
     const value = !reduceEffects; setReduceEffects(value); localStorage.setItem('direbet.reduceEffects', String(value));
   };
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
-  const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); };
+  const enterOnlineRoom = (room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); };
+  const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); if (next !== 'online') setRoomConfig(null); };
 
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp /></Suspense>;
@@ -239,7 +261,12 @@ function App() {
       {xo.winner && <div className="game-actions"><button className="primary-button wide" onClick={openXo}>{t('playAgain')}<span>↻</span></button><button className="secondary-button" onClick={leaveGame}>{t('home')}</button></div>}
     </section>}
 
-    {page === 'matches' && <EmptyScreen icon="matches" title={t('matchesEmpty')} copy={t('matchesEmptyCopy')} action={t('home')} onAction={() => nav('home')} />}
+    {page === 'ludo' && <LudoPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
+    {page === 'dominoes' && <DominoesPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
+    {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
+
+    {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
+    {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletScreen t={t} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} />}
@@ -249,7 +276,7 @@ function App() {
       {(['home','matches','wallet','rank','menu'] as Page[]).map((item) => <button key={item} className={page === item ? 'active' : ''} onClick={() => nav(item)} aria-current={page === item ? 'page' : undefined}><Icon name={item === 'menu' ? 'menu' : item} size={20}/><span>{t(item as TranslationKey)}</span></button>)}
     </nav>
 
-    {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : setSelected(null)} />}
+    {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : openPractice(selected.id as GameId)} />}
     {overlay && <OverlaySheet overlay={overlay} t={t} language={language} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
     {onboarding && <Onboarding step={onboardingStep} setStep={setOnboardingStep} language={language} setLanguage={setLanguage} t={t} onFinish={() => { localStorage.setItem('direbet.onboarded','true'); setOnboarding(false); }} />}
     {notice && <div role="status" className="toast">{notice}</div>}

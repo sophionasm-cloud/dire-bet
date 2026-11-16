@@ -4,5 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": { "test": "vitest run" },
-  "exports": { "./xo": "./src/xo.ts" }
+  "exports": {
+    "./xo": "./src/xo.ts",
+    "./ludo": "./src/ludo.ts",
+    "./dominoes": "./src/dominoes.ts",
+    "./poker": "./src/poker.ts"
+  }
 }
