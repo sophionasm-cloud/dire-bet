@@ -27,7 +27,7 @@ DIRE BET is a free-play web app that can also open as a Telegram Mini App. Guest
 
 ## Cloudflare deployment
 
-- Updated site: `https://dire-bet.sophionasm.workers.dev`; the public room release is pending final checks and deployment.
+- Updated site: `https://dire-bet.sophionasm.workers.dev`; public rooms deployed on 2026-11-17. Live health confirms demo mode and `realMoneyAvailable=false`; the public catalog reports four playable games.
 - Existing Worker: `dire-bet`; D1: `dire-bet-db`.
 - Migrations `0001_core.sql`, `0002_enable_freeplay_games.sql`, and `0003_player_registration.sql` are applied remotely; Ludo, Dominoes and Poker are enabled in D1. The marketplace stores room state in Durable Object SQLite and reuses the existing D1 game-room records; no new D1 migration is required.
 - Live health reports demo mode and no real money; all four games report playable. Ethiopian 41 reports unavailable.
