@@ -1,8 +1,10 @@
-import { PUBLIC_GAMES, TelegramAuthRequestSchema } from '@dire-bet/shared';
+import { PUBLIC_GAMES, TelegramAuthRequestSchema, type GameId } from '@dire-bet/shared';
 import { applyXO, initXO, type Mark, type XOState } from '@dire-bet/engines/xo';
 import { initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyDominoAction, newDominoesGame, nextDominoesRound, viewDominoes, type DominoAction, type DominoesState } from '@dire-bet/engines/dominoes';
 import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type PokerState } from '@dire-bet/engines/poker';
+import { Matchmaker } from './public-marketplace';
+import { isMarketplaceGame } from './marketplace';
 
 interface Env {
   ASSETS: Fetcher;
@@ -34,7 +36,7 @@ const RECONNECT_GRACE_MS = 60 * 1000;
 type RoomGame = 'xo' | 'ludo' | 'dominoes' | 'poker';
 type RoomState = XOState | LudoState | DominoesState | PokerState;
 type RoomPlayer = { id: number; name: string; mark: Mark | null; online: boolean };
-type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number };
+type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; commissionBps?: number };
 type RoomTicket = { userId: number; displayName: string; code: string; expiresAt: number };
 
 const securityHeaders = {
@@ -281,6 +283,119 @@ async function joinRoom(request: Request, env: Env, code: string): Promise<Respo
   return json({ code: row.id, ticket: await issueRoomTicket(userId, displayName, row.id, env.SESSION_SECRET || ''), gameId: row.game_id });
 }
 
+function publicMarketplace(env: Env): DurableObjectStub {
+  return env.MATCHMAKER.get(env.MATCHMAKER.idFromName('public-room-marketplace'));
+}
+
+async function createPublicRoom(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const userId = await readSession(request, env.SESSION_SECRET);
+  if (!userId) return json({ error: 'Open DIRE BET in Telegram to create a public room.' }, 401);
+  if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your contact with the DIRE BET bot to finish registration.' }, 403);
+  if (!(await allowRoomAction(env, userId, 'public-create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
+  const input = await request.json().catch(() => null) as { gameId?: unknown; entry?: unknown; options?: unknown; idempotencyKey?: unknown } | null;
+  if (!input || !isMarketplaceGame(input.gameId)) return json({ error: 'This game cannot be opened in the public room list.' }, 409);
+  const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(input.gameId).first<{ enabled: number }>();
+  if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
+  const displayName = await gameDisplayName(env, userId);
+  if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+  return publicMarketplace(env).fetch('https://market/create', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...input, userId, displayName }),
+  });
+}
+
+async function superAdmin(request: Request, env: Env): Promise<number | Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const userId = await readSession(request, env.SESSION_SECRET);
+  if (!userId) return json({ error: 'Sign in through your approved Telegram account.' }, 401);
+  if (!env.SUPER_ADMIN_TELEGRAM_ID) return json({ error: 'Room management is waiting for the owner Telegram ID to be configured.' }, 503);
+  const account = await env.DB.prepare('SELECT telegram_id FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ telegram_id: number }>();
+  if (!account || String(account.telegram_id) !== env.SUPER_ADMIN_TELEGRAM_ID) return json({ error: 'This Telegram account is not the configured Super Admin.' }, 403);
+  return userId;
+}
+
+async function handlePublicMarketplace(request: Request, env: Env): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (url.pathname === '/api/public-rooms/config' && request.method === 'GET') return publicMarketplace(env).fetch('https://market/config');
+  if (url.pathname === '/api/public-rooms' && request.method === 'GET') {
+    const gameId = url.searchParams.get('gameId') || '';
+    if (gameId && !isMarketplaceGame(gameId)) return json({ error: 'Game filter is invalid.' }, 400);
+    return publicMarketplace(env).fetch(`https://market/list?gameId=${encodeURIComponent(gameId)}`);
+  }
+  if (url.pathname === '/api/public-rooms/balance' && request.method === 'GET') {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (!userId) return json({ error: 'Sign in through Telegram to view demo credits.' }, 401);
+    if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your Telegram contact to view a room balance.' }, 403);
+    return publicMarketplace(env).fetch(`https://market/balance?userId=${userId}`);
+  }
+  if (url.pathname === '/api/public-rooms/mine' && request.method === 'GET') {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (!userId) return json({ room: null });
+    const gameId = url.searchParams.get('gameId') || '';
+    return publicMarketplace(env).fetch(`https://market/mine?userId=${userId}&gameId=${encodeURIComponent(gameId)}`);
+  }
+  if (url.pathname === '/api/public-rooms' && request.method === 'POST') return createPublicRoom(request, env);
+  if (url.pathname === '/api/public-rooms/ws-ticket' && request.method === 'POST') {
+    if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (!userId) return json({ ticket: null });
+    const displayName = await gameDisplayName(env, userId);
+    if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+    return json({ ticket: await issueRoomTicket(userId, displayName, 'MARKET', env.SESSION_SECRET || '') });
+  }
+  const publicAction = url.pathname.match(/^\/api\/public-rooms\/([23456789A-HJ-NP-Z]{6})\/(join|cancel|session)$/i);
+  if (publicAction) {
+    const [, rawCode, action] = publicAction;
+    const code = rawCode.toUpperCase();
+    if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+    if (action === 'join' && request.method === 'POST') {
+      const userId = await readSession(request, env.SESSION_SECRET);
+      if (!userId) return json({ error: 'Sign in through Telegram to join a room.' }, 401);
+      if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your contact with the DIRE BET bot to finish registration.' }, 403);
+      if (!(await allowRoomAction(env, userId, 'public-join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
+      const displayName = await gameDisplayName(env, userId);
+      if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+      return publicMarketplace(env).fetch(`https://market/join/${code}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId, displayName }) });
+    }
+    if (action === 'cancel' && request.method === 'POST') {
+      const userId = await readSession(request, env.SESSION_SECRET);
+      if (!userId) return json({ error: 'Sign in through Telegram to cancel a room.' }, 401);
+      return publicMarketplace(env).fetch(`https://market/cancel/${code}`, { method: 'POST', headers: { 'X-Market-User': String(userId) } });
+    }
+    if (action === 'session' && request.method === 'GET') {
+      const userId = await readSession(request, env.SESSION_SECRET);
+      if (!userId) return json({ error: 'Sign in through Telegram to reopen a match.' }, 401);
+      const result = await publicMarketplace(env).fetch(`https://market/session/${code}?userId=${userId}`);
+      if (!result.ok) return result;
+      const session = await result.json() as { code: string; gameId: GameId; room: unknown };
+      const displayName = await gameDisplayName(env, userId);
+      if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
+      return json({ ...session, ticket: await issueRoomTicket(userId, displayName, code, env.SESSION_SECRET || '') });
+    }
+  }
+  if (url.pathname.startsWith('/api/admin/public-rooms')) {
+    const adminId = await superAdmin(request, env);
+    if (adminId instanceof Response) return adminId;
+    if (url.pathname === '/api/admin/public-rooms' && request.method === 'GET') {
+      const gameId = url.searchParams.get('gameId') || '';
+      const filter = gameId && isMarketplaceGame(gameId) ? `?gameId=${encodeURIComponent(gameId)}` : '';
+      return publicMarketplace(env).fetch(`https://market/admin/rooms${filter}`, { headers: { 'X-Market-Admin': String(adminId) } });
+    }
+    if (url.pathname === '/api/admin/public-rooms/settings' && request.method === 'PUT') {
+      const body = await request.json().catch(() => null);
+      if (!body) return json({ error: 'Settings are invalid.' }, 400);
+      return publicMarketplace(env).fetch('https://market/admin/settings', { method: 'PUT', headers: { 'content-type': 'application/json', 'X-Market-Admin': String(adminId) }, body: JSON.stringify(body) });
+    }
+    const adminCancel = url.pathname.match(/^\/api\/admin\/public-rooms\/([23456789A-HJ-NP-Z]{6})\/cancel$/i);
+    if (adminCancel && request.method === 'POST') return publicMarketplace(env).fetch(`https://market/admin/cancel/${adminCancel[1].toUpperCase()}`, { method: 'POST', headers: { 'X-Market-Admin': String(adminId) } });
+    const adminDetail = url.pathname.match(/^\/api\/admin\/public-rooms\/([23456789A-HJ-NP-Z]{6})$/i);
+    if (adminDetail && request.method === 'GET') return publicMarketplace(env).fetch(`https://market/admin/room/${adminDetail[1].toUpperCase()}`);
+    return json({ error: 'Room management route not found.' }, 404);
+  }
+  return null;
+}
+
 async function connectRoom(request: Request, env: Env, code: string): Promise<Response> {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'WebSocket upgrade required.' }, 426);
   const ticket = await readRoomTicket(new URL(request.url).searchParams.get('ticket') || '', env.SESSION_SECRET);
@@ -289,7 +404,7 @@ async function connectRoom(request: Request, env: Env, code: string): Promise<Re
   headers.set('X-Game-User', String(ticket.userId));
   headers.set('X-Game-Name', ticket.displayName);
   const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(code));
-  return stub.fetch(new Request(request, { headers }));
+  return stub.fetch(new Request('https://room/connect', { method: 'GET', headers }));
 }
 
 async function issueSession(userId: number, secret: string, lifetime = SESSION_LIFETIME): Promise<string> {
@@ -608,6 +723,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
     return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
   }
+  const publicMarketplaceResponse = await handlePublicMarketplace(request, env);
+  if (publicMarketplaceResponse) return publicMarketplaceResponse;
   if (url.pathname === '/api/rooms' && request.method === 'POST') return createRoom(request, env);
   const join = url.pathname.match(/^\/api\/rooms\/([23456789A-HJ-NP-Z]{6})\/join$/i);
   if (join && request.method === 'POST') return joinRoom(request, env, join[1]);
@@ -625,6 +742,21 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   }
   const roomSocket = url.pathname.match(/^\/ws\/room\/([23456789A-HJ-NP-Z]{6})$/i);
   if (roomSocket && request.method === 'GET') return connectRoom(request, env, roomSocket[1].toUpperCase());
+  if (url.pathname === '/ws/public-rooms' && request.method === 'GET') {
+    if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+    const gameId = url.searchParams.get('gameId') || '';
+    if (!isMarketplaceGame(gameId)) return json({ error: 'Game filter is invalid.' }, 400);
+    const headers = new Headers(request.headers);
+    headers.delete('X-Market-User');
+    const ticketValue = url.searchParams.get('ticket');
+    if (ticketValue) {
+      const ticket = await readRoomTicket(ticketValue, env.SESSION_SECRET);
+      if (!ticket || ticket.code !== 'MARKET') return json({ error: 'Room list connection ticket is invalid or expired.' }, 401);
+      headers.set('X-Market-User', String(ticket.userId));
+    }
+    const marketRequest = new Request(`https://market/connect?gameId=${encodeURIComponent(gameId)}`, { method: 'GET', headers });
+    return publicMarketplace(env).fetch(marketRequest);
+  }
   if (url.pathname === '/telegram/webhook' && request.method === 'POST') return handleTelegramWebhook(request, env);
   if (url.pathname === '/telegram/setup' && request.method === 'POST') {
     if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
@@ -641,6 +773,7 @@ export default {
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(env.DB.prepare("DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP").run().then(() => undefined).catch(() => undefined));
+    ctx.waitUntil(publicMarketplace(env).fetch('https://market/reconcile', { method: 'POST' }).then(() => undefined).catch(() => undefined));
   },
 };
 
@@ -652,12 +785,31 @@ export class GameRoom {
     if (path === '/create' && request.method === 'POST') {
       const existing = await this.state.storage.get<StoredRoom>('room');
       if (existing) return json({ error: 'Room code is already in use.' }, 409);
-      let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown };
+      let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown; publicRoomId?: unknown; publicRoomOptions?: unknown; entryCredits?: unknown; commissionBps?: unknown };
       try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
       if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'dominoes' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
-      const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId), matchId: null, sequence: 0, expiresAt: input.expiresAt as number };
+      const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId), matchId: null, sequence: 0, expiresAt: input.expiresAt as number,
+        ...(typeof input.publicRoomId === 'string' ? { publicRoomId: input.publicRoomId } : {}),
+        ...(input.publicRoomOptions && typeof input.publicRoomOptions === 'object' ? { publicRoomOptions: input.publicRoomOptions as Record<string, unknown> } : {}),
+        ...(Number.isSafeInteger(input.entryCredits) ? { entryCredits: input.entryCredits as number } : {}),
+        ...(Number.isSafeInteger(input.commissionBps) ? { commissionBps: input.commissionBps as number } : {}) };
       await this.state.storage.put('room', room);
       await this.state.storage.setAlarm(room.expiresAt);
+      return json({ ok: true });
+    }
+    if (path === '/cancel-public' && request.method === 'POST') {
+      const room = await this.state.storage.get<StoredRoom>('room');
+      if (!room || !room.publicRoomId) return json({ error: 'Public room not found.' }, 404);
+      if (room.status === 'cancelled' || room.status === 'finished') return json({ ok: true });
+      room.status = 'cancelled';
+      await this.state.storage.put('room', room);
+      await this.state.storage.deleteAlarm();
+      await this.env.DB.batch([
+        this.env.DB.prepare("UPDATE game_rooms SET status = 'cancelled' WHERE id = ? AND status IN ('waiting','active')").bind(room.code),
+        this.env.DB.prepare("UPDATE matches SET status = 'voided', ended_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(room.matchId),
+        this.env.DB.prepare("UPDATE match_players SET result = 'void' WHERE match_id = ? AND result IS NULL").bind(room.matchId),
+      ]);
+      this.broadcast(room);
       return json({ ok: true });
     }
     if (path === '/join' && request.method === 'POST') return this.joinRoom(request);
@@ -725,6 +877,10 @@ export class GameRoom {
         this.env.DB.prepare("UPDATE matches SET status = 'voided', ended_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'").bind(room.matchId),
         this.env.DB.prepare("UPDATE match_players SET result = 'void' WHERE match_id = ? AND result IS NULL").bind(room.matchId),
       ]);
+      if (room.publicRoomId && room.matchId) {
+        const market = this.env.MATCHMAKER.get(this.env.MATCHMAKER.idFromName('public-room-marketplace'));
+        await market.fetch('https://market/void', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: room.code, matchId: room.matchId }) }).catch(() => undefined);
+      }
       this.broadcast(room);
     }
   }
@@ -807,6 +963,10 @@ export class GameRoom {
       statements.push(this.env.DB.prepare("UPDATE game_rooms SET status = 'finished' WHERE id = ?").bind(room.code));
     }
     await this.env.DB.batch(statements);
+    if (room.status === 'finished' && room.publicRoomId && room.matchId) {
+      const market = this.env.MATCHMAKER.get(this.env.MATCHMAKER.idFromName('public-room-marketplace'));
+      await market.fetch('https://market/settle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: room.code, matchId: room.matchId }) }).catch(() => undefined);
+    }
   }
 
   private broadcast(room: StoredRoom): void {
@@ -816,7 +976,8 @@ export class GameRoom {
       let game: unknown = room.game;
       if (room.gameId === 'dominoes' && seat >= 0) game = viewDominoes(room.game as DominoesState, seat as 0 | 1);
       if (room.gameId === 'poker' && seat >= 0) game = viewPoker(room.game as PokerState, seat as 0 | 1);
-      try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat })); }
+      try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat,
+        ...(room.publicRoomId ? { publicRoom: { id: room.publicRoomId, entryCredits: room.entryCredits || 0, commissionBps: room.commissionBps || 0, options: room.publicRoomOptions || {} } } : {}) })); }
       catch { socket.close(1011, 'Unable to send room update'); }
     }
   }
@@ -826,10 +987,7 @@ export class GameRoom {
   }
 }
 
-export class Matchmaker {
-  constructor(_state: DurableObjectState, _env: Env) {}
-  async fetch(): Promise<Response> { return json({ error: 'Online matchmaking is not enabled yet' }, 503); }
-}
+export { Matchmaker };
 
 export class Presence {
   constructor(_state: DurableObjectState, _env: Env) {}

@@ -1,18 +1,19 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { PUBLIC_GAMES } from '@dire-bet/shared';
 import { DEMO_ADMIN_KEY, readDemoDeposits, writeDemoDeposits, demoPasswordHash, generateDemoPassword, type DemoDepositRequest } from '../staff/demo';
+import RoomManagement from './RoomManagement';
 
 type DemoAdminCredentials = { username: string; salt: string; passwordHash: string };
-type Section = 'overview' | 'games' | 'deposits';
+type Section = 'overview' | 'games' | 'deposits' | 'rooms';
 
-const labels: Record<Section, string> = { overview: 'Overview', games: 'Games', deposits: 'Demo receipt review' };
+const labels: Record<Section, string> = { overview: 'Overview', games: 'Games', deposits: 'Demo receipt review', rooms: 'Rooms & commissions' };
 
 function readCredentials(): DemoAdminCredentials | null {
   try { return JSON.parse(localStorage.getItem(DEMO_ADMIN_KEY) || 'null') as DemoAdminCredentials | null; }
   catch { return null; }
 }
 
-export default function AdminApp() {
+export default function AdminApp({ sessionToken }: { sessionToken: string | null }) {
   const [credentials, setCredentials] = useState<DemoAdminCredentials | null>(readCredentials);
   const [loggedIn, setLoggedIn] = useState(false);
   const [username, setUsername] = useState('demo-admin');
@@ -57,8 +58,9 @@ export default function AdminApp() {
   return <main className="staff-shell demo-staff-shell"><header className="staff-topbar"><a className="wordmark" href="/"><span>DIRE</span><b>BET</b><i>✦</i></a><span className="staff-mode">DEMO ADMIN</span><div className="staff-header-actions"><button className="staff-link-button" onClick={() => setLoggedIn(false)}>Sign out</button><a className="staff-back" href="/">Player app ↗</a></div></header><div className="staff-layout"><aside className="staff-sidebar"><span className="staff-label">DEMO WORKSPACE</span>{(Object.keys(labels) as Section[]).map((item) => <button key={item} className={section === item ? 'selected' : ''} onClick={() => { setSection(item); setNotice(''); }}><span className="staff-nav-icon">{item === 'deposits' ? pending : String((Object.keys(labels) as Section[]).indexOf(item) + 1).padStart(2, '0')}</span>{labels[item]}</button>)}<div className="staff-sidebar-note">Local to this browser<br/>No live funds</div></aside><section className="staff-content">
     <div className="staff-heading"><div><span className="staff-label">DIRE BET · ADMIN PREVIEW</span><h1>{labels[section]}</h1><p>Demo workspace only. Approval actions update the sample queue and never credit cash.</p></div><span className="staff-lock demo-lock">DEMO</span></div>
     {notice && <div className="staff-notice" role="status">{notice}{generatedPassword && <div className="revealed-credentials"><span>Username: <b>demo-admin</b></span><button onClick={() => void navigator.clipboard.writeText(generatedPassword)}>Copy generated password</button></div>}</div>}
-    {section === 'overview' && <><div className="demo-admin-metrics"><article><span>Games</span><strong>4</strong><small>Free practice</small></article><article><span>Pending demo receipts</span><strong>{pending}</strong><small>Local preview requests</small></article><article><span>Real money</span><strong>Off</strong><small>No balance can be credited</small></article></div><section className="staff-callout"><strong>What this preview can do</strong><p>Review a fake receipt image submitted from the Wallet page, approve or decline its demo request, and see the result stay on this browser.</p><a className="secondary-button" href="/?page=wallet">Open player wallet ↗</a></section><button className="staff-link-button reset-demo-button" onClick={reset}>Reset this browser’s demo data</button></>}
+    {section === 'overview' && <><div className="demo-admin-metrics"><article><span>Games</span><strong>4</strong><small>Free practice</small></article><article><span>Pending demo receipts</span><strong>{pending}</strong><small>Local preview requests</small></article><article><span>Real money</span><strong>Off</strong><small>No balance can be credited</small></article></div><section className="staff-callout"><strong>What this preview can do</strong><p>Review a fake receipt image submitted from the Wallet page, approve or decline its demo request, and see the result stay on this browser. Room controls are separate and require the configured Super Admin Telegram account.</p><a className="secondary-button" href="/?page=wallet">Open player wallet ↗</a></section><button className="staff-link-button reset-demo-button" onClick={reset}>Reset this browser’s demo data</button></>}
     {section === 'games' && <div className="demo-game-list">{PUBLIC_GAMES.filter((game) => game.availability === 'playable').map((game) => <article key={game.id}><span className={`demo-game-mark ${game.id}`}>{game.id === 'poker' ? '♠' : game.id === 'ludo' ? '⚄' : game.id === 'dominoes' ? '▥' : '×'}</span><div><strong>{game.title}</strong><small>Practice and private rooms · no entry fee</small></div><b>LIVE · FREE</b></article>)}</div>}
     {section === 'deposits' && <div className="demo-review-list">{requests.length ? requests.map((request) => <article className="demo-review-card" key={request.id}><div className="demo-review-head"><div><span className="staff-label">{request.id}</span><h2>{request.amount} demo credits</h2><small>{new Date(request.createdAt).toLocaleString()}</small></div><span className={`demo-request-status ${request.status}`}>{request.status}</span></div><img src={request.receiptData} alt={`Sample receipt ${request.receiptName}`}/><p><strong>Optional SMS reference:</strong> {request.smsReference || 'None provided'}</p><p className="demo-safety-note">Local sample only. Do not use real receipts or payment details.</p>{request.status === 'pending' && <div className="demo-staff-actions"><button className="secondary-button" onClick={() => decide(request.id, 'declined')}>Decline sample</button><button className="primary-button" onClick={() => decide(request.id, 'approved')}>Approve sample</button></div>}</article>) : <div className="empty-inline"><span className="empty-icon">↻</span><span>No demo receipt requests. Submit one in the player Wallet on this browser.</span></div>}</div>}
+    {section === 'rooms' && <RoomManagement token={sessionToken}/>}
     </section></div></main>;
 }

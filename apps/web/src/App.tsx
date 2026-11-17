@@ -5,12 +5,13 @@ import { languageFromTelegram, languageNames, translate, type Language, type Tra
 import { xoRules } from './i18n/rules';
 import { DominoesPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
+import PublicRoomLobby from './games/PublicRoomLobby';
 import { readDemoDeposits, writeDemoDeposits, type DemoDepositRequest } from './staff/demo';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
 const AgentApp = lazy(() => import('./agent/AgentApp'));
 
-type Page = 'home'|'matches'|'online'|'wallet'|'rank'|'menu'|'account'|'login'|GameId;
+type Page = 'home'|'matches'|'online'|'lobby'|'wallet'|'rank'|'menu'|'account'|'login'|GameId;
 type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
@@ -63,6 +64,7 @@ function App() {
   const [category, setCategory] = useState<Category>('all');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Game | null>(null);
+  const [lobbyGameId, setLobbyGameId] = useState<GameId>('ludo');
   const [banner, setBanner] = useState(0);
   const [bannerPaused, setBannerPaused] = useState(false);
   const [round, setRound] = useState(0);
@@ -209,7 +211,9 @@ function App() {
   const leaveGame = () => { setPage('home'); setRound(0); setRoomConfig(null); };
   const selectGame = (game: Game) => {
     if (game.id === 'ethiopian-41') return;
-    setSelected(game);
+    setSelected(null);
+    setLobbyGameId(game.id);
+    setPage('lobby');
   };
   const quickMove = (index: number) => {
     if (xo.turn !== 'X' || xo.winner || xo.board[index]) return;
@@ -231,7 +235,7 @@ function App() {
     const value = !reduceEffects; setReduceEffects(value); localStorage.setItem('direbet.reduceEffects', String(value));
   };
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
-  const enterOnlineRoom = (room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); };
+  const enterOnlineRoom = useCallback((room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
   const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); if (next !== 'online') setRoomConfig(null); };
   const signInWithWebLogin = async (event: FormEvent) => {
     event.preventDefault(); setLoginMessage('');
@@ -279,7 +283,7 @@ function App() {
   };
   const signOutWeb = () => { sessionStorage.removeItem('direbet.session'); setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); };
 
-  if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp /></Suspense>;
+  if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp /></Suspense>;
 
   return <main className="player-shell">
@@ -300,7 +304,7 @@ function App() {
     {page === 'home' && <section className="screen home-screen">
       {!sessionToken && <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><div className="guest-actions"><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a><button className="guest-login" onClick={() => nav('login')}>{t('webLogin')}</button></div></div>}
       <section className={`hero hero-${banner}`} aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }}>
-        <img key={bannerSlides[banner].game} className="hero-poster" src={`/posters/${bannerSlides[banner].game}.jpg`} alt="" fetchPriority="high" />
+        <img key={bannerSlides[banner].game} className="hero-poster" src={`/posters/${bannerSlides[banner].game}.jpg`} alt="" />
         <div className="hero-copy" key={banner}><span className="eyebrow">DIRE BET · {t('freePractice')}</span><h1>{t(bannerSlides[banner].title)}</h1><p>{t(bannerSlides[banner].copy)}</p><button className="primary-button" onClick={activateBanner}>{t(bannerSlides[banner].action === 'quick' ? 'quickPlay' : bannerSlides[banner].action === 'cards' ? 'browseCardGames' : 'browseBoardGames')}<span>{bannerSlides[banner].action === 'quick' ? '↗' : '⌄'}</span></button></div>
         <div className="hero-shade" aria-hidden="true" />
         <div className="hero-dots" role="group" aria-label={t('chooseGame')}>{bannerSlides.map((slide, index) => <button key={slide.game} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => setBanner(index)} />)}</div>
@@ -344,6 +348,7 @@ function App() {
     {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
 
     {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
+    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletScreen t={t} onSupport={() => setOverlay('support')} />}

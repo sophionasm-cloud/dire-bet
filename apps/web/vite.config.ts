@@ -9,6 +9,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:8787',
       '/telegram': 'http://127.0.0.1:8787',
+      '/ws': { target: 'ws://127.0.0.1:8787', ws: true },
     },
   },
   build: { sourcemap: false, target: 'es2022' },

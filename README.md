@@ -9,7 +9,9 @@ DIRE BET is a free-play game app for browser and Telegram. Guests can practice o
 - Dominoes
 - Texas Hold’em (two players)
 
-Each game has practice play against a bot and a private two-player online room. Ethiopian 41 is unavailable. The supplied game posters are used in the home carousel and game cards.
+Each game has practice play against a bot, a private two-player room, and the shared public room lobby. Public rooms reuse the current game engines and two-player setup. Ethiopian 41 is unavailable. The supplied game posters are used in the home carousel and game cards.
+
+Public rooms use FREE play or non-redeemable demo credits. Standard demo entries are 10, 20, 50 and 100 credits; custom entries start above 100 and are capped by the room settings. The 10% commission shown in room previews is simulated only and is recorded for completed, verified matches. Cancellations, expirations and voided matches return reserved demo credits. There are no ETB stakes, deposits, withdrawals or cash prizes.
 
 ## Run on Windows
 
@@ -51,4 +53,4 @@ The checked-in settings keep `REAL_MONEY_ENABLED=false` and `DEMO_MODE=true`. Do
 
 In Telegram, use **Share contact** to link your own phone contact to your Telegram account. After that, open **Account** in the app to choose a username and 8-digit PIN for optional web sign-in. The PIN is stored as a salted hash; login attempts are rate-limited. Avoid reusing a bank PIN. Phone numbers are encrypted in D1 and are not shown in the app.
 
-Open `/admin` to create a browser-local demo login. Username: `demo-admin`; the page generates a random password and provides a copy button. Its fake receipt queue stays in that browser. `/agent` shows sample metrics only. These staff previews do not connect to user or payment records. There is no real-money wallet or payment provider. Production staff authentication, native-speaker translation review, and operational monitoring remain unfinished. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).
+Open `/admin` to create a browser-local demo login. Username: `demo-admin`; the page generates a random password and provides a copy button. The Rooms & Commissions view reads room activity only for the owner Telegram account configured in Cloudflare as `SUPER_ADMIN_TELEGRAM_ID`; the browser-local demo password does not grant those controls. `/agent` shows sample metrics only. Production staff accounts and agent tools are unfinished. There is no real-money wallet or payment provider. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).
