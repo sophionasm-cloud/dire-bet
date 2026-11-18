@@ -6,6 +6,7 @@ import { viewPoker, type Card, type PokerAction, type Suit } from '@dire-bet/eng
 import type { GameId } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 import type { RoomConfig } from './marketplaceTypes';
+import { TraditionalLudoBoard } from './TraditionalLudoBoard';
 
 export type { RoomConfig } from './marketplaceTypes';
 
@@ -103,7 +104,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     const fee = Math.floor(roomMeta.entryCredits * 2 * roomMeta.commissionBps / 10_000);
     const payout = roomMeta.entryCredits * 2 - fee;
     const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
-    return <section className="online-room-screen public-ludo-shell">
+    return <section className="online-room-screen public-ludo-shell ludo-room-layout">
       <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
       <div className="ludo-match-meta"><span>{roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')} · ${t('marketPerPlayer').toLowerCase()}` : t('marketFree')}</span><small>{t('marketSimulationNote')}</small></div>
       <div className="ludo-two-player-layout">
@@ -162,57 +163,6 @@ function LudoPlayerPanel({ player, seat, color, active, own, finished, t }: { pl
     <span className={`ludo-player-score ${color}`}>{finished}/4</span>
     <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? t('yourTurn') : t('marketWaiting')}</span>
   </article>;
-}
-
-const LUDO_TRACK: [number, number][] = [
-  ...[1,2,3,4,5].map((column) => [6, column] as [number,number]),
-  ...[5,4,3,2,1,0].map((row) => [row,6] as [number,number]), [0,7], [0,8],
-  ...[1,2,3,4,5].map((row) => [row,8] as [number,number]),
-  ...[9,10,11,12,13,14].map((column) => [6,column] as [number,number]), [7,14], [8,14],
-  ...[13,12,11,10,9].map((column) => [8,column] as [number,number]),
-  ...[9,10,11,12,13,14].map((row) => [row,8] as [number,number]), [14,7], [14,6],
-  ...[13,12,11,10,9].map((row) => [row,6] as [number,number]),
-  ...[5,4,3,2,1,0].map((column) => [8,column] as [number,number]), [7,0], [6,0],
-];
-const LUDO_SAFE = new Set([0,8,13,21,26,34,39,47]);
-const LUDO_LANES: [[number,number][],[number,number][]] = [
-  [[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
-  [[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
-];
-const LUDO_NEUTRAL_LANE: [number,number][] = [
-  ...[1,2,3,4,5].map((row) => [row,7] as [number,number]),
-  ...[9,10,11,12,13].map((row) => [row,7] as [number,number]),
-];
-const LUDO_HOME_SPACES: [number,number][][] = [
-  [[1,1],[1,4],[4,1],[4,4]],
-  [[10,10],[10,13],[13,10],[13,13]],
-];
-
-function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: { game: LudoState; seat: number; playerZeroColor: 'blue'|'white'; onMove: (token: number) => void }) {
-  const colors: ('blue'|'white')[] = [playerZeroColor, playerZeroColor === 'blue' ? 'white' : 'blue'];
-  const tokens: { player: number; token: number; row: number; col: number; pathPosition: number }[] = [];
-  for (let player = 0; player < 2; player++) {
-    for (let token = 0; token < 4; token++) {
-      const position = game.tokens[player][token];
-      if (position === -1) { const [row,col] = LUDO_HOME_SPACES[player][token]; tokens.push({ player, token, row, col, pathPosition: -1 }); }
-      else if (position < 52) { const [row,col] = LUDO_TRACK[(position + player * 26) % 52]; tokens.push({ player, token, row, col, pathPosition: (position + player * 26) % 52 }); }
-      else if (position < 57) { const [row,col] = LUDO_LANES[player][position - 52]; tokens.push({ player, token, row, col, pathPosition: -2 }); }
-      else { tokens.push({ player, token, row: 7, col: 7, pathPosition: -3 }); }
-    }
-  }
-  const actions = legalLudoActions(game);
-  return <div className="ludo-traditional-board" aria-label="Traditional two-player Ludo board">
-    <div className={`ludo-home-quadrant active ${colors[0]}`} style={{ gridRow: '1 / span 6', gridColumn: '1 / span 6' }}><div className="home-pad"/></div>
-    <div className="ludo-home-quadrant neutral" style={{ gridRow: '1 / span 6', gridColumn: '10 / span 6' }}><div className="home-pad muted"/></div>
-    <div className="ludo-home-quadrant neutral" style={{ gridRow: '10 / span 6', gridColumn: '1 / span 6' }}><div className="home-pad muted"/></div>
-    <div className={`ludo-home-quadrant active ${colors[1]}`} style={{ gridRow: '10 / span 6', gridColumn: '10 / span 6' }}><div className="home-pad"/></div>
-    {LUDO_TRACK.map(([row,col], index) => <span key={`track-${index}`} className={`ludo-track-cell ${LUDO_SAFE.has(index) ? 'safe' : ''} ${index === 0 ? `start ${colors[0]}` : ''} ${index === 26 ? `start ${colors[1]}` : ''}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}>{LUDO_SAFE.has(index) ? '✦' : index === 0 || index === 26 ? '▲' : ''}</span>)}
-    {LUDO_LANES[0].map(([row,col], index) => <span key={`lane-0-${index}`} className={`ludo-home-lane ${colors[0]}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
-    {LUDO_LANES[1].map(([row,col], index) => <span key={`lane-1-${index}`} className={`ludo-home-lane ${colors[1]}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
-    {LUDO_NEUTRAL_LANE.map(([row,col], index) => <span key={`neutral-lane-${index}`} className="ludo-neutral-lane" style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
-    <div className="ludo-finish-area" style={{ gridRow: '7 / span 3', gridColumn: '7 / span 3' }} aria-label="Finish"><span>✦</span></div>
-    {tokens.map(({ player, token, row, col, pathPosition }) => <button key={`${player}-${token}`} className={`ludo-board-token ${colors[player]} ${player === seat && game.turn === seat && actions.includes(token) ? 'selectable' : ''} ${player === game.turn ? 'turn-piece' : ''} ${pathPosition === -3 ? 'home-piece' : ''}`} style={{ gridRow: row + 1, gridColumn: col + 1, '--piece-shift-x': `${(token % 2 ? 4 : -4)}px`, '--piece-shift-y': `${(Math.floor(token / 2) ? 4 : -4)}px` } as React.CSSProperties} aria-label={`${colors[player]} token ${token + 1}${pathPosition === -1 ? ', at home' : ''}`} disabled={player !== seat || game.turn !== seat || !actions.includes(token)} onClick={() => onMove(token)}>{token + 1}</button>)}
-  </div>;
 }
 
 function OnlineDominoes({ game, seat, t, send }: { game: DominoPublic; seat: number; t: Translator; send: (payload: unknown) => void }) {

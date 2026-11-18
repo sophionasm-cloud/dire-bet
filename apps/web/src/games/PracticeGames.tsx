@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
-import { botLudoToken, initLudo, legalLudoActions, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
+import { botLudoToken, initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyDominoAction, botDominoAction, legalDominoActions, newDominoesGame, nextDominoesRound, type DominoAction, type DominoesState, type Tile } from '@dire-bet/engines/dominoes';
 import { applyPokerAction, botPokerAction, initTexasHoldem, legalPokerActions, type Card, type PokerAction, type PokerState, type Suit } from '@dire-bet/engines/poker';
 import type { TranslationKey } from '../i18n';
+import { TraditionalLudoBoard } from './TraditionalLudoBoard';
 
 type Translator = (key: TranslationKey) => string;
 type PracticeProps = { t: Translator; onExit: () => void; reduceEffects: boolean };
 
 export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
   const [state, setState] = useState<LudoState>(() => initLudo());
-  const actions = legalLudoActions(state);
   useEffect(() => {
     if (state.turn !== 1 || state.winner !== null) return;
     const timer = window.setTimeout(() => setState((current) => {
@@ -21,30 +21,39 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
     return () => window.clearTimeout(timer);
   }, [state, reduceEffects]);
 
-  const ownTokens = state.tokens[0].map((position, token) => ({ position, token, player: 0 as const }));
-  const botTokens = state.tokens[1].map((position, token) => ({ position, token, player: 1 as const }));
-  return <section className="screen practice-screen ludo-screen">
-    <PracticeHeading title="Ludo" t={t} onExit={onExit} />
-    <p className="practice-rules">{t('ludoRuleText')}</p>
-    <div className="ludo-score-row"><span className="practice-player"><i className="player-dot red-dot"/>{t('you')}</span><span className="practice-turn">{state.winner !== null ? outcome(state.winner, t) : state.turn === 0 ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('botTurn')}</span><span className="practice-player"><i className="player-dot blue-dot"/>{t('bot')}</span></div>
-    <div className="ludo-board" aria-label="Ludo board">
-      {Array.from({ length: 52 }, (_, index) => <span key={index} className={`ludo-cell ${index === 0 ? 'start-red' : ''} ${index === 26 ? 'start-blue' : ''}`} style={ringPoint(index)} />)}
-      <div className="ludo-center">✦</div>
-      {[...botTokens, ...ownTokens].map(({ position, token, player }) => {
-        const point = tokenPoint(position, token, player);
-        const canMove = player === 0 && state.turn === 0 && actions.includes(token);
-        const className = `ludo-token ${player === 0 ? 'side-you' : 'side-bot'} ${canMove ? 'token-ready' : ''}`;
-        return canMove
-          ? <button key={`${player}-${token}`} className={className} style={point} onClick={() => setState((current) => moveLudo(current, token))} aria-label={`${t('selectToken')} ${token + 1}`}>{token + 1}</button>
-          : <span key={`${player}-${token}`} className={className} style={point} aria-label={`${player === 0 ? t('you') : t('bot')} ${token + 1}`}>{token + 1}</span>;
-      })}
+  const turnCopy = state.winner !== null ? outcome(state.winner, t) : state.turn === 0 ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('botTurn');
+  const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
+  return <section className="screen practice-screen practice-ludo-shell ludo-room-layout">
+    <header className="ludo-room-topbar">
+      <div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div>
+      <span className="ludo-game-label"><i>⚄</i> Ludo</span>
+      <strong className="ludo-room-pill">{t('freePractice')} · {t('bot')}</strong>
+      <span className="connection-pill connected"><i/>{t('bot')}</span>
+      <button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button>
+      <button className="ludo-leave" type="button" onClick={onExit}>← {t('home')}</button>
+    </header>
+    <div className="ludo-match-meta practice-ludo-meta"><span>{t('ludoRuleText')}</span><small aria-live="polite">{turnCopy}</small></div>
+    <div className="ludo-two-player-layout">
+      <PracticeLudoPlayerPanel name={t('you')} color="blue" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
+      <div className="ludo-board-stage"><TraditionalLudoBoard game={state} seat={0} playerZeroColor="blue" onMove={(token) => setState((current) => moveLudo(current, token))}/></div>
+      <PracticeLudoPlayerPanel name={t('bot')} color="white" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === 57).length} t={t} bot/>
     </div>
-    <div className="ludo-controls">
-      <div className={`dice-face ${state.dice === null ? '' : 'dice-active'}`} aria-live="polite">{state.dice ?? '·'}</div>
-      <button className="primary-button" disabled={state.turn !== 0 || state.dice !== null || state.winner !== null} onClick={() => setState((current) => rollLudo(current, Math.floor(Math.random() * 6) + 1))}>{t('rollDice')}<span>↻</span></button>
-      {state.winner !== null && <button className="secondary-button" onClick={() => setState(initLudo())}>{t('practiceAgain')}</button>}
+    <div className="ludo-controls-wrap practice-ludo-controls">
+      <div className={`ludo-dice ${state.dice === null ? '' : 'rolled'}`} aria-live="polite" aria-label={state.dice === null ? 'Dice not rolled' : `Dice ${state.dice}`}><span>{state.dice === null ? '⚄' : ['','⚀','⚁','⚂','⚃','⚄','⚅'][state.dice]}</span></div>
+      {state.turn === 0 && state.dice === null && state.winner === null
+        ? <button className="ludo-roll-button" onClick={() => setState((current) => rollLudo(current, Math.floor(Math.random() * 6) + 1))}><span>⚄</span>{t('rollDice')}</button>
+        : <div className="ludo-waiting-turn" role="status">{state.winner === null ? turnCopy : <><strong>{turnCopy}</strong><button className="secondary-button" onClick={() => setState(initLudo())}>{t('practiceAgain')} ↻</button></>}</div>}
     </div>
   </section>;
+}
+
+function PracticeLudoPlayerPanel({ name, color, active, finished, t, bot = false }: { name: string; color: 'blue'|'white'; active: boolean; finished: number; t: Translator; bot?: boolean }) {
+  return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
+    <span className={`ludo-player-avatar ${color}`}>{bot ? '✦' : name.trim().slice(0, 1).toUpperCase()}</span>
+    <div className="ludo-player-copy"><strong>{name}</strong><small><i className={`player-online-dot ${active ? 'online' : ''}`}/>{bot ? t('bot') : t('you')} · {color === 'blue' ? t('marketBlue') : t('marketWhite')}</small></div>
+    <span className={`ludo-player-score ${color}`} aria-label={`${finished} of 4 tokens finished`}>{finished}/4</span>
+    <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? (bot ? t('botTurn') : t('yourTurn')) : t('marketWaiting')}</span>
+  </article>;
 }
 
 export function DominoesPractice({ t, onExit, reduceEffects }: PracticeProps) {
@@ -131,19 +140,3 @@ function PokerCard({ card }: { card: Card | null }) {
 }
 
 function outcome(winner: 0 | 1, t: Translator): string { return winner === 0 ? t('gameWinTitle') : t('gameLossTitle'); }
-
-function ringPoint(index: number): React.CSSProperties {
-  const angle = -Math.PI / 2 + (Math.PI * 2 * index) / 52;
-  return { left: `${50 + Math.cos(angle) * 38}%`, top: `${50 + Math.sin(angle) * 38}%` };
-}
-
-function tokenPoint(position: number, token: number, player: 0 | 1): React.CSSProperties {
-  if (position === -1) {
-    const base = player === 0 ? { x: 28, y: 69 } : { x: 72, y: 31 };
-    return { left: `${base.x + (token % 2) * 6}%`, top: `${base.y + Math.floor(token / 2) * 6}%` };
-  }
-  const progress = position < 52 ? position : 52;
-  const angle = -Math.PI / 2 + (Math.PI * 2 * ((progress + player * 26) % 52)) / 52;
-  const radius = position < 52 ? 38 : Math.max(4, 28 - (position - 52) * 5);
-  return { left: `${50 + Math.cos(angle) * radius}%`, top: `${50 + Math.sin(angle) * radius}%` };
-}
