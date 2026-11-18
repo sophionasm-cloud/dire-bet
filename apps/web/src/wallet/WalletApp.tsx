@@ -1,0 +1,205 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import type { TranslationKey } from '../i18n';
+
+type ProviderId = 'telebirr' | 'ebirr';
+type Provider = { provider: ProviderId; accountLabel: string; accountNumber: string; enabled: boolean; minimumAmount: number; maximumAmount: number };
+type WalletRequest = { id: string; provider: ProviderId; amount: number; status: string; created_at: string; review_reason: string | null; provider_reference?: string | null; reviewed_at?: string | null };
+type RequestData = { deposits: WalletRequest[]; withdrawals: WalletRequest[] };
+type Props = { t: (key: TranslationKey) => string; token: string | null; onSupport: () => void };
+type View = 'main' | 'deposit' | 'instructions' | 'withdraw' | 'submitted';
+
+const providerLabel: Record<ProviderId, string> = { telebirr: 'Telebirr', ebirr: 'eBirr' };
+
+function ProviderMark({ provider }: { provider: ProviderId }) {
+  return <span className={`wallet-provider-mark ${provider}`} aria-hidden="true">{provider === 'telebirr' ? 'T' : 'e'}</span>;
+}
+
+function WalletIcon({ name }: { name: 'wallet' | 'deposit' | 'withdraw' | 'copy' | 'upload' | 'phone' | 'receipt' | 'person' | 'back' }) {
+  const common = { width: 23, height: 23, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
+  const paths = {
+    wallet: <><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 9h18M16 14h2"/><path d="M6 5V3h12v2"/></>,
+    deposit: <><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M5 14v5h14v-5"/></>,
+    withdraw: <><path d="M12 8v12m0 0 5-5m-5 5-5-5"/><path d="M5 10V5h14v5"/></>,
+    copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>,
+    upload: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></>,
+    phone: <><path d="M7 3H5a2 2 0 0 0-2 2c0 8.8 7.2 16 16 16a2 2 0 0 0 2-2v-2l-5-2-2 3a14 14 0 0 1-7-7l3-2-3-5Z"/></>,
+    receipt: <><path d="M5 3h14v18l-3-2-4 2-4-2-3 2V3Z"/><path d="M8 8h8M8 12h8M8 16h4"/></>,
+    person: <><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></>,
+    back: <><path d="m14 5-7 7 7 7M7 12h13"/></>,
+  };
+  return <svg {...common}>{paths[name]}</svg>;
+}
+
+function statusCopy(status: string): string {
+  if (status === 'pending') return 'Pending verification';
+  if (status === 'needs_info') return 'More information needed';
+  if (status === 'approved') return 'Approved · demo only';
+  if (status === 'rejected') return 'Not approved';
+  if (status === 'reviewing') return 'Under review';
+  if (status === 'paid') return 'Marked paid';
+  return status;
+}
+
+export default function WalletApp({ t, token, onSupport }: Props) {
+  const [view, setView] = useState<View>('main');
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [requests, setRequests] = useState<RequestData>({ deposits: [], withdrawals: [] });
+  const [balance, setBalance] = useState<number | null>(null);
+  const [provider, setProvider] = useState<ProviderId | null>(null);
+  const [amount, setAmount] = useState(100);
+  const [customAmount, setCustomAmount] = useState('');
+  const [useCustom, setUseCustom] = useState(false);
+  const [senderPhone, setSenderPhone] = useState('');
+  const [transactionReference, setTransactionReference] = useState('');
+  const [receipt, setReceipt] = useState<{ file: File; data: string } | null>(null);
+  const [destinationPhone, setDestinationPhone] = useState('');
+  const [accountHolderName, setAccountHolderName] = useState('');
+  const [message, setMessage] = useState('');
+  const [requestId, setRequestId] = useState('');
+  const [submittedKind, setSubmittedKind] = useState<'deposit' | 'withdrawal'>('deposit');
+  const [busy, setBusy] = useState(false);
+  const [promoCode, setPromoCode] = useState('');
+  const [promoMessage, setPromoMessage] = useState('');
+  const idempotencyKey = useRef(crypto.randomUUID());
+  const selectedProvider = useMemo(() => providers.find((item) => item.provider === provider && item.enabled) || null, [provider, providers]);
+  const requestAmount = useCustom ? Number(customAmount) : amount;
+
+  const refresh = async () => {
+    const settingResponse = await fetch('/api/wallet/settings').catch(() => null);
+    if (settingResponse?.ok) {
+      const data = await settingResponse.json() as { providers?: Provider[] };
+      setProviders(data.providers || []);
+    }
+    if (!token) { setRequests({ deposits: [], withdrawals: [] }); setBalance(null); return; }
+    const [requestResponse, balanceResponse] = await Promise.all([
+      fetch('/api/wallet/requests', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
+      fetch('/api/public-rooms/balance', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
+    ]);
+    if (requestResponse?.ok) setRequests(await requestResponse.json() as RequestData);
+    if (balanceResponse?.ok) {
+      const data = await balanceResponse.json() as { balanceCredits?: number };
+      if (Number.isFinite(data.balanceCredits)) setBalance(data.balanceCredits as number);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, [token]);
+
+  const openDeposit = () => {
+    setView('deposit'); setMessage(''); setProvider(null); setUseCustom(false); setCustomAmount('');
+    setAmount(100);
+  };
+  const openWithdrawal = () => {
+    setView('withdraw'); setMessage(''); setProvider(null); setAmount(100); setUseCustom(false); setCustomAmount('');
+  };
+  const continueToInstructions = () => {
+    setMessage('');
+    if (!selectedProvider) { setMessage('Choose an enabled payment method.'); return; }
+    if (!Number.isSafeInteger(requestAmount) || requestAmount < selectedProvider.minimumAmount || requestAmount > selectedProvider.maximumAmount) {
+      setMessage(`Enter a whole-birr amount from ${selectedProvider.minimumAmount} to ${selectedProvider.maximumAmount}.`); return;
+    }
+    setView('instructions');
+  };
+
+  const pickReceipt = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type) || file.size > 2 * 1024 * 1024) {
+      setMessage('Choose a PNG or JPG image up to 2 MB.'); event.target.value = ''; return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') { setReceipt({ file, data: reader.result }); setMessage(''); }
+      else setMessage('That image could not be previewed.');
+    };
+    reader.onerror = () => setMessage('That image could not be previewed.');
+    reader.readAsDataURL(file);
+  };
+
+  const submitDeposit = async (event: FormEvent) => {
+    event.preventDefault(); setMessage('');
+    if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
+    if (!provider || !Number.isSafeInteger(requestAmount) || !senderPhone.trim() || transactionReference.trim().length < 5) { setMessage('Fill in the sender number and transaction reference.'); return; }
+    setBusy(true);
+    try {
+      const response = await fetch('/api/wallet/deposits', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
+        provider, amount: requestAmount, senderPhone, transactionReference, receiptData: receipt?.data || null, idempotencyKey: idempotencyKey.current,
+      }) });
+      const data = await response.json() as { requestId?: string; status?: string; error?: string };
+      if (!response.ok || !data.requestId) throw new Error(data.error || 'The request could not be sent.');
+      idempotencyKey.current = crypto.randomUUID(); setRequestId(data.requestId); setSubmittedKind('deposit'); setView('submitted');
+      setSenderPhone(''); setTransactionReference(''); setReceipt(null); await refresh();
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The request could not be sent.'); }
+    finally { setBusy(false); }
+  };
+
+  const submitWithdrawal = async (event: FormEvent) => {
+    event.preventDefault(); setMessage('');
+    if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
+    if (!provider || !Number.isSafeInteger(requestAmount) || !destinationPhone.trim() || accountHolderName.trim().length < 2) { setMessage('Fill in your amount, destination number and account name.'); return; }
+    setBusy(true);
+    try {
+      const response = await fetch('/api/wallet/withdrawals', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
+        provider, amount: requestAmount, destinationPhone, accountHolderName, idempotencyKey: idempotencyKey.current,
+      }) });
+      const data = await response.json() as { requestId?: string; status?: string; error?: string };
+      if (!response.ok || !data.requestId) throw new Error(data.error || 'The request could not be sent.');
+      idempotencyKey.current = crypto.randomUUID(); setRequestId(data.requestId); setSubmittedKind('withdrawal'); setView('submitted');
+      setDestinationPhone(''); setAccountHolderName(''); await refresh();
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The request could not be sent.'); }
+    finally { setBusy(false); }
+  };
+
+  const applyPromoCode = async (event: FormEvent) => {
+    event.preventDefault(); setPromoMessage('');
+    if (!token) { setPromoMessage('Sign in to apply an agent promo code.'); return; }
+    try {
+      const response = await fetch('/api/referrals/claim', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ code: promoCode }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || 'That promo code could not be applied.');
+      setPromoMessage('Promo code linked to your account.'); setPromoCode('');
+    } catch (cause) { setPromoMessage(cause instanceof Error ? cause.message : 'That promo code could not be applied.'); }
+  };
+
+  const backToMain = () => { setView('main'); setMessage(''); void refresh(); };
+  const methodCards = (variant: 'deposit' | 'withdrawal') => <div className="wallet-method-grid" role="group" aria-label="Payment method">
+    {(['telebirr', 'ebirr'] as ProviderId[]).map((id) => {
+      const item = providers.find((entry) => entry.provider === id);
+      const enabled = item?.enabled === true;
+      return <button key={id} type="button" className={`wallet-method-card ${provider === id ? 'selected' : ''} ${enabled ? '' : 'unavailable'}`} aria-pressed={provider === id} disabled={!enabled} onClick={() => { setProvider(id); setMessage(''); }}>
+        <ProviderMark provider={id}/><strong>{providerLabel[id]}</strong><span className="wallet-method-check">{provider === id ? '●' : '○'}</span>{!enabled && <small>Unavailable</small>}
+      </button>;
+    })}
+  </div>;
+
+  const amountOptions = (label: string) => <fieldset className="wallet-amount-fieldset"><legend>{label}</legend><div className="wallet-amount-grid">{[50, 100, 200, 500].map((item) => <button key={item} type="button" className={`wallet-amount-button ${!useCustom && amount === item ? 'selected' : ''}`} aria-pressed={!useCustom && amount === item} onClick={() => { setAmount(item); setUseCustom(false); setMessage(''); }}><strong>{item}</strong><small>ETB</small></button>)}</div><button type="button" className={`wallet-custom-amount ${useCustom ? 'selected' : ''}`} aria-pressed={useCustom} onClick={() => { setUseCustom(true); setCustomAmount(''); }}><span>⌨</span>Other amount</button>{useCustom && <label className="wallet-field">Amount in whole birr<input type="number" inputMode="numeric" min={selectedProvider?.minimumAmount || 50} max={selectedProvider?.maximumAmount || 10000} step="1" placeholder="Enter amount (ETB)" value={customAmount} onChange={(event) => setCustomAmount(event.target.value)}/></label>}</fieldset>;
+
+  if (view === 'submitted') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-confirmation-mark">✓</div><span className="eyebrow">REQUEST RECEIVED</span><h1>{submittedKind === 'deposit' ? 'Deposit request sent' : 'Withdrawal request sent'}</h1><p className="wallet-flow-copy">An administrator will review this preview request. It will not change your balance or move cash.</p><div className="wallet-confirmation-card"><span>Request ID</span><strong>{requestId}</strong><span className="demo-request-status pending">PENDING {submittedKind === 'deposit' ? 'VERIFICATION' : 'REVIEW'}</span></div><button className="primary-button wide" onClick={backToMain}>Back to wallet<span>→</span></button></section>;
+
+  if (view === 'main') return <section className="screen wallet-screen wallet-redesign">
+    <span className="eyebrow">WALLET</span><h1>Your Wallet</h1>
+    <div className="wallet-hero-card"><div className="wallet-card-top"><div><span>Demo credits</span><small>Practice only · no cash value</small></div><span className="wallet-hero-icon"><WalletIcon name="wallet"/></span></div><strong>{balance === null ? '—' : balance.toLocaleString()}</strong><span className="wallet-credit-unit">Demo Credits</span><span className="wallet-practice-badge">PRACTICE ONLY</span></div>
+    <div className="wallet-action-grid"><button className="wallet-action-card primary" onClick={openDeposit}><WalletIcon name="deposit"/><strong>Deposit</strong></button><button className="wallet-action-card" onClick={openWithdrawal}><WalletIcon name="withdraw"/><strong>Withdraw</strong></button></div>
+    <div className="wallet-preview-warning"><span>!</span><p><strong>Preview only.</strong> Live payments are disabled. Do not transfer money.</p></div>
+    <form className="wallet-promo-inline" onSubmit={(event) => void applyPromoCode(event)}><label htmlFor="wallet-promo-code">Have an agent promo code?</label><div><input id="wallet-promo-code" autoCapitalize="characters" maxLength={16} value={promoCode} onChange={(event) => setPromoCode(event.target.value.toUpperCase())} placeholder="Enter promo code"/><button type="submit" disabled={!promoCode.trim()}>Apply</button></div>{promoMessage && <small role="status">{promoMessage}</small>}</form>
+    <div className="wallet-request-history"><div className="wallet-section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>Your requests</h2></div><button className="text-button" onClick={() => void refresh()}>Refresh ↻</button></div>
+      {!token ? <p className="wallet-history-empty">Sign in to see your balance and payment request status.</p> : [...requests.deposits, ...requests.withdrawals].sort((a, b) => b.created_at.localeCompare(a.created_at)).length ? [...requests.deposits.map((item) => ({ ...item, kind: 'Deposit' })), ...requests.withdrawals.map((item) => ({ ...item, kind: 'Withdrawal' }))].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8).map((item) => <article className="wallet-history-row" key={item.id}><span className={`wallet-history-icon ${item.kind.toLowerCase()}`}><WalletIcon name={item.kind === 'Deposit' ? 'deposit' : 'withdraw'}/></span><div><strong>{item.kind} · {providerLabel[item.provider]}</strong><small>{item.id} · {new Date(item.created_at).toLocaleDateString()}</small>{item.review_reason && <small className="wallet-review-note">{item.review_reason}</small>}</div><div className="wallet-history-side"><strong>{item.amount} ETB</strong><span className={`demo-request-status ${item.status === 'approved' ? 'approved' : item.status === 'rejected' ? 'declined' : 'pending'}`}>{statusCopy(item.status)}</span></div></article>) : <p className="wallet-history-empty">No requests yet. Deposit and withdrawal requests will appear here.</p>}
+    </div><button className="text-button wallet-help" onClick={onSupport}>{t('support')}<span>›</span></button>
+  </section>;
+
+  if (view === 'deposit') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={backToMain} aria-label="Back"><WalletIcon name="back"/></button><h1>Add funds</h1><span className="wallet-home-mark">⌂</span></div><p className="wallet-choice-title">Choose a payment method</p>{methodCards('deposit')}{amountOptions('Select amount')}
+    <div className="wallet-preview-warning compact"><span>!</span><p>Preview only. No payment is processed and demo credits are never added from requests.</p></div>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" disabled={!selectedProvider || !Number.isSafeInteger(requestAmount)} onClick={continueToInstructions}>Continue<span>→</span></button>
+  </section>;
+
+  if (view === 'instructions') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={() => setView('deposit')} aria-label="Back"><WalletIcon name="back"/></button><h1>Pay with {provider ? providerLabel[provider] : 'Telebirr'}</h1><span className="wallet-home-mark">⌂</span></div>
+    {provider && <div className="wallet-provider-tabs">{(['telebirr', 'ebirr'] as ProviderId[]).map((id) => <button type="button" key={id} className={provider === id ? 'selected' : ''} disabled={!providers.find((entry) => entry.provider === id)?.enabled} onClick={() => { setProvider(id); setMessage(''); }}><ProviderMark provider={id}/><span>{providerLabel[id]}</span></button>)}</div>}
+    <div className="wallet-receiving-card"><span className="wallet-receiving-label">DIRE BET RECEIVING ACCOUNT</span><strong>{selectedProvider?.accountNumber || 'Not configured'}</strong><button type="button" className="wallet-copy-number" onClick={() => void navigator.clipboard.writeText(selectedProvider?.accountNumber || '').then(() => setMessage('Number copied. Do not transfer money in this preview.')).catch(() => setMessage('Select the number to copy it.'))} disabled={!selectedProvider?.accountNumber}><WalletIcon name="copy"/>Copy number</button>{selectedProvider?.accountLabel && <small>{selectedProvider.accountLabel}</small>}<div className="wallet-receiving-amount"><span>Request amount · example only</span><strong>{requestAmount} ETB</strong></div></div>
+    <div className="wallet-instructions"><strong>Preview instructions</strong><ol><li>Do not send money in this test version.</li><li>Use the form below to submit a sample request.</li><li>An administrator can review the request.</li><li>Reviewing it will not change a balance.</li></ol></div>
+    <form className="wallet-request-form" onSubmit={(event) => void submitDeposit(event)}><label className="wallet-field">Sender phone number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={senderPhone} onChange={(event) => setSenderPhone(event.target.value)}/></label><label className="wallet-field">Transaction reference<input autoComplete="off" minLength={5} maxLength={80} placeholder="Enter transaction reference" required value={transactionReference} onChange={(event) => setTransactionReference(event.target.value)}/></label><label className="wallet-receipt-upload"><input type="file" accept="image/png,image/jpeg" onChange={(event) => void pickReceipt(event)}/><WalletIcon name="upload"/><span>{receipt ? receipt.file.name : 'Upload receipt (optional)'}</span><small>PNG or JPG · max 2 MB</small></label>{receipt && <div className="wallet-receipt-preview"><img src={receipt.data} alt="Receipt preview"/><div><strong>{receipt.file.name}</strong><small>{(receipt.file.size / 1024).toFixed(0)} KB</small></div><button type="button" onClick={() => setReceipt(null)}>Remove</button></div>}
+      <p className="wallet-pin-warning">♢ Never share your PIN or OTP.</p>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider}>{busy ? 'Sending request…' : 'Submit for review'}<span>→</span></button><small className="wallet-demo-footnote">Preview request only. No cash is accepted or added to your account.</small>
+    </form>
+  </section>;
+
+  return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={backToMain} aria-label="Back"><WalletIcon name="back"/></button><h1>Withdraw funds</h1><span className="wallet-home-mark">⌂</span></div><p className="wallet-choice-title">Choose a destination method</p>{methodCards('withdrawal')}
+    <form className="wallet-request-form" onSubmit={(event) => void submitWithdrawal(event)}>{amountOptions('Amount in ETB')}<label className="wallet-field">Your Telebirr/eBirr number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={destinationPhone} onChange={(event) => setDestinationPhone(event.target.value)}/></label><label className="wallet-field">Account holder name<input autoComplete="name" maxLength={100} placeholder="Enter account name" required value={accountHolderName} onChange={(event) => setAccountHolderName(event.target.value)}/></label>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider}>{busy ? 'Sending request…' : 'Submit withdrawal request'}<span>→</span></button><div className="wallet-preview-warning compact"><span>i</span><p>Your request will be reviewed by Dire Bet. This demo does not send a payout.</p></div></form>
+  </section>;
+}

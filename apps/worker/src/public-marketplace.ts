@@ -6,6 +6,7 @@ import {
   validateMarketplaceSettings,
   type MarketplaceSettings,
 } from './marketplace';
+import { addisWeekStart } from './agent-report';
 
 type RoomGame = 'xo' | 'ludo' | 'dominoes' | 'poker';
 type PublicStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
@@ -205,8 +206,8 @@ export class Matchmaker {
       if (!room) return reply({ error: 'Room request could not be found.' }, 503);
       if (transaction.created) {
         try {
-          await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at)
-            VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?)`)
+          await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at, is_public)
+            VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?, 1)`)
             .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString()).run();
         } catch {
           await this.cancelBySystem(room.id, 'GAME_ROOM_RECORD_FAILED', false);
@@ -365,8 +366,41 @@ export class Matchmaker {
       return 'settled';
     });
     if (settled === 'closed') return reply({ error: 'Room was closed before settlement.' }, 409);
+    await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
     this.broadcast();
     return reply({ settled: settled === 'settled', alreadySettled: settled === 'already', room: this.roomView(row.id) });
+  }
+
+  private async recordAgentWeeklyActivity(row: RoomRow, players: PlayerRow[], winner: number | 'draw', calculated: ReturnType<typeof calculateDemoSettlement>, matchId: string): Promise<void> {
+    if (players.length !== row.capacity || players.length !== 2) return;
+    const [referrals, match] = await Promise.all([
+      this.env.DB.prepare(`SELECT r.agent_id, r.referred_user_id, r.created_at FROM referrals r
+        JOIN agents a ON a.id = r.agent_id WHERE r.referred_user_id IN (?, ?)`)
+        .bind(players[0].user_id, players[1].user_id).all<{ agent_id: string; referred_user_id: number; created_at: string }>(),
+      this.env.DB.prepare('SELECT ended_at FROM matches WHERE id = ?').bind(matchId).first<{ ended_at: string | null }>(),
+    ]);
+    if (!referrals.results.length) return;
+    const completedAt = match?.ended_at ? Date.parse(`${match.ended_at.replace(' ', 'T')}Z`) : Date.now();
+    if (!Number.isFinite(completedAt)) return;
+    const payoutTenths = new Map<number, number>();
+    if (winner === 'draw') {
+      for (const player of players) payoutTenths.set(player.user_id, Math.floor(calculated.payoutTenths / players.length) + (player.seat === 0 ? calculated.payoutTenths % players.length : 0));
+    } else {
+      const winningPlayer = players.find((player) => player.seat === winner);
+      if (winningPlayer) payoutTenths.set(winningPlayer.user_id, calculated.payoutTenths);
+    }
+    const weekStart = addisWeekStart(completedAt);
+    const statements = referrals.results.map((referral) => {
+      const player = players.find((seat) => seat.user_id === referral.referred_user_id);
+      if (!player || Date.parse(`${referral.created_at.replace(' ', 'T')}Z`) > completedAt) return null;
+      const entrySantim = row.entry_credits * 100;
+      const payoutSantim = (payoutTenths.get(player.user_id) || 0) * 10;
+      return this.env.DB.prepare(`INSERT OR IGNORE INTO agent_weekly_activity
+        (id, agent_id, referred_user_id, match_id, week_start, net_result_santim)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), referral.agent_id, referral.referred_user_id, matchId, weekStart, entrySantim - payoutSantim);
+    }).filter((statement): statement is D1PreparedStatement => statement !== null);
+    if (statements.length) await this.env.DB.batch(statements);
   }
 
   private async voidMatch(request: Request): Promise<Response> {
@@ -404,6 +438,15 @@ export class Matchmaker {
         const data = await result.json() as { settled?: boolean };
         if (data.settled) settled++;
       }
+    }
+    const pendingAgentRows = await this.env.DB.prepare(`SELECT m.room_id AS id, m.id AS match_id FROM matches m
+      JOIN game_rooms g ON g.id = m.room_id AND g.is_public = 1
+      JOIN match_players p ON p.match_id = m.id
+      JOIN referrals r ON r.referred_user_id = p.user_id
+      WHERE m.status = 'completed' AND NOT EXISTS (SELECT 1 FROM agent_weekly_activity w WHERE w.match_id = m.id)
+      GROUP BY m.id ORDER BY m.ended_at DESC LIMIT 100`).all<{ id: string; match_id: string }>();
+    for (const row of pendingAgentRows.results) {
+      await this.settle(new Request('https://market/settle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: row.id, matchId: row.match_id }) }));
     }
     return reply({ checked: rows.length, settled });
   }

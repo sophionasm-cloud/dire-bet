@@ -5,6 +5,7 @@ import { applyDominoAction, newDominoesGame, nextDominoesRound, viewDominoes, ty
 import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type PokerState } from '@dire-bet/engines/poker';
 import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
+import { addisWeekStart } from './agent-report';
 
 interface Env {
   ASSETS: Fetcher;
@@ -487,6 +488,23 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   const parts = message.text.trim().split(/\s+/);
   const command = parts[0].split('@')[0].toLowerCase();
   const roomPayload = command === '/start' && /^room_[23456789A-HJ-NP-Z]{6}$/i.test(parts[1] || '') ? parts[1].slice(5).toUpperCase() : null;
+  const agentCodeMatch = command === '/start' ? (parts[1] || '').match(/^agent_([A-Z0-9]{4,16})$/i) : null;
+  const agentCode = agentCodeMatch?.[1]?.toUpperCase() || null;
+  const agent = agentCode ? await env.DB.prepare(`SELECT id, user_id FROM agents WHERE referral_code = ? COLLATE NOCASE AND status = 'active'`).bind(agentCode).first<{ id: string; user_id: number | null }>() : null;
+  if (agent && agentCode && message.from && Number.isSafeInteger(message.from.id) && message.from.id! > 0) {
+    const telegramId = message.from.id as number;
+    const firstName = (message.from.first_name || 'Player').slice(0, 128);
+    const username = message.from.username?.slice(0, 64) || null;
+    const language = ['am', 'so', 'om'].includes(message.from.language_code || '') ? message.from.language_code as string : 'en';
+    const user = await env.DB.prepare(`INSERT INTO users (telegram_id, username, first_name, language, created_at, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(telegram_id) DO UPDATE SET username = COALESCE(excluded.username, users.username), first_name = excluded.first_name, updated_at = CURRENT_TIMESTAMP
+      RETURNING id`).bind(telegramId, username, firstName, language).first<{ id: number }>();
+    if (user && user.id !== agent.user_id) {
+      await env.DB.prepare(`INSERT OR IGNORE INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), user.id, agent.id, agentCode).run();
+    }
+  }
   const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
   const base = new URL(request.url).origin;
   const gameList: Record<string, string> = {
@@ -508,7 +526,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     '/stop': 'Promotional messages are not sent in this preview.',
   };
   const reply_markup = ['/start', '/play', '/games'].includes(command) ? {
-    inline_keyboard: [[{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : base } }]],
+    inline_keyboard: [[{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : agentCode && agent ? `${base}/?ref=${encodeURIComponent(agentCode)}` : base } }]],
   } : command === '/account' ? {
     inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${base}/?page=account` } }]],
   } : command === '/wallet' ? {
@@ -516,7 +534,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
-    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : responses[command] || 'Use /play to open free practice games, or /help for help.',
+    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} This link uses promo code ${agentCode}. Agent reports use demo match results only; there are no cash commissions or payments.` : responses[command] || 'Use /play to open free practice games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
   if (command === '/start') {
@@ -704,6 +722,370 @@ async function storeTelegramContact(message: { chat?: { id?: number }; from?: { 
   }
 }
 
+type PaymentProvider = 'telebirr' | 'ebirr';
+
+function paymentProvider(value: unknown): PaymentProvider | null {
+  return value === 'telebirr' || value === 'ebirr' ? value : null;
+}
+
+function validPaymentPhone(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const phone = value.trim();
+  const digits = phone.replace(/\D/g, '');
+  return /^[+\d().\s-]{7,24}$/.test(phone) && digits.length >= 9 && digits.length <= 15 ? phone : null;
+}
+
+function validRequestAmount(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 50 && (value as number) <= 10_000 ? value as number : null;
+}
+
+function validIdempotencyKey(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9-]{16,80}$/.test(value) ? value : null;
+}
+
+async function decryptContact(value: string, secret: string): Promise<string> {
+  const packed = Uint8Array.from(decodeBase64url(value), (character) => character.charCodeAt(0));
+  if (packed.byteLength < 29) throw new Error('Encrypted value is invalid.');
+  const keyMaterial = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(`dire-bet-contact-v1:${secret}`)));
+  const key = await crypto.subtle.importKey('raw', ownedBuffer(keyMaterial), { name: 'AES-GCM' }, false, ['decrypt']);
+  const clear = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packed.slice(0, 12) }, key, packed.slice(12));
+  return new TextDecoder().decode(clear);
+}
+
+async function recordAdminAudit(env: Env, adminId: number, action: string, entityType: string, entityId: string, before: unknown, after: unknown): Promise<void> {
+  await env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, before_json, after_json)
+    VALUES (?, 'admin', ?, ?, ?, ?, ?, ?)`)
+    .bind(crypto.randomUUID(), String(adminId), action, entityType, entityId, before === null ? null : JSON.stringify(before), after === null ? null : JSON.stringify(after)).run();
+}
+
+async function publicPaymentSettings(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim
+    FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
+      provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null;
+    }>();
+  return json({ mode: 'demo', providers: result.results.map((row) => ({
+    provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.enabled === 1 ? row.account_number || '' : '',
+    enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+  })) });
+}
+
+async function playerWalletRequests(env: Env, userId: number): Promise<Response> {
+  const [deposits, withdrawals] = await Promise.all([
+    env.DB.prepare(`SELECT id, provider, amount_santim, provider_reference, status, review_reason, created_at, reviewed_at
+      FROM deposit_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+        id: string; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+      }>(),
+    env.DB.prepare(`SELECT id, provider, amount_santim, status, review_reason, created_at, reviewed_at
+      FROM withdrawal_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+        id: string; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+      }>(),
+  ]);
+  return json({ deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })), withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })) });
+}
+
+async function createDemoDeposit(request: Request, env: Env, userId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (request.headers.get('content-length') && Number(request.headers.get('content-length')) > 3_200_000) return json({ error: 'Receipt must be 2 MB or smaller.' }, 413);
+  if (!(await allowRateLimit(env, `wallet:${userId}`, 'deposit-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
+  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
+  const provider = paymentProvider(input?.provider);
+  const amount = validRequestAmount(input?.amount);
+  const senderPhone = validPaymentPhone(input?.senderPhone);
+  const reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
+  const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
+  if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
+  const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
+  if (!settings || settings.enabled !== 1) return json({ error: 'That demo payment method is not available.' }, 409);
+  if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
+  const old = await env.DB.prepare('SELECT id, user_id, status FROM deposit_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
+  if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
+  let receiptType: 'image/png' | 'image/jpeg' | null = null;
+  let receiptBase64: string | null = null;
+  if (input.receiptData !== undefined && input.receiptData !== null && input.receiptData !== '') {
+    if (typeof input.receiptData !== 'string' || input.receiptData.length > 2_850_000) return json({ error: 'Receipt must be a PNG or JPG no larger than 2 MB.' }, 413);
+    const match = input.receiptData.match(/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
+    if (!match) return json({ error: 'Choose a PNG or JPG receipt.' }, 400);
+    const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+    const png = bytes.byteLength >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+    const jpeg = bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    if (bytes.byteLength > 2 * 1024 * 1024 || !(png || jpeg)) return json({ error: 'Choose a valid PNG or JPG up to 2 MB.' }, 400);
+    receiptType = png ? 'image/png' : 'image/jpeg';
+    receiptBase64 = match[2];
+  }
+  const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
+  if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
+  const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
+  const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
+  const statements = [env.DB.prepare(`INSERT INTO deposit_requests
+    (id, user_id, wallet_kind, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext)
+    VALUES (?, ?, 'demo', ?, ?, ?, 'pending', ?, ?)`)
+    .bind(id, userId, provider, amount * 100, reference, idempotencyKey, senderCiphertext)];
+  if (receiptBase64 && receiptType) {
+    const encryptedReceipt = await encryptContact(receiptBase64, env.SESSION_SECRET || '');
+    statements.push(env.DB.prepare(`INSERT INTO receipt_blobs (id, deposit_request_id, content_type, encrypted_blob, retention_until)
+      VALUES (?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), id, receiptType, enc.encode(encryptedReceipt), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()));
+  }
+  try { await env.DB.batch(statements); }
+  catch { return json({ error: 'That request could not be saved. Check whether its reference was already used.' }, 409); }
+  return json({ requestId: id, status: 'pending', demoOnly: true }, 201);
+}
+
+async function createDemoWithdrawal(request: Request, env: Env, userId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!(await allowRateLimit(env, `wallet:${userId}`, 'withdrawal-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
+  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; destinationPhone?: unknown; accountHolderName?: unknown; idempotencyKey?: unknown } | null;
+  const provider = paymentProvider(input?.provider);
+  const amount = validRequestAmount(input?.amount);
+  const destination = validPaymentPhone(input?.destinationPhone);
+  const accountHolder = typeof input?.accountHolderName === 'string' ? input.accountHolderName.trim() : '';
+  const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
+  if (!input || !provider || !amount || !destination || accountHolder.length < 2 || accountHolder.length > 100 || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, phone number and account name.' }, 400);
+  const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
+  if (!settings || settings.enabled !== 1) return json({ error: 'That demo withdrawal method is not available.' }, 409);
+  if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
+  const old = await env.DB.prepare('SELECT id, user_id, status FROM withdrawal_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
+  if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
+  const id = `WD-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
+  const phoneCiphertext = await encryptContact(destination, env.SESSION_SECRET || '');
+  const nameCiphertext = await encryptContact(accountHolder, env.SESSION_SECRET || '');
+  try {
+    await env.DB.prepare(`INSERT INTO withdrawal_requests
+      (id, user_id, wallet_kind, amount_santim, provider, status, idempotency_key, destination_phone_ciphertext, account_holder_ciphertext)
+      VALUES (?, ?, 'demo', ?, ?, 'pending', ?, ?, ?)`)
+      .bind(id, userId, amount * 100, provider, idempotencyKey, phoneCiphertext, nameCiphertext).run();
+  } catch { return json({ error: 'That request could not be saved. Try again.' }, 409); }
+  return json({ requestId: id, status: 'pending', demoOnly: true }, 201);
+}
+
+async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'withdrawals'): Promise<Response> {
+  if (kind === 'deposits') {
+    const rows = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
+      u.first_name, u.username, u.web_username, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt
+      FROM deposit_requests d JOIN users u ON u.id = d.user_id ORDER BY d.created_at DESC LIMIT 100`).all<{
+        id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+        first_name: string; username: string | null; web_username: string | null; has_receipt: number;
+      }>();
+    const details = await Promise.all(rows.results.map(async (row) => {
+      const phone = await env.DB.prepare('SELECT sender_phone_ciphertext FROM deposit_requests WHERE id = ?').bind(row.id).first<{ sender_phone_ciphertext: string | null }>();
+      let senderPhone = '';
+      try { if (phone?.sender_phone_ciphertext) senderPhone = await decryptContact(phone.sender_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
+      return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone };
+    }));
+    return json({ requests: details, count: details.length });
+  }
+  const rows = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
+    u.first_name, u.username, u.web_username FROM withdrawal_requests w JOIN users u ON u.id = w.user_id ORDER BY w.created_at DESC LIMIT 100`).all<{
+      id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+      first_name: string; username: string | null; web_username: string | null;
+    }>();
+  const details = await Promise.all(rows.results.map(async (row) => {
+    const protectedFields = await env.DB.prepare('SELECT destination_phone_ciphertext, account_holder_ciphertext FROM withdrawal_requests WHERE id = ?').bind(row.id).first<{ destination_phone_ciphertext: string | null; account_holder_ciphertext: string | null }>();
+    let destinationPhone = ''; let accountHolderName = '';
+    try { if (protectedFields?.destination_phone_ciphertext) destinationPhone = await decryptContact(protectedFields.destination_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
+    try { if (protectedFields?.account_holder_ciphertext) accountHolderName = await decryptContact(protectedFields.account_holder_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
+    return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, destinationPhone, accountHolderName };
+  }));
+  return json({ requests: details, count: details.length });
+}
+
+async function reviewWalletRequest(request: Request, env: Env, adminId: number, kind: 'deposits' | 'withdrawals', id: string): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { status?: unknown; reason?: unknown } | null;
+  const allowed = kind === 'deposits' ? ['needs_info', 'approved', 'rejected'] : ['reviewing', 'approved', 'rejected'];
+  if (!input || typeof input.status !== 'string' || !allowed.includes(input.status)) return json({ error: 'That review action is not available in demo mode.' }, 400);
+  const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '';
+  if ((input.status === 'needs_info' || input.status === 'rejected') && reason.length < 3) return json({ error: 'Add a short note for this request.' }, 400);
+  const table = kind === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
+  const old = await env.DB.prepare(`SELECT status FROM ${table} WHERE id = ?`).bind(id).first<{ status: string }>();
+  if (!old) return json({ error: 'Request not found.' }, 404);
+  const result = await env.DB.prepare(`UPDATE ${table} SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status IN ('pending','needs_info','reviewing')`)
+    .bind(input.status, reason || null, String(adminId), id).run();
+  if (!result.meta.changes) return json({ error: 'This request has already been reviewed.' }, 409);
+  await recordAdminAudit(env, adminId, `WALLET_${kind.toUpperCase()}_${String(input.status).toUpperCase()}`, `${kind.slice(0, -1)}_request`, id, { status: old.status }, { status: input.status, reason: reason || null, balanceChanged: false });
+  return json({ ok: true, status: input.status, balanceChanged: false });
+}
+
+async function adminPaymentSettings(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim, updated_at
+    FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
+      provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null; updated_at: string;
+    }>();
+  return json({ providers: result.results.map((row) => ({ provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.account_number || '', enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100), updatedAt: row.updated_at })) });
+}
+
+async function updateAdminPaymentSettings(request: Request, env: Env, adminId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { providers?: unknown } | null;
+  if (!input || !Array.isArray(input.providers) || input.providers.length !== 2) return json({ error: 'Update Telebirr and eBirr settings together.' }, 400);
+  const parsed = input.providers.map((entry) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const row = entry as { provider?: unknown; accountLabel?: unknown; accountNumber?: unknown; enabled?: unknown };
+    const provider = paymentProvider(row.provider);
+    const label = typeof row.accountLabel === 'string' ? row.accountLabel.trim() : '';
+    const number = validPaymentPhone(row.accountNumber);
+    if (!provider || label.length > 100 || !number || typeof row.enabled !== 'boolean') return null;
+    return { provider, label, number, enabled: row.enabled };
+  });
+  if (parsed.some((item) => item === null) || new Set(parsed.map((item) => item?.provider)).size !== 2) return json({ error: 'Check both account names, numbers and enabled switches.' }, 400);
+  const before = await adminPaymentSettings(env);
+  const beforeData = await before.json() as { providers: unknown[] };
+  const statements = parsed.map((row) => env.DB.prepare(`UPDATE payment_settings SET account_label = ?, account_number = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ?`)
+    .bind(row!.label || null, row!.number, row!.enabled ? 1 : 0, String(adminId), row!.provider));
+  await env.DB.batch(statements);
+  await recordAdminAudit(env, adminId, 'PAYMENT_SETTINGS_CHANGED', 'payment_settings', 'telebirr,ebirr', beforeData.providers, parsed.map((row) => ({ provider: row!.provider, accountLabel: row!.label, accountNumber: 'updated', enabled: row!.enabled })));
+  return adminPaymentSettings(env);
+}
+
+async function adminAgents(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(`SELECT a.id, a.user_id, a.referral_code, a.status, a.created_at, u.telegram_id, u.first_name, u.username, u.web_username,
+    (SELECT COUNT(*) FROM referrals r WHERE r.agent_id = a.id) AS referrals FROM agents a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.created_at DESC LIMIT 200`).all<{
+      id: string; user_id: number | null; referral_code: string; status: string; created_at: string; telegram_id: number | null; first_name: string | null; username: string | null; web_username: string | null; referrals: number;
+    }>();
+  return json({ agents: result.results.map((row) => ({ id: row.id, userId: row.user_id, telegramId: row.telegram_id, name: row.web_username || row.username || row.first_name || 'Unlinked account', code: row.referral_code, status: row.status, referrals: row.referrals, createdAt: row.created_at, commissionRate: 5, commissionBasis: 'weekly net demo-credit losses' })) });
+}
+
+async function createAdminAgent(request: Request, env: Env, adminId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { telegramId?: unknown; code?: unknown } | null;
+  const telegramId = input?.telegramId;
+  let code = typeof input?.code === 'string' && input.code.trim() ? input.code.trim().toUpperCase() : `DB${randomCode(8)}`;
+  if (!Number.isSafeInteger(telegramId) || (telegramId as number) <= 0 || !/^[A-Z0-9]{4,16}$/.test(code)) return json({ error: 'Enter the agent’s numeric Telegram ID and a 4–16 character code.' }, 400);
+  const user = await env.DB.prepare('SELECT id FROM users WHERE telegram_id = ? AND status = ?').bind(telegramId, 'active').first<{ id: number }>();
+  if (!user) return json({ error: 'That Telegram account must open DIRE BET once before it can be added as an agent.' }, 404);
+  if (user.id === adminId) return json({ error: 'The Super Admin cannot also be an agent.' }, 409);
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(`INSERT INTO agents (id, user_id, referral_code, status, commission_rule_json, created_by)
+      VALUES (?, ?, ?, 'active', ?, ?)`)
+      .bind(id, user.id, code, JSON.stringify({ rateBps: 500, basis: 'weekly_net_demo_loss', version: 'weekly-loss-demo-v1' }), String(adminId)).run();
+  } catch { return json({ error: 'That user or promo code is already assigned.' }, 409); }
+  await recordAdminAudit(env, adminId, 'AGENT_CREATED', 'agent', id, null, { userId: user.id, code, status: 'active', commissionRateBps: 500, commissionBasis: 'weekly_net_demo_loss' });
+  return json({ agent: { id, userId: user.id, telegramId, code, status: 'active', commissionRate: 5 } }, 201);
+}
+
+async function changeAdminAgent(request: Request, env: Env, adminId: number, agentId: string): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { status?: unknown } | null;
+  if (!input || !['active', 'suspended', 'revoked'].includes(String(input.status))) return json({ error: 'Choose active, suspended or revoked.' }, 400);
+  const old = await env.DB.prepare('SELECT id, status, referral_code FROM agents WHERE id = ?').bind(agentId).first<{ id: string; status: string; referral_code: string }>();
+  if (!old) return json({ error: 'Agent not found.' }, 404);
+  await env.DB.prepare('UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(input.status, agentId).run();
+  await recordAdminAudit(env, adminId, input.status === 'revoked' ? 'AGENT_REVOKED' : `AGENT_${String(input.status).toUpperCase()}`, 'agent', agentId, { status: old.status }, { status: input.status });
+  return json({ ok: true, status: input.status });
+}
+
+async function claimAgentReferral(request: Request, env: Env, userId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { code?: unknown } | null;
+  const code = typeof input?.code === 'string' ? input.code.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9]{4,16}$/.test(code)) return json({ error: 'Enter a valid agent promo code.' }, 400);
+  const agent = await env.DB.prepare(`SELECT id, user_id FROM agents WHERE referral_code = ? COLLATE NOCASE AND status = 'active'`).bind(code).first<{ id: string; user_id: number | null }>();
+  if (!agent) return json({ error: 'That promo code is unavailable.' }, 404);
+  if (agent.user_id === userId) return json({ error: 'You cannot use your own promo code.' }, 409);
+  const existing = await env.DB.prepare('SELECT source_code FROM referrals WHERE referred_user_id = ?').bind(userId).first<{ source_code: string }>();
+  if (existing) return existing.source_code.toUpperCase() === code ? json({ ok: true, alreadyApplied: true }) : json({ error: 'A promo code is already linked to this account.' }, 409);
+  try {
+    await env.DB.prepare(`INSERT INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), userId, agent.id, code).run();
+  } catch { return json({ error: 'That promo code could not be applied.' }, 409); }
+  return json({ ok: true });
+}
+
+async function agentDashboard(env: Env, userId: number): Promise<Response> {
+  const agent = await env.DB.prepare(`SELECT id, referral_code, status FROM agents WHERE user_id = ?`).bind(userId).first<{ id: string; referral_code: string; status: string }>();
+  if (!agent || agent.status !== 'active') return json({ error: agent ? 'Agent access is suspended.' : 'This Telegram account is not an active agent.' }, 403);
+  const result = await env.DB.prepare(`SELECT week_start,
+    SUM(CASE WHEN net_loss_santim > 0 THEN CAST(net_loss_santim * 500 / 10000 AS INTEGER) ELSE 0 END) AS commission_santim,
+    SUM(CASE WHEN net_loss_santim > 0 THEN net_loss_santim ELSE 0 END) AS referred_net_loss_santim,
+    SUM(CASE WHEN net_loss_santim > 0 THEN 1 ELSE 0 END) AS referred_players FROM (
+      SELECT week_start, referred_user_id, SUM(net_result_santim) AS net_loss_santim
+      FROM agent_weekly_activity WHERE agent_id = ? GROUP BY week_start, referred_user_id
+    ) GROUP BY week_start HAVING referred_net_loss_santim > 0 ORDER BY week_start DESC LIMIT 12`).bind(agent.id).all<{ week_start: string; commission_santim: number; referred_net_loss_santim: number; referred_players: number }>();
+  const referrals = await env.DB.prepare(`SELECT u.first_name, u.username, u.web_username, r.created_at,
+    (SELECT COUNT(DISTINCT a.match_id) FROM agent_weekly_activity a WHERE a.agent_id = r.agent_id AND a.referred_user_id = r.referred_user_id) AS completed_matches
+    FROM referrals r JOIN users u ON u.id = r.referred_user_id WHERE r.agent_id = ? ORDER BY r.created_at DESC LIMIT 100`).bind(agent.id).all<{ first_name: string; username: string | null; web_username: string | null; created_at: string; completed_matches: number }>();
+  return json({ agent: { code: agent.referral_code, status: agent.status, commissionRate: 5, basis: '5% of each referred player’s positive net loss for the week, using completed demo-credit matches only' },
+    shareLink: `https://t.me/${encodeURIComponent('Dire_Bet_bot')}?start=agent_${agent.referral_code}`,
+    weeks: result.results.map((row) => ({ weekStart: row.week_start, simulatedCommissionCredits: row.commission_santim / 100, referredNetLossCredits: row.referred_net_loss_santim / 100, referredPlayers: row.referred_players })),
+    referrals: referrals.results.map((row) => ({ name: row.web_username || (row.username ? `@${row.username}` : row.first_name), joinedAt: row.created_at, completedMatches: row.completed_matches })) });
+}
+
+async function handleWalletAndStaff(request: Request, env: Env): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (url.pathname === '/api/wallet/settings' && request.method === 'GET') return publicPaymentSettings(env);
+  if (url.pathname.startsWith('/api/wallet/')) {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (!userId) return json({ error: 'Sign in through Telegram or your web account to continue.' }, 401);
+    if (url.pathname === '/api/wallet/requests' && request.method === 'GET') return playerWalletRequests(env, userId);
+    if (url.pathname === '/api/wallet/deposits' && request.method === 'POST') return createDemoDeposit(request, env, userId);
+    if (url.pathname === '/api/wallet/withdrawals' && request.method === 'POST') return createDemoWithdrawal(request, env, userId);
+  }
+  if (url.pathname === '/api/referrals/claim' && request.method === 'POST') {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    return userId ? claimAgentReferral(request, env, userId) : json({ error: 'Sign in before applying a promo code.' }, 401);
+  }
+  if (url.pathname === '/api/agent/dashboard' && request.method === 'GET') {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    return userId ? agentDashboard(env, userId) : json({ error: 'Sign in with the agent Telegram account.' }, 401);
+  }
+  if (url.pathname.startsWith('/api/admin/identity') || url.pathname.startsWith('/api/admin/wallet') || url.pathname.startsWith('/api/admin/agents')) {
+    const adminId = await superAdmin(request, env);
+    if (adminId instanceof Response) return adminId;
+    if (url.pathname === '/api/admin/identity' && request.method === 'GET') return json({ isSuperAdmin: true });
+    if (url.pathname === '/api/admin/wallet/settings' && request.method === 'GET') return adminPaymentSettings(env);
+    if (url.pathname === '/api/admin/wallet/settings' && request.method === 'PUT') return updateAdminPaymentSettings(request, env, adminId);
+    if (url.pathname === '/api/admin/wallet/deposits' && request.method === 'GET') return adminWalletList(env, adminId, 'deposits');
+    if (url.pathname === '/api/admin/wallet/withdrawals' && request.method === 'GET') return adminWalletList(env, adminId, 'withdrawals');
+    const detail = url.pathname.match(/^\/api\/admin\/wallet\/(deposits|withdrawals)\/([A-Za-z0-9-]+)$/);
+    if (detail && request.method === 'GET') {
+      const table = detail[1] === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
+      if (detail[1] === 'deposits') {
+        const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
+          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ?`).bind(detail[2]).first<{
+            id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+            first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null;
+          }>();
+        if (!row) return json({ error: 'Request not found.' }, 404);
+        const { sender_phone_ciphertext: senderPhoneCiphertext, ...safeRow } = row;
+        const blob = await env.DB.prepare('SELECT content_type, encrypted_blob FROM receipt_blobs WHERE deposit_request_id = ?').bind(row.id).first<{ content_type: 'image/png' | 'image/jpeg'; encrypted_blob: ArrayBuffer }>();
+        let senderPhone = ''; let receiptData = '';
+        try { if (senderPhoneCiphertext) senderPhone = await decryptContact(senderPhoneCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
+        try {
+          if (blob) {
+            const bytes = blob.encrypted_blob instanceof Uint8Array ? blob.encrypted_blob : new Uint8Array(blob.encrypted_blob);
+            const encrypted = new TextDecoder().decode(bytes);
+            receiptData = `data:${blob.content_type};base64,${await decryptContact(encrypted, env.SESSION_SECRET || '')}`;
+          }
+        } catch { /* Leave the receipt unavailable rather than exposing encrypted bytes. */ }
+        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData } });
+      }
+      const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
+        w.destination_phone_ciphertext, w.account_holder_ciphertext, u.first_name, u.username, u.web_username
+        FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.id = ?`).bind(detail[2]).first<{
+          id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+          destination_phone_ciphertext: string | null; account_holder_ciphertext: string | null; first_name: string; username: string | null; web_username: string | null;
+        }>();
+      if (!row) return json({ error: 'Request not found.' }, 404);
+      const { destination_phone_ciphertext: destinationPhoneCiphertext, account_holder_ciphertext: accountHolderCiphertext, ...safeRow } = row;
+      let destinationPhone = ''; let accountHolderName = '';
+      try { if (destinationPhoneCiphertext) destinationPhone = await decryptContact(destinationPhoneCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
+      try { if (accountHolderCiphertext) accountHolderName = await decryptContact(accountHolderCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
+      return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, destinationPhone, accountHolderName } });
+    }
+    const review = url.pathname.match(/^\/api\/admin\/wallet\/(deposits|withdrawals)\/([A-Za-z0-9-]+)$/);
+    if (review && request.method === 'PATCH') return reviewWalletRequest(request, env, adminId, review[1] as 'deposits' | 'withdrawals', review[2]);
+    if (url.pathname === '/api/admin/agents' && request.method === 'GET') return adminAgents(env);
+    if (url.pathname === '/api/admin/agents' && request.method === 'POST') return createAdminAgent(request, env, adminId);
+    const agent = url.pathname.match(/^\/api\/admin\/agents\/([A-Za-z0-9-]+)$/);
+    if (agent && request.method === 'PATCH') return changeAdminAgent(request, env, adminId, agent[1]);
+    if (agent && request.method === 'DELETE') return changeAdminAgent(new Request(request, { method: 'PATCH', body: JSON.stringify({ status: 'revoked' }) }), env, adminId, agent[1]);
+    if (url.pathname.startsWith('/api/admin/wallet') || url.pathname.startsWith('/api/admin/agents')) return json({ error: 'Admin wallet route not found.' }, 404);
+  }
+  return null;
+}
+
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: securityHeaders });
@@ -723,6 +1105,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
     return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
   }
+  const walletStaffResponse = await handleWalletAndStaff(request, env);
+  if (walletStaffResponse) return walletStaffResponse;
   const publicMarketplaceResponse = await handlePublicMarketplace(request, env);
   if (publicMarketplaceResponse) return publicMarketplaceResponse;
   if (url.pathname === '/api/rooms' && request.method === 'POST') return createRoom(request, env);

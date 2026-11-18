@@ -49,8 +49,10 @@ The checked-in settings keep `REAL_MONEY_ENABLED=false` and `DEMO_MODE=true`. Do
 - `npm run check:i18n` — check English, Amharic, Somali and Afaan Oromoo key parity
 - `npm run check:secrets` — scan repository text files for exposed credentials
 
-## Staff preview and money status
+## Wallet, staff and money status
 
 In Telegram, use **Share contact** to link your own phone contact to your Telegram account. After that, open **Account** in the app to choose a username and 8-digit PIN for optional web sign-in. The PIN is stored as a salted hash; login attempts are rate-limited. Avoid reusing a bank PIN. Phone numbers are encrypted in D1 and are not shown in the app.
 
-Open `/admin` to create a browser-local demo login. Username: `demo-admin`; the page generates a random password and provides a copy button. The Rooms & Commissions view reads room activity only for the owner Telegram account configured in Cloudflare as `SUPER_ADMIN_TELEGRAM_ID`; the browser-local demo password does not grant those controls. `/agent` shows sample metrics only. Production staff accounts and agent tools are unfinished. There is no real-money wallet or payment provider. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).
+The player **Wallet** shows the demo receiving number `0956870660` for Telebirr and eBirr with a clear warning not to send money. Deposit and withdrawal forms create preview requests only; receipts and contact details are encrypted. Approving a request never adds a balance and never sends a payout. There is no real-money wallet or payment provider.
+
+Open `/admin` while signed in with the owner's Telegram account to use the owner dashboard. Access requires the personal numeric Telegram ID configured in Cloudflare as `SUPER_ADMIN_TELEGRAM_ID`; `9041274256` is the bot ID and must not be used. The browser-local `demo-admin` password is preview-only and cannot manage payments, agents or rooms. The Payments view reviews preview requests without moving money, and the Agents view creates, suspends or revokes promo codes. `/agent` shows that agent's server-backed weekly demo report: a 5% simulated share of each referred player's positive net demo-credit loss from completed public demo matches. It has no cash value. See [STATUS.md](STATUS.md) and [docs/OWNER_CHECKLIST.md](docs/OWNER_CHECKLIST.md).

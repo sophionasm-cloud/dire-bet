@@ -6,7 +6,7 @@ import { xoRules } from './i18n/rules';
 import { DominoesPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby from './games/PublicRoomLobby';
-import { readDemoDeposits, writeDemoDeposits, type DemoDepositRequest } from './staff/demo';
+import WalletApp from './wallet/WalletApp';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
 const AgentApp = lazy(() => import('./agent/AgentApp'));
@@ -246,7 +246,8 @@ function App() {
       if (!response.ok || !data.token) throw new Error(data.error || 'Could not sign in.');
       sessionStorage.setItem('direbet.session', data.token);
       setSessionToken(data.token); setDisplayName(data.user?.displayName || loginUsername); setLoginPin(''); setPage('home');
-      history.replaceState(null, '', location.pathname);
+      const nextRoute = new URLSearchParams(location.search).get('next');
+      history.replaceState(null, '', nextRoute === '/agent' || nextRoute === '/admin' ? nextRoute : location.pathname);
     } catch (cause) { setLoginMessage(cause instanceof Error ? cause.message : 'Could not sign in.'); }
   };
   const saveWebLogin = async (event: FormEvent) => {
@@ -284,7 +285,7 @@ function App() {
   const signOutWeb = () => { sessionStorage.removeItem('direbet.session'); setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); };
 
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
-  if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp /></Suspense>;
+  if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp token={sessionToken} /></Suspense>;
 
   return <main className="player-shell">
     <header className="topbar">
@@ -351,12 +352,12 @@ function App() {
     {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
-    {page === 'wallet' && <WalletScreen t={t} onSupport={() => setOverlay('support')} />}
+    {page === 'wallet' && <WalletApp t={t} token={sessionToken} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} onAccount={() => nav('account')} />}
     {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
     {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}
 
-    {page !== 'xo' && page !== 'account' && page !== 'login' && <button className="support-float" aria-label={t('support')} onClick={() => setOverlay('support')}><Icon name="question" size={21}/></button>}
+    {page !== 'xo' && page !== 'wallet' && page !== 'account' && page !== 'login' && <button className="support-float" aria-label={t('support')} onClick={() => setOverlay('support')}><Icon name="question" size={21}/></button>}
     {page !== 'account' && page !== 'login' && <nav className="bottom-nav" aria-label={t('menu')}>
       {(['home','matches','wallet','rank','menu'] as Page[]).map((item) => <button key={item} className={page === item ? 'active' : ''} onClick={() => nav(item)} aria-current={page === item ? 'page' : undefined}><Icon name={item === 'menu' ? 'menu' : item} size={20}/><span>{t(item as TranslationKey)}</span></button>)}
     </nav>}
@@ -370,45 +371,6 @@ function App() {
 
 function EmptyScreen({ icon, title, copy, action, onAction }: { icon:string; title:string; copy:string; action:string; onAction:()=>void }) {
   return <section className="screen empty-screen"><button className="empty-back" onClick={onAction}><Icon name="back" size={18}/></button><div className="empty-state"><div className="empty-state-icon"><Icon name={icon} size={25}/></div><h1>{title}</h1><p>{copy}</p><button className="secondary-button" onClick={onAction}>{action}</button></div></section>;
-}
-
-function WalletScreen({ t, onSupport }: { t:(key:TranslationKey)=>string; onSupport:()=>void }) {
-  const [requests, setRequests] = useState<DemoDepositRequest[]>(readDemoDeposits);
-  const [showForm, setShowForm] = useState(false);
-  const [amount, setAmount] = useState('100');
-  const [smsReference, setSmsReference] = useState('');
-  const [receipt, setReceipt] = useState<File | null>(null);
-  const [message, setMessage] = useState('');
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const credits = Number(amount);
-    if (!receipt || !receipt.type.startsWith('image/') || receipt.size > 300_000 || !Number.isInteger(credits) || credits < 1 || credits > 10_000) {
-      setMessage('Choose an image up to 300 KB and enter 1–10,000 demo credits.');
-      return;
-    }
-    if (requests.length >= 10) { setMessage('This browser already has 10 demo requests. Clear one in the admin preview.'); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') { setMessage('Could not read that sample image.'); return; }
-      const request: DemoDepositRequest = {
-        id: `DEMO-${Date.now().toString(36).toUpperCase()}`,
-        amount: credits,
-        receiptName: receipt.name.slice(0, 80),
-        receiptData: reader.result,
-        smsReference: smsReference.trim().slice(0, 80),
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
-      const next = [request, ...requests];
-      try {
-        writeDemoDeposits(next);
-        setRequests(next); setShowForm(false); setReceipt(null); setSmsReference(''); setMessage(t('demoReceiptPending'));
-      } catch { setMessage('Browser storage is full. Remove an old demo request and try again.'); }
-    };
-    reader.onerror = () => setMessage('Could not read that sample image.');
-    reader.readAsDataURL(receipt);
-  };
-  return <section className="screen wallet-screen"><span className="eyebrow">{t('testMode')}</span><h1>{t('walletTitle')}</h1><div className="wallet-card"><div className="wallet-card-top"><span>{t('demoCredits')}</span><span className="demo-tag">{t('demoLabel')}</span></div><strong>—</strong><small>{t('liveFundsOff')}</small><div className="wallet-glow"/></div><div className="locked-actions"><button onClick={() => { setShowForm((open) => !open); setMessage(''); }}><span>＋</span>{t('demoRequestTitle')}<small>{t('demoLabel')}</small></button><button disabled><span>↗</span>{t('withdraw')}<small>{t('disabled')}</small></button></div><div className="callout"><span className="callout-icon">!</span><p>{t('walletCopy')}</p></div>{showForm && <form className="demo-deposit-form" onSubmit={submit}><h2>{t('demoRequestTitle')}</h2><p>{t('demoRequestHelp')}</p><label>{t('demoAmountLabel')}<input type="number" min="1" max="10000" step="1" value={amount} onChange={(event) => setAmount(event.target.value)}/></label><label>{t('demoReceiptLabel')}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setReceipt(event.target.files?.[0] || null)}/></label><label>{t('demoSmsReference')}<input value={smsReference} maxLength={80} onChange={(event) => setSmsReference(event.target.value)}/></label><p className="demo-safety-note">{t('demoReceiptSafety')}</p><button className="primary-button wide" type="submit">{t('demoRequestSubmit')}<span>→</span></button></form>}{message && <p className="demo-inline-message" role="status">{message}</p>}<div className="section-head compact"><div><span className="eyebrow">{t('wallet')}</span><h2>{t('transactionHistory')}</h2></div></div>{requests.length ? <div className="demo-request-list">{requests.map((request) => <article className="demo-request-row" key={request.id}><img src={request.receiptData} alt={request.receiptName}/><div><strong>{request.amount} {t('demoCredits')}</strong><small>{request.id} · {request.smsReference || '—'}</small></div><span className={`demo-request-status ${request.status}`}>{t(request.status === 'pending' ? 'demoPending' : request.status === 'approved' ? 'demoApproved' : 'demoDeclined')}</span></article>)}</div> : <div className="empty-inline"><span className="empty-icon">↻</span><span>{t('noDemoRequests')}</span></div>}<button className="text-button wallet-help" onClick={onSupport}>{t('support')}<Icon name="chevron" size={15}/></button></section>;
 }
 
 function WebLoginScreen({ t, username, pin, message, setUsername, setPin, onSubmit, onBack }: { t:(key:TranslationKey)=>string; username:string; pin:string; message:string; setUsername:(value:string)=>void; setPin:(value:string)=>void; onSubmit:(event:FormEvent)=>void; onBack:()=>void }) {
