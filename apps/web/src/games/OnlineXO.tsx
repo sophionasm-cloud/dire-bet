@@ -179,6 +179,10 @@ const LUDO_LANES: [[number,number][],[number,number][]] = [
   [[7,1],[7,2],[7,3],[7,4],[7,5],[7,6]],
   [[7,13],[7,12],[7,11],[7,10],[7,9],[7,8]],
 ];
+const LUDO_NEUTRAL_LANE: [number,number][] = [
+  ...[1,2,3,4,5].map((row) => [row,7] as [number,number]),
+  ...[9,10,11,12,13].map((row) => [row,7] as [number,number]),
+];
 const LUDO_HOME_SPACES: [number,number][][] = [
   [[1,1],[1,4],[4,1],[4,4]],
   [[10,10],[10,13],[13,10],[13,13]],
@@ -205,6 +209,7 @@ function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: { game: L
     {LUDO_TRACK.map(([row,col], index) => <span key={`track-${index}`} className={`ludo-track-cell ${LUDO_SAFE.has(index) ? 'safe' : ''} ${index === 0 ? `start ${colors[0]}` : ''} ${index === 26 ? `start ${colors[1]}` : ''}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}>{LUDO_SAFE.has(index) ? '✦' : index === 0 || index === 26 ? '▲' : ''}</span>)}
     {LUDO_LANES[0].map(([row,col], index) => <span key={`lane-0-${index}`} className={`ludo-home-lane ${colors[0]}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
     {LUDO_LANES[1].map(([row,col], index) => <span key={`lane-1-${index}`} className={`ludo-home-lane ${colors[1]}`} style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
+    {LUDO_NEUTRAL_LANE.map(([row,col], index) => <span key={`neutral-lane-${index}`} className="ludo-neutral-lane" style={{ gridRow: row + 1, gridColumn: col + 1 }}/>) }
     <div className="ludo-finish-area" style={{ gridRow: '7 / span 3', gridColumn: '7 / span 3' }} aria-label="Finish"><span>✦</span></div>
     {tokens.map(({ player, token, row, col, pathPosition }) => <button key={`${player}-${token}`} className={`ludo-board-token ${colors[player]} ${player === seat && game.turn === seat && actions.includes(token) ? 'selectable' : ''} ${player === game.turn ? 'turn-piece' : ''} ${pathPosition === -3 ? 'home-piece' : ''}`} style={{ gridRow: row + 1, gridColumn: col + 1, '--piece-shift-x': `${(token % 2 ? 4 : -4)}px`, '--piece-shift-y': `${(Math.floor(token / 2) ? 4 : -4)}px` } as React.CSSProperties} aria-label={`${colors[player]} token ${token + 1}${pathPosition === -1 ? ', at home' : ''}`} disabled={player !== seat || game.turn !== seat || !actions.includes(token)} onClick={() => onMove(token)}>{token + 1}</button>)}
   </div>;
