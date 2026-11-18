@@ -507,6 +507,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   }
   const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
   const base = new URL(request.url).origin;
+  const isOwner = Boolean(env.SUPER_ADMIN_TELEGRAM_ID && message.from && String(message.from.id) === env.SUPER_ADMIN_TELEGRAM_ID);
   const gameList: Record<string, string> = {
     en: 'Free practice vs a bot: XO, Ludo, Dominoes and Texas Hold’em. Create a private online room for any of the four games.',
     am: 'በነፃ ከቦት ጋር ይለማመዱ፦ XO፣ Ludo፣ Dominoes እና Texas Hold’em። ከአራቱ ጨዋታዎች ለማንኛውም የግል ኦንላይን ክፍል ይፍጠሩ።',
@@ -525,8 +526,19 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     '/support': 'Support tickets are not available yet. Please check back later.',
     '/stop': 'Promotional messages are not sent in this preview.',
   };
+  if (command === '/admin') {
+    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: isOwner ? 'Owner access verified. Open the dashboard below.' : 'The owner dashboard is available only to the configured owner Telegram account.',
+      ...(isOwner ? { reply_markup: { inline_keyboard: [[{ text: 'Open owner dashboard', web_app: { url: `${base}/admin` } }]] } } : {}),
+    });
+    return json({ ok: true });
+  }
   const reply_markup = ['/start', '/play', '/games'].includes(command) ? {
-    inline_keyboard: [[{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : agentCode && agent ? `${base}/?ref=${encodeURIComponent(agentCode)}` : base } }]],
+    inline_keyboard: [
+      [{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : agentCode && agent ? `${base}/?ref=${encodeURIComponent(agentCode)}` : base } }],
+      ...(isOwner ? [[{ text: 'Owner dashboard', web_app: { url: `${base}/admin` } }]] : []),
+    ],
   } : command === '/account' ? {
     inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${base}/?page=account` } }]],
   } : command === '/wallet' ? {
@@ -586,6 +598,7 @@ async function setupTelegram(request: Request, env: Env): Promise<Response> {
       { command: 'games', description: 'See available games' }, { command: 'profile', description: 'View your profile' },
       { command: 'account', description: 'Set up optional web login' },
       { command: 'wallet', description: 'View demo wallet status' }, { command: 'leaderboard', description: 'View rankings' },
+      { command: 'admin', description: 'Open the owner dashboard' },
       { command: 'help', description: 'Get help' }, { command: 'support', description: 'Contact support' },
       { command: 'stop', description: 'Turn off promotions' },
     ] });
