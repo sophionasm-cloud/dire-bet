@@ -196,6 +196,7 @@
 
 /* Heads-up Ludo room: the engine stays shared with practice and private games. */
 .player-shell:has(.public-ludo-shell),.player-shell:has(.practice-ludo-shell){width:100%;max-width:none;min-height:100dvh;margin:0;padding:0 clamp(12px,3vw,44px) 28px;border:0;border-radius:0;background:radial-gradient(ellipse 45% 25% at 50% 0,#0e2c55 0,#071832 65%,#041027 100%);overflow:visible}
+.player-shell:has(.ludo-room-layout) .topbar,.player-shell:has(.ludo-room-layout) .demo-ribbon{display:none}
 .player-shell:has(.public-ludo-shell) .bottom-nav,.player-shell:has(.public-ludo-shell) .support-float,.player-shell:has(.practice-ludo-shell) .bottom-nav,.player-shell:has(.practice-ludo-shell) .support-float{display:none}
 .ludo-room-layout{max-width:1500px;margin:0 auto;padding:0 0 30px;color:#f3f7ff}
 .ludo-room-topbar{min-height:68px;display:grid;grid-template-columns:auto auto minmax(150px,1fr) auto auto auto;align-items:center;gap:clamp(9px,1.6vw,24px);border-bottom:1px solid #29405e}
