@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { winningLine, type XOState } from '@dire-bet/engines/xo';
-import { legalLudoActions, type LudoState } from '@dire-bet/engines/ludo';
+import { type LudoState } from '@dire-bet/engines/ludo';
 import type { DominoAction, DominoesState, Tile } from '@dire-bet/engines/dominoes';
 import { viewPoker, type Card, type PokerAction, type Suit } from '@dire-bet/engines/poker';
 import type { GameId } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 import type { RoomConfig } from './marketplaceTypes';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
+import { LudoDie, useLudoTurnClock } from './LudoDie';
 
 export type { RoomConfig } from './marketplaceTypes';
 
@@ -96,19 +97,26 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   const gameComplete = snapshot ? isFinished(snapshot.gameId, snapshot.game) : false;
   const result = snapshot ? resultCopy(snapshot.gameId, snapshot.game, snapshot.seat, snapshot.you, t) : '';
   const statusText = snapshot?.status === 'waiting' ? t('waitingForPlayer') : snapshot?.status === 'active' ? (isMyTurn(snapshot) ? t('yourTurn') : t('opponent')) : '';
+  const clockGame = snapshot?.gameId === 'ludo' ? snapshot.game as LudoState : null;
+  const turnSeconds = useLudoTurnClock(clockGame ? `${clockGame.turn}-${clockGame.lastEvent}-${clockGame.lastMove?.player ?? ''}-${clockGame.lastMove?.token ?? ''}` : 'inactive');
   if (snapshot?.gameId === 'ludo' && snapshot.publicRoom) {
     const state = snapshot.game as LudoState;
     const roomMeta = snapshot.publicRoom;
     const playerZeroColor = roomMeta.options.player0Color === 'white' ? 'white' : 'blue';
-    const colorAt = (seat: number): 'blue'|'white' => seat === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
+    const colorAt = (seat: number): 'red'|'yellow' => {
+      const storedColor = seat === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
+      return storedColor === 'blue' ? 'red' : 'yellow';
+    };
+    const notice = state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.winner !== null ? result : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
     const fee = Math.floor(roomMeta.entryCredits * 2 * roomMeta.commissionBps / 10_000);
     const payout = roomMeta.entryCredits * 2 - fee;
     const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
     return <section className="online-room-screen public-ludo-shell ludo-room-layout">
       <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
+      <div className="ludo-notification" role="status" aria-live="polite"><span>✦</span><strong>{notice}</strong></div>
       <div className="ludo-match-meta"><span>{roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')} · ${t('marketPerPlayer').toLowerCase()}` : t('marketFree')}</span><small>{t('marketSimulationNote')}</small></div>
       <div className="ludo-two-player-layout">
-        {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} t={t}/>) }
+        {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>) }
         <div className="ludo-board-stage">
           {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
           {snapshot.status === 'finished' && <div className="ludo-result-banner"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
@@ -145,21 +153,24 @@ function XOBoard({ game, enabled, winning, onMove }: { game: XOState; enabled: b
 }
 
 function OnlineLudo({ game, seat, playerZeroColor, t, send }: { game: LudoState; seat: number; playerZeroColor: 'blue'|'white'; t: Translator; send: (payload: unknown) => void }) {
-  const actions = legalLudoActions(game);
-  const colorFor = (player: number) => player === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
+  const colorFor = (player: number) => {
+    const storedColor = player === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
+    return storedColor === 'blue' ? 'red' : 'yellow';
+  };
+  const canRoll = game.turn === seat && game.dice === null && game.winner === null;
   return <>
     <TraditionalLudoBoard game={game} seat={seat} playerZeroColor={playerZeroColor} onMove={(token) => send({ type: 'move', token })}/>
-    <div className="ludo-controls-wrap"><div className={`ludo-dice ${game.dice ? 'rolled' : ''}`} aria-label={game.dice ? `Dice ${game.dice}` : 'Dice not rolled'}><span>{game.dice ? ['','⚀','⚁','⚂','⚃','⚄','⚅'][game.dice] : '⚄'}</span></div>
-      {game.turn === seat && game.dice === null && game.winner === null ? <button className="ludo-roll-button" onClick={() => send({ type: 'roll' })}><span>⚄</span>{t('rollDice')}</button> : game.winner === null ? <div className="ludo-waiting-turn" role="status">{t('marketWaitingTurn')}</div> : <div className="ludo-waiting-turn" role="status">{game.winner === seat ? t('gameWinTitle') : t('gameLossTitle')}</div>}
+    <div className="ludo-controls-wrap"><LudoDie value={game.lastDice} rollVersion={game.rollVersion} color={colorFor(game.turn)} canRoll={canRoll} onRoll={() => send({ type: 'roll' })} rollLabel={t('rollDice')}/>
+      {!canRoll && <div className="ludo-waiting-turn" role="status">{game.winner === null ? (game.dice !== null && game.turn === seat ? t('selectToken') : t('marketWaitingTurn')) : game.winner === seat ? t('gameWinTitle') : t('gameLossTitle')}</div>}
     </div>
   </>;
 }
 
-function LudoPlayerPanel({ player, seat, color, active, own, finished, t }: { player?: RoomPlayer; seat: number; color: 'blue'|'white'; active: boolean; own: boolean; finished: number; t: Translator }) {
+function LudoPlayerPanel({ player, seat, color, active, own, finished, seconds, t }: { player?: RoomPlayer; seat: number; color: 'red'|'yellow'; active: boolean; own: boolean; finished: number; seconds: number; t: Translator }) {
   const name = player?.name || t('marketPlayer');
   return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
     <span className={`ludo-player-avatar ${color}`}>{player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')}</span>
-    <div className="ludo-player-copy"><strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong><small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {color === 'blue' ? t('marketBlue') : t('marketWhite')}</small></div>
+    <div className="ludo-player-copy"><strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong><small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {color === 'red' ? t('marketRed') : t('marketYellow')}</small>{active && <span className="ludo-turn-clock">◷ {seconds}s</span>}</div>
     <span className={`ludo-player-score ${color}`}>{finished}/4</span>
     <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? t('yourTurn') : t('marketWaiting')}</span>
   </article>;

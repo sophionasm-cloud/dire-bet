@@ -6,6 +6,8 @@ describe('Ludo rules', () => {
     const failed = rollLudo(initLudo(), 4);
     expect(failed.turn).toBe(1);
     expect(failed.dice).toBeNull();
+    expect(failed.lastDice).toBe(4);
+    expect(failed.rollVersion).toBe(1);
     const six = rollLudo(initLudo(), 6);
     expect(legalLudoActions(six)).toEqual([0, 1, 2, 3]);
     const moved = moveLudo(six, 0);
@@ -22,6 +24,7 @@ describe('Ludo rules', () => {
     expect(third.dice).toBeNull();
     expect(third.consecutiveSixes).toBe(0);
     expect(third.lastEvent).toBe('triple-six');
+    expect(third.lastDice).toBe(6);
   });
 
   it('captures an opponent off a non-safe track cell', () => {

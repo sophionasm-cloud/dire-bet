@@ -4,6 +4,7 @@ import { applyDominoAction, botDominoAction, legalDominoActions, newDominoesGame
 import { applyPokerAction, botPokerAction, initTexasHoldem, legalPokerActions, type Card, type PokerAction, type PokerState, type Suit } from '@dire-bet/engines/poker';
 import type { TranslationKey } from '../i18n';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
+import { LudoDie, useLudoTurnClock } from './LudoDie';
 
 type Translator = (key: TranslationKey) => string;
 type PracticeProps = { t: Translator; onExit: () => void; reduceEffects: boolean };
@@ -17,12 +18,14 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
       if (current.dice === null) return rollLudo(current, Math.floor(Math.random() * 6) + 1);
       const token = botLudoToken(current);
       return token === null ? current : moveLudo(current, token);
-    }), reduceEffects ? 180 : 580);
+    }), reduceEffects ? 180 : state.dice === null && state.lastEvent !== 'extra-roll' ? 580 : 1050);
     return () => window.clearTimeout(timer);
   }, [state, reduceEffects]);
 
   const turnCopy = state.winner !== null ? outcome(state.winner, t) : state.turn === 0 ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('botTurn');
+  const turnSeconds = useLudoTurnClock(`${state.turn}-${state.lastEvent}-${state.lastMove?.player ?? ''}-${state.lastMove?.token ?? ''}`);
   const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
+  const banner = state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.winner !== null ? outcome(state.winner, t) : turnCopy;
   return <section className="screen practice-screen practice-ludo-shell ludo-room-layout">
     <header className="ludo-room-topbar">
       <div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div>
@@ -32,25 +35,24 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
       <button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button>
       <button className="ludo-leave" type="button" onClick={onExit}>← {t('home')}</button>
     </header>
-    <div className="ludo-match-meta practice-ludo-meta"><span>{t('ludoRuleText')}</span><small aria-live="polite">{turnCopy}</small></div>
+    <div className="ludo-notification" role="status" aria-live="polite"><span>✦</span><strong>{banner}</strong></div>
+    <div className="ludo-match-meta practice-ludo-meta"><span>{t('ludoRuleText')}</span></div>
     <div className="ludo-two-player-layout">
-      <PracticeLudoPlayerPanel name={t('you')} color="blue" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
-      <div className="ludo-board-stage"><TraditionalLudoBoard game={state} seat={0} playerZeroColor="blue" onMove={(token) => setState((current) => moveLudo(current, token))}/></div>
-      <PracticeLudoPlayerPanel name={t('bot')} color="white" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === 57).length} t={t} bot/>
+      <PracticeLudoPlayerPanel name={t('you')} color="yellow" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>
+      <div className="ludo-board-stage"><TraditionalLudoBoard game={state} seat={0} playerZeroColor="white" onMove={(token) => setState((current) => moveLudo(current, token))}/></div>
+      <PracticeLudoPlayerPanel name={t('bot')} color="red" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === 57).length} seconds={turnSeconds} t={t} bot/>
     </div>
     <div className="ludo-controls-wrap practice-ludo-controls">
-      <div className={`ludo-dice ${state.dice === null ? '' : 'rolled'}`} aria-live="polite" aria-label={state.dice === null ? 'Dice not rolled' : `Dice ${state.dice}`}><span>{state.dice === null ? '⚄' : ['','⚀','⚁','⚂','⚃','⚄','⚅'][state.dice]}</span></div>
-      {state.turn === 0 && state.dice === null && state.winner === null
-        ? <button className="ludo-roll-button" onClick={() => setState((current) => rollLudo(current, Math.floor(Math.random() * 6) + 1))}><span>⚄</span>{t('rollDice')}</button>
-        : <div className="ludo-waiting-turn" role="status">{state.winner === null ? turnCopy : <><strong>{turnCopy}</strong><button className="secondary-button" onClick={() => setState(initLudo())}>{t('practiceAgain')} ↻</button></>}</div>}
+      <LudoDie value={state.lastDice} rollVersion={state.rollVersion} color={state.turn === 0 ? 'yellow' : 'red'} canRoll={state.turn === 0 && state.dice === null && state.winner === null} onRoll={() => setState((current) => rollLudo(current, Math.floor(Math.random() * 6) + 1))} rollLabel={t('rollDice')} reducedMotion={reduceEffects}/>
+      {state.turn !== 0 || state.dice !== null || state.winner !== null ? <div className="ludo-waiting-turn" role="status">{state.winner === null ? turnCopy : <><strong>{turnCopy}</strong><button className="secondary-button" onClick={() => setState(initLudo())}>{t('practiceAgain')} ↻</button></>}</div> : null}
     </div>
   </section>;
 }
 
-function PracticeLudoPlayerPanel({ name, color, active, finished, t, bot = false }: { name: string; color: 'blue'|'white'; active: boolean; finished: number; t: Translator; bot?: boolean }) {
+function PracticeLudoPlayerPanel({ name, color, active, finished, seconds, t, bot = false }: { name: string; color: 'red'|'yellow'; active: boolean; finished: number; seconds: number; t: Translator; bot?: boolean }) {
   return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
     <span className={`ludo-player-avatar ${color}`}>{bot ? '✦' : name.trim().slice(0, 1).toUpperCase()}</span>
-    <div className="ludo-player-copy"><strong>{name}</strong><small><i className={`player-online-dot ${active ? 'online' : ''}`}/>{bot ? t('bot') : t('you')} · {color === 'blue' ? t('marketBlue') : t('marketWhite')}</small></div>
+    <div className="ludo-player-copy"><strong>{name}</strong><small><i className={`player-online-dot ${active ? 'online' : ''}`}/>{bot ? t('bot') : t('you')} · {color === 'red' ? t('marketRed') : t('marketYellow')}</small>{active && <span className="ludo-turn-clock">◷ {seconds}s</span>}</div>
     <span className={`ludo-player-score ${color}`} aria-label={`${finished} of 4 tokens finished`}>{finished}/4</span>
     <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? (bot ? t('botTurn') : t('yourTurn')) : t('marketWaiting')}</span>
   </article>;

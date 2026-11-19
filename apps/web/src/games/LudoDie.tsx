@@ -1,0 +1,59 @@
+import { useEffect, useRef, useState } from 'react';
+
+export function useLudoTurnClock(resetKey: string): number {
+  const [seconds, setSeconds] = useState(99);
+  useEffect(() => {
+    setSeconds(99);
+    const interval = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(interval);
+  }, [resetKey]);
+  return seconds;
+}
+
+const PIPS: Record<number, number[]> = {
+  1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8],
+  5: [0, 2, 4, 6, 8], 6: [0, 3, 6, 2, 5, 8],
+};
+
+function DieFace({ value, side }: { value: number; side: string }) {
+  return <span className={`ludo-die-face ${side}`} aria-hidden="true"><i className="ludo-die-pips">{Array.from({ length: 9 }, (_, index) => <i key={index} className={PIPS[value].includes(index) ? 'pip' : ''}/>)}</i></span>;
+}
+
+export function LudoDie({ value, rollVersion, color, canRoll, onRoll, rollLabel, reducedMotion = false }: {
+  value: number | null;
+  rollVersion: number;
+  color: 'red' | 'yellow';
+  canRoll: boolean;
+  onRoll: () => void;
+  rollLabel: string;
+  reducedMotion?: boolean;
+}) {
+  const [rolling, setRolling] = useState(false);
+  const previousRoll = useRef(rollVersion);
+  const timer = useRef<number | undefined>(undefined);
+
+  const startRolling = () => {
+    window.clearTimeout(timer.current);
+    setRolling(true);
+    timer.current = window.setTimeout(() => setRolling(false), reducedMotion ? 80 : 960);
+  };
+
+  useEffect(() => {
+    if (rollVersion === previousRoll.current) return;
+    previousRoll.current = rollVersion;
+    startRolling();
+  }, [rollVersion]);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  return <>
+    <div className={`ludo-dice ${color} ${rolling ? 'rolling' : ''} ${reducedMotion ? 'reduced' : ''}`} role="img" aria-label={value === null ? 'Dice ready' : `Dice ${value}`}>
+      <div className="ludo-die-cube" data-value={value ?? 1}>
+        <DieFace value={1} side="front"/><DieFace value={6} side="back"/>
+        <DieFace value={3} side="right"/><DieFace value={4} side="left"/>
+        <DieFace value={2} side="top"/><DieFace value={5} side="bottom"/>
+      </div>
+    </div>
+    {canRoll && <button className="ludo-roll-button" disabled={rolling} onClick={() => { startRolling(); onRoll(); }}><span>⚄</span>{rolling ? '…' : rollLabel}</button>}
+  </>;
+}

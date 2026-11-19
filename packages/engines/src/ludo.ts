@@ -4,6 +4,8 @@ export type LudoState = {
   tokens: [number[], number[]];
   turn: LudoPlayer;
   dice: number | null;
+  lastDice: number | null;
+  rollVersion: number;
   consecutiveSixes: number;
   winner: LudoPlayer | null;
   lastEvent: LudoEvent | null;
@@ -16,7 +18,7 @@ const STARTS: [number, number] = [0, 26];
 const SAFE_TRACK_CELLS = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 
 export function initLudo(firstPlayer: LudoPlayer = 0): LudoState {
-  return { tokens: [[-1, -1, -1, -1], [-1, -1, -1, -1]], turn: firstPlayer, dice: null, consecutiveSixes: 0, winner: null, lastEvent: null, lastMove: null };
+  return { tokens: [[-1, -1, -1, -1], [-1, -1, -1, -1]], turn: firstPlayer, dice: null, lastDice: null, rollVersion: 0, consecutiveSixes: 0, winner: null, lastEvent: null, lastMove: null };
 }
 
 export function legalLudoActions(state: LudoState): number[] {
@@ -31,8 +33,8 @@ export function legalLudoActions(state: LudoState): number[] {
 export function rollLudo(state: LudoState, dice: number): LudoState {
   if (state.winner !== null || state.dice !== null || !Number.isInteger(dice) || dice < 1 || dice > 6) throw new Error('Illegal roll');
   const consecutiveSixes = dice === 6 ? state.consecutiveSixes + 1 : 0;
-  if (consecutiveSixes >= 3) return { ...state, turn: other(state.turn), dice: null, consecutiveSixes: 0, lastEvent: 'triple-six', lastMove: null };
-  const rolled = { ...state, dice, consecutiveSixes, lastEvent: 'roll' as const, lastMove: null };
+  if (consecutiveSixes >= 3) return { ...state, turn: other(state.turn), dice: null, lastDice: dice, rollVersion: state.rollVersion + 1, consecutiveSixes: 0, lastEvent: 'triple-six', lastMove: null };
+  const rolled = { ...state, dice, lastDice: dice, rollVersion: state.rollVersion + 1, consecutiveSixes, lastEvent: 'roll' as const, lastMove: null };
   if (legalLudoActions(rolled).length) return rolled;
   if (dice === 6) return { ...rolled, dice: null, lastEvent: 'extra-roll' };
   return { ...rolled, turn: other(state.turn), dice: null, consecutiveSixes: 0, lastEvent: 'no-move' };
