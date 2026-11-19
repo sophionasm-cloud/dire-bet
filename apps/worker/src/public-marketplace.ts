@@ -11,7 +11,7 @@ import { addisWeekStart } from './agent-report';
 import { moneyActivationRecorded, moneyEligibilityError, type ActivationEnv } from './activation';
 
 type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
-type PublicStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
+type PublicStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'SETTLING' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
 type MarketEnv = ActivationEnv & { GAME_ROOM: DurableObjectNamespace; SESSION_SECRET?: string };
 type RoomRow = {
   id: string; code: string; game_id: RoomGame; creator_id: number; creator_name: string; status: PublicStatus;
@@ -26,7 +26,7 @@ type MarketRoom = {
   players: MarketPlayer[]; playerCount: number; capacity: number; entryCredits: number;
   poolCredits: number; feeCredits: number; payoutCredits: number; commissionBps: number;
   mode: string; options: Record<string, unknown>; status: PublicStatus; createdAt: number; expiresAt: number;
-  matchId: string | null; winner: number | null; viewerSeat?: number; viewerIsCreator?: boolean;
+  matchId: string | null; winner: number | null; walletKind: 'demo' | 'real' | 'free'; viewerSeat?: number; viewerIsCreator?: boolean;
 };
 
 const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -97,20 +97,12 @@ export class Matchmaker {
 
   async alarm(): Promise<void> {
     this.ensureSchema();
+    this.moneyActive = await moneyActivationRecorded(this.env);
     const now = Date.now();
     const expired = this.state.storage.sql.exec<{ id: string; code: string }>(
       "SELECT id, code FROM public_rooms WHERE status = 'WAITING' AND expires_at <= ? ORDER BY expires_at LIMIT 100", now,
     ).toArray();
-    for (const room of expired) {
-      this.state.storage.transactionSync(() => {
-        const current = this.state.storage.sql.exec<{ status: PublicStatus }>('SELECT status FROM public_rooms WHERE id = ?', room.id).toArray()[0];
-        if (current?.status !== 'WAITING') return;
-        this.refundRoom(room.id);
-        this.state.storage.sql.exec("UPDATE public_rooms SET status = 'EXPIRED' WHERE id = ? AND status = 'WAITING'", room.id);
-        this.recordEvent(room.id, null, 'ROOM_EXPIRED', {});
-      });
-      await this.cancelGameRoom(room.code);
-    }
+    for (const room of expired) await this.expireRoom(room.id);
     await this.scheduleAlarm();
     this.broadcast();
   }
@@ -141,7 +133,6 @@ export class Matchmaker {
       id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, actor_user_id INTEGER,
       event_type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
     sql.exec(`CREATE INDEX IF NOT EXISTS public_room_events_room ON public_room_events(room_id, id)`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS demo_credit_accounts (user_id INTEGER PRIMARY KEY, balance_tenths INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS public_room_idempotency (user_id INTEGER NOT NULL, request_key TEXT NOT NULL, room_id TEXT NOT NULL, PRIMARY KEY(user_id, request_key))`);
     sql.exec(`CREATE TABLE IF NOT EXISTS marketplace_settings (
       singleton INTEGER PRIMARY KEY CHECK(singleton = 1), settings_json TEXT NOT NULL, updated_at INTEGER NOT NULL)`);
@@ -154,9 +145,10 @@ export class Matchmaker {
   private settings(): MarketplaceSettings {
     const raw = this.state.storage.sql.exec<{ settings_json: string }>('SELECT settings_json FROM marketplace_settings WHERE singleton = 1').toArray()[0]?.settings_json;
     try {
-      const parsed = validateMarketplaceSettings(JSON.parse(raw || ''));
+      const stored = JSON.parse(raw || '') as { startingCredits?: unknown };
+      const parsed = validateMarketplaceSettings(stored);
       if (!parsed) return DEFAULT_MARKETPLACE_SETTINGS;
-      if (parsed.standardAmounts.join(',') === '10,20,50,100' && parsed.customEnabled && parsed.customMaximum === 1000 && parsed.commissionBps === 1000 && parsed.waitingSeconds === 60 && parsed.startingCredits === 1000) {
+      if (stored.startingCredits === 1000 && parsed.standardAmounts.join(',') === '10,20,50,100' && parsed.commissionBps === 1000 && parsed.waitingSeconds === 60) {
         this.state.storage.sql.exec('UPDATE marketplace_settings SET settings_json = ?, updated_at = ? WHERE singleton = 1', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
         return DEFAULT_MARKETPLACE_SETTINGS;
       }
@@ -167,7 +159,7 @@ export class Matchmaker {
 
   private marketConfig(): MarketplaceSettings {
     const settings = this.settings();
-    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, commissionBps: 0, realMoneyEnabled: this.moneyActive };
+    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, commissionBps: this.moneyActive ? settings.commissionBps : 0, realMoneyEnabled: this.moneyActive };
   }
 
   private async balance(userId: number): Promise<Response> {
@@ -250,11 +242,12 @@ export class Matchmaker {
       let code = roomCode();
       for (let attempt = 0; attempt < 8 && this.roomRow(code); attempt++) code = roomCode();
       const walletKind = entryAmount > 0 ? 'real' : 'free';
+      const commissionBps = walletKind === 'real' ? settings.commissionBps : 0;
       const reservedSantim = entryAmount * 100;
       this.state.storage.sql.exec(`INSERT INTO public_rooms (id, code, game_id, creator_id, creator_name, status, capacity, player_count,
         entry_credits, options_json, created_at, expires_at, commission_bps, match_id, game_ready, wallet_kind)
-        VALUES (?, ?, ?, ?, ?, 'WAITING', 2, 1, ?, ?, ?, ?, 0, NULL, 0, ?)`,
-        code, code, input.gameId, userId, displayName, entryAmount, JSON.stringify(options), createdAt, expiresAt, walletKind);
+        VALUES (?, ?, ?, ?, ?, 'STARTING', 2, 1, ?, ?, ?, ?, ?, NULL, 0, ?)`,
+        code, code, input.gameId, userId, displayName, entryAmount, JSON.stringify(options), createdAt, expiresAt, commissionBps, walletKind);
       this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, 0, ?, ?)', code, userId, displayName, reservedSantim, createdAt);
       this.state.storage.sql.exec('INSERT INTO public_room_idempotency (user_id, request_key, room_id) VALUES (?, ?, ?)', userId, input.idempotencyKey, code);
       this.recordEvent(code, userId, 'ROOM_CREATED', { gameId: input.gameId, entryAmount, options });
@@ -284,13 +277,13 @@ export class Matchmaker {
       const initialized = await stub.fetch('https://room/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ code: room.code, gameId: room.game_id, userId, displayName, expiresAt,
-          publicRoomId: room.id, publicRoomOptions: options, entryCredits: entryAmount, commissionBps: 0 }),
+          publicRoomId: room.id, publicRoomOptions: options, entryCredits: entryAmount, commissionBps: room.commission_bps }),
       });
       if (!initialized.ok) {
         await this.cancelBySystem(room.id, 'ROOM_SETUP_FAILED');
         return reply({ error: 'Could not start the room. Any held wallet funds were returned.' }, 503);
       }
-      this.state.storage.sql.exec('UPDATE public_rooms SET game_ready = 1 WHERE id = ? AND status = \'WAITING\'', room.id);
+      this.state.storage.sql.exec('UPDATE public_rooms SET game_ready = 1, status = \'WAITING\' WHERE id = ? AND status = \'STARTING\'', room.id);
       this.recordEvent(room.id, null, 'GAME_ROOM_READY', {});
     }
     await this.scheduleAlarm();
@@ -305,50 +298,72 @@ export class Matchmaker {
     if (!/^[23456789A-HJ-NP-Z]{6}$/.test(code) || !input || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room or player details are invalid.' }, 400);
     const room = this.roomRow(code);
     if (!room) return reply({ error: 'Public room not found.' }, 404);
+    if (room.wallet_kind === 'demo') return reply({ error: 'This old preview room cannot accept players or move funds.' }, 409);
     if (this.isPlayer(code, input.userId as number)) return reply({ error: 'You already joined this room.' }, 409);
     if (room.status !== 'WAITING' || room.game_ready !== 1 || room.expires_at <= Date.now()) {
       if (room.status === 'WAITING' && room.expires_at <= Date.now()) await this.expireRoom(code);
       return reply({ error: room.status === 'WAITING' ? 'This room has expired.' : 'This room is no longer available.' }, 409);
     }
-    const settings = this.settings();
     const userId = input.userId as number;
+    if (room.wallet_kind === 'real') {
+      if (!this.moneyActive) return reply({ error: 'Paid rooms are unavailable until required approvals are recorded.' }, 403);
+      const eligibility = await moneyEligibilityError(this.env, userId);
+      if (eligibility) return reply({ error: eligibility }, 403);
+    }
     const displayName = input.displayName.slice(0, 32);
     const joinedAt = Date.now();
     const result = this.state.storage.transactionSync(() => {
       const current = this.roomRow(code);
-      if (!current || current.status !== 'WAITING' || current.game_ready !== 1 || current.expires_at <= joinedAt || current.player_count >= current.capacity) return { error: 'This room is full or no longer available.', full: false };
-      const balance = this.ensureCredits(userId, settings);
-      const reservedUnits = current.entry_credits * 10;
-      if (balance < reservedUnits) return { error: 'Not enough demo credits for this entry. Choose a FREE room.', full: false };
+      if (!current || current.status !== 'WAITING' || current.game_ready !== 1 || current.expires_at <= joinedAt || current.player_count >= current.capacity) return { ok: false as const, error: 'This room is full or no longer available.' };
       const seat = current.player_count;
-      this.state.storage.sql.exec('UPDATE demo_credit_accounts SET balance_tenths = balance_tenths - ?, updated_at = ? WHERE user_id = ?', reservedUnits, joinedAt, userId);
+      const reservedUnits = current.wallet_kind === 'real' ? current.entry_credits * 100 : 0;
       this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, ?, ?, ?)', code, userId, displayName, seat, reservedUnits, joinedAt);
       const playerCount = seat + 1;
-      const status: PublicStatus = playerCount >= current.capacity ? 'FULL' : 'WAITING';
-      this.state.storage.sql.exec('UPDATE public_rooms SET player_count = ?, status = ? WHERE id = ? AND status = \'WAITING\'', playerCount, status, code);
-      this.recordEvent(code, userId, 'PLAYER_JOINED', { seat, playerCount, capacity: current.capacity });
-      if (status === 'FULL') this.recordEvent(code, userId, 'ROOM_FULL', { playerCount });
-      return { error: '', full: status === 'FULL' };
+      this.state.storage.sql.exec('UPDATE public_rooms SET player_count = ?, status = \'STARTING\' WHERE id = ? AND status = \'WAITING\'', playerCount, code);
+      this.recordEvent(code, userId, 'PLAYER_JOIN_RESERVED', { seat, playerCount, capacity: current.capacity });
+      return { ok: true as const, full: playerCount >= current.capacity, seat, amountSantim: reservedUnits };
     });
-    if (result.error) return reply({ error: result.error }, result.error.startsWith('Not enough') ? 402 : 409);
+    if (!result.ok) return reply({ error: result.error }, 409);
+    if (room.wallet_kind === 'real' && !(await this.reserveWallet(userId, result.amountSantim, `public-room-entry:${code}:${result.seat}`, code))) {
+      this.state.storage.transactionSync(() => {
+        this.state.storage.sql.exec('DELETE FROM public_room_players WHERE room_id = ? AND user_id = ? AND seat = ?', code, userId, result.seat);
+        this.state.storage.sql.exec("UPDATE public_rooms SET player_count = player_count - 1, status = 'WAITING' WHERE id = ? AND status = 'STARTING'", code);
+        this.recordEvent(code, userId, 'PLAYER_JOIN_REJECTED_INSUFFICIENT_FUNDS', { seat: result.seat });
+      });
+      this.broadcast();
+      return reply({ error: 'Your available wallet balance is too low for this room.' }, 402);
+    }
     this.broadcast();
     if (result.full) {
-      this.setStatus(code, 'STARTING', 'GAME_STARTING', userId, {});
-      this.broadcast();
+      this.recordEvent(code, userId, 'GAME_STARTING', {});
       const stub = this.env.GAME_ROOM.get(this.env.GAME_ROOM.idFromName(code));
       const joined = await stub.fetch('https://room/join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, userId, displayName }) });
       if (!joined.ok) {
         await this.cancelBySystem(code, 'GAME_START_FAILED');
-        return reply({ error: 'The game could not start. Reserved demo credits were returned.' }, 503);
+        return reply({ error: 'The game could not start. Reserved funds are being returned.' }, 503);
       }
       const row = this.roomRow(code);
       const matchId = row ? `${row.game_id}-${row.code}` : null;
-      this.setStatus(code, 'IN_PROGRESS', 'GAME_STARTED', userId, { matchId });
-      this.state.storage.sql.exec('UPDATE public_rooms SET match_id = ? WHERE id = ?', matchId, code);
+      const started = this.state.storage.transactionSync(() => {
+        const current = this.roomRow(code);
+        if (!current || current.status !== 'STARTING') return false;
+        this.state.storage.sql.exec("UPDATE public_rooms SET status = 'IN_PROGRESS', match_id = ? WHERE id = ?", matchId, code);
+        this.recordEvent(code, userId, 'GAME_STARTED', { matchId });
+        return true;
+      });
+      if (!started) {
+        await this.cancelGameRoom(code);
+        return reply({ error: 'The room closed while the game was starting.' }, 409);
+      }
       this.broadcast();
+    } else {
+      this.state.storage.transactionSync(() => {
+        this.state.storage.sql.exec("UPDATE public_rooms SET status = 'WAITING' WHERE id = ? AND status = 'STARTING'", code);
+        this.recordEvent(code, userId, 'PLAYER_JOINED', { seat: result.seat, playerCount: result.seat + 1, capacity: room.capacity });
+      });
     }
-    const balance = this.state.storage.sql.exec<{ balance_tenths: number }>('SELECT balance_tenths FROM demo_credit_accounts WHERE user_id = ?', userId).toArray()[0]?.balance_tenths ?? 0;
-    return reply({ room: this.roomViewForUser(code, userId), balanceCredits: credits(balance) }, 201);
+    const balance = this.moneyActive ? await this.env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>() : null;
+    return reply({ room: this.roomViewForUser(code, userId), balanceSantim: balance?.balance_santim || 0, balance: (balance?.balance_santim || 0) / 100 }, 201);
   }
 
   private async cancelRoom(id: string, userId: number, administrator: boolean): Promise<Response> {
@@ -357,6 +372,7 @@ export class Matchmaker {
     if (administrator) {
       if (!Number.isSafeInteger(userId) || userId <= 0) return reply({ error: 'Administrator identity is missing.' }, 401);
       if (row.status === 'COMPLETED' || row.status === 'CANCELLED' || row.status === 'EXPIRED') return reply({ error: 'This room is already closed.' }, 409);
+      if (row.status === 'STARTING' || row.status === 'SETTLING') return reply({ error: 'This room is starting or settling and cannot be cancelled right now.' }, 409);
     } else {
       if (!Number.isSafeInteger(userId) || userId <= 0) return reply({ error: 'Sign in to cancel your room.' }, 401);
       if (row.creator_id !== userId) return reply({ error: 'Only the room creator can cancel this room.' }, 403);
@@ -368,18 +384,18 @@ export class Matchmaker {
     }
     const cancelled = this.state.storage.transactionSync(() => {
       const current = this.roomRow(row.id);
-      if (!current || current.status === 'COMPLETED' || current.status === 'CANCELLED' || current.status === 'EXPIRED') return false;
+      if (!current || ['COMPLETED', 'CANCELLED', 'EXPIRED', 'STARTING', 'SETTLING'].includes(current.status)) return false;
       if (!administrator && current.status !== 'WAITING') return false;
-      this.refundRoom(current.id);
       this.state.storage.sql.exec("UPDATE public_rooms SET status = 'CANCELLED' WHERE id = ?", current.id);
       this.recordEvent(current.id, userId, administrator ? 'ADMIN_CANCELLED' : 'CREATOR_CANCELLED', { previousStatus: current.status });
       return true;
     });
     if (!cancelled) return reply({ error: 'This room is no longer available to cancel.' }, 409);
-    if (row.status !== 'WAITING') await this.cancelGameRoom(row.code);
-    else await this.cancelGameRoom(row.code);
+    const refunded = await this.refundRoom(row.id);
+    await this.cancelGameRoom(row.code);
     if (administrator) this.adminAudit(userId, 'ROOM_CANCELLED', row.id, { previousStatus: row.status });
     this.broadcast();
+    if (!refunded) return reply({ error: 'The room was closed, but a refund is pending reconciliation.' }, 503);
     return reply({ room: this.roomView(row.id) });
   }
 
@@ -387,7 +403,7 @@ export class Matchmaker {
     const code = id.toUpperCase();
     const row = this.roomRow(code);
     if (!row || !this.isPlayer(code, userId)) return reply({ error: 'You are not a player in this room.' }, 403);
-    if (row.status !== 'IN_PROGRESS' && row.status !== 'COMPLETED') return reply({ error: 'This room is still preparing the game.' }, 409);
+    if (row.status !== 'IN_PROGRESS' && row.status !== 'SETTLING' && row.status !== 'COMPLETED') return reply({ error: 'This room is still preparing the game.' }, 409);
     return reply({ code: row.code, gameId: row.game_id, matchId: row.match_id, room: this.roomViewForUser(row.id, userId) });
   }
 
@@ -395,7 +411,7 @@ export class Matchmaker {
     const input = await request.json().catch(() => null) as { code?: unknown; matchId?: unknown } | null;
     if (!input || typeof input.code !== 'string' || typeof input.matchId !== 'string') return reply({ error: 'Settlement reference is invalid.' }, 400);
     const row = this.roomRow(input.code.toUpperCase());
-    if (!row || row.match_id !== input.matchId || (row.status !== 'IN_PROGRESS' && row.status !== 'COMPLETED')) return reply({ error: 'Match is not ready for settlement.' }, 409);
+    if (!row || row.match_id !== input.matchId || !['IN_PROGRESS', 'SETTLING', 'COMPLETED'].includes(row.status)) return reply({ error: 'Match is not ready for settlement.' }, 409);
     const record = await this.env.DB.prepare('SELECT room_id, status, result_json FROM matches WHERE id = ?').bind(input.matchId).first<{ room_id: string; status: string; result_json: string | null }>();
     if (record?.room_id === row.id && record.status === 'voided') return this.refundVoidedMatch(row.id, input.matchId);
     if (!record || record.room_id !== row.id || record.status !== 'completed' || !record.result_json) return reply({ error: 'The match result has not been verified by the game service.' }, 409);
@@ -408,37 +424,59 @@ export class Matchmaker {
     } catch { return reply({ error: 'The match result is invalid.' }, 409); }
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', row.id).toArray();
     if (players.length !== row.capacity) return reply({ error: 'The completed match has an incomplete room.' }, 409);
-    const calculated = calculateDemoSettlement(row.entry_credits, players.length, row.commission_bps);
+    const calculated = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, players.length, row.commission_bps) : { poolTenths: 0, feeTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const locked = this.state.storage.transactionSync(() => {
+      const current = this.roomRow(row.id);
+      if (!current || current.status === 'CANCELLED' || current.status === 'EXPIRED') return 'closed';
+      if (current.status === 'COMPLETED') return 'already';
+      if (current.status === 'IN_PROGRESS') {
+        this.state.storage.sql.exec("UPDATE public_rooms SET status = 'SETTLING' WHERE id = ? AND status = 'IN_PROGRESS'", row.id);
+        this.recordEvent(row.id, null, 'SETTLEMENT_STARTED', { matchId: input.matchId });
+      }
+      return 'settling';
+    });
+    if (locked === 'closed') return reply({ error: 'Room was closed before settlement.' }, 409);
+    if (locked === 'already') {
+      if (row.wallet_kind === 'real') await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
+      return reply({ settled: false, alreadySettled: true, room: this.roomView(row.id) });
+    }
+
+    if (row.wallet_kind === 'real') {
+      for (const player of players) {
+        const hold = await this.env.DB.prepare(`SELECT amount_santim FROM wallet_transactions
+          WHERE idempotency_key = ? AND wallet_kind = 'real'`).bind(`public-room-entry:${row.code}:${player.seat}`).first<{ amount_santim: number }>();
+        if (!hold || hold.amount_santim !== -player.reserved_units || player.reserved_units !== row.entry_credits * 100) {
+          return reply({ error: 'The entry-fund record is incomplete; settlement is held for reconciliation.' }, 503);
+        }
+      }
+      const payoutSantim = calculated.payoutTenths * 10;
+      const payouts = winner === 'draw'
+        ? players.map((player) => ({ player, amount: Math.floor(payoutSantim / players.length) + (player.seat === 0 ? payoutSantim % players.length : 0) }))
+        : players.map((player) => ({ player, amount: player.seat === winner ? payoutSantim : 0 }));
+      for (const payout of payouts) {
+        if (payout.amount && !(await this.creditWallet(payout.player.user_id, payout.amount, 'match_payout', `public-room-payout:${row.code}:${payout.player.user_id}`, input.matchId))) {
+          return reply({ error: 'The result is verified, but its wallet payout is pending reconciliation.' }, 503);
+        }
+      }
+    }
     const settled = this.state.storage.transactionSync(() => {
       const current = this.roomRow(row.id);
-      if (!current || current.status !== 'IN_PROGRESS') return current?.status === 'COMPLETED' ? 'already' : 'closed';
-      if (winner === 'draw') {
-        let distributed = 0;
-        for (const player of players) {
-          const units = Math.floor(calculated.payoutTenths / players.length) + (player.seat === 0 ? calculated.payoutTenths % players.length : 0);
-          this.addCredits(player.user_id, units);
-          distributed += units;
-        }
-        if (distributed !== calculated.payoutTenths) throw new Error('Demo payout calculation did not balance.');
-      } else {
-        const recipient = players.find((player) => player.seat === winner);
-        if (!recipient) throw new Error('Match winner does not have a room seat.');
-        this.addCredits(recipient.user_id, calculated.payoutTenths);
-      }
+      if (!current || current.status === 'COMPLETED') return false;
+      if (current.status !== 'SETTLING') return false;
       this.state.storage.sql.exec(`UPDATE public_rooms SET status = 'COMPLETED', pool_tenths = ?, fee_tenths = ?,
-        payout_tenths = ?, winner = ?, settled_at = ? WHERE id = ? AND status = 'IN_PROGRESS'`,
+        payout_tenths = ?, winner = ?, settled_at = ? WHERE id = ? AND status = 'SETTLING'`,
         calculated.poolTenths, calculated.feeTenths, calculated.payoutTenths, winner === 'draw' ? -1 : winner, Date.now(), row.id);
       this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ?', row.id);
-      this.recordEvent(row.id, null, 'DEMO_MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, feeTenths: calculated.feeTenths, payoutTenths: calculated.payoutTenths, commissionBps: row.commission_bps });
-      return 'settled';
+      this.recordEvent(row.id, null, 'MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, feeTenths: calculated.feeTenths, payoutTenths: calculated.payoutTenths, commissionBps: row.commission_bps, walletKind: row.wallet_kind });
+      return true;
     });
-    if (settled === 'closed') return reply({ error: 'Room was closed before settlement.' }, 409);
-    await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
+    if (!settled && this.roomRow(row.id)?.status !== 'COMPLETED') return reply({ error: 'Settlement is pending reconciliation.' }, 503);
+    if (row.wallet_kind === 'real') await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
     this.broadcast();
-    return reply({ settled: settled === 'settled', alreadySettled: settled === 'already', room: this.roomView(row.id) });
+    return reply({ settled, alreadySettled: !settled, room: this.roomView(row.id) });
   }
 
-  private async recordAgentWeeklyActivity(row: RoomRow, players: PlayerRow[], winner: number | 'draw', calculated: ReturnType<typeof calculateDemoSettlement>, matchId: string): Promise<void> {
+  private async recordAgentWeeklyActivity(row: RoomRow, players: PlayerRow[], winner: number | 'draw', calculated: ReturnType<typeof calculateSettlement>, matchId: string): Promise<void> {
     if (players.length !== row.capacity || players.length !== 2) return;
     const [referrals, match] = await Promise.all([
       this.env.DB.prepare(`SELECT r.agent_id, r.referred_user_id, r.created_at FROM referrals r
@@ -480,24 +518,25 @@ export class Matchmaker {
     return this.refundVoidedMatch(row.id, input.matchId);
   }
 
-  private refundVoidedMatch(roomId: string, matchId: string): Response {
-    const refunded = this.state.storage.transactionSync(() => {
+  private async refundVoidedMatch(roomId: string, matchId: string): Promise<Response> {
+    const cancelled = this.state.storage.transactionSync(() => {
       const current = this.roomRow(roomId);
       if (!current || current.match_id !== matchId) return false;
       if (current.status === 'CANCELLED') return true;
       if (current.status !== 'IN_PROGRESS') return false;
-      this.refundRoom(roomId);
       this.state.storage.sql.exec("UPDATE public_rooms SET status = 'CANCELLED' WHERE id = ? AND status = 'IN_PROGRESS'", roomId);
-      this.recordEvent(roomId, null, 'MATCH_VOIDED_DEMO_CREDITS_RETURNED', { matchId });
+      this.recordEvent(roomId, null, 'MATCH_VOIDED_REFUND_STARTED', { matchId });
       return true;
     });
-    if (!refunded) return reply({ error: 'Public match is no longer eligible for a demo-credit refund.' }, 409);
+    if (!cancelled) return reply({ error: 'Public match is no longer eligible for a refund.' }, 409);
+    const refunded = await this.refundRoom(roomId);
     this.broadcast();
+    if (!refunded) return reply({ error: 'The match was voided, but its wallet refund is pending reconciliation.' }, 503);
     return reply({ refunded: true, room: this.roomView(roomId) });
   }
 
   private async reconcile(): Promise<Response> {
-    const rows = this.state.storage.sql.exec<{ id: string; match_id: string }>("SELECT id, match_id FROM public_rooms WHERE status = 'IN_PROGRESS' AND match_id IS NOT NULL ORDER BY created_at LIMIT 100").toArray();
+    const rows = this.state.storage.sql.exec<{ id: string; match_id: string }>("SELECT id, match_id FROM public_rooms WHERE status IN ('IN_PROGRESS','SETTLING') AND match_id IS NOT NULL ORDER BY created_at LIMIT 100").toArray();
     let settled = 0;
     for (const row of rows) {
       const result = await this.settle(new Request('https://market/settle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: row.id, matchId: row.match_id }) }));
@@ -507,7 +546,7 @@ export class Matchmaker {
       }
     }
     const pendingAgentRows = await this.env.DB.prepare(`SELECT m.room_id AS id, m.id AS match_id FROM matches m
-      JOIN game_rooms g ON g.id = m.room_id AND g.is_public = 1
+      JOIN game_rooms g ON g.id = m.room_id AND g.is_public = 1 AND g.wallet_kind = 'real'
       JOIN match_players p ON p.match_id = m.id
       JOIN referrals r ON r.referred_user_id = p.user_id
       WHERE m.status = 'completed' AND NOT EXISTS (SELECT 1 FROM agent_weekly_activity w WHERE w.match_id = m.id)
@@ -515,7 +554,11 @@ export class Matchmaker {
     for (const row of pendingAgentRows.results) {
       await this.settle(new Request('https://market/settle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: row.id, matchId: row.match_id }) }));
     }
-    return reply({ checked: rows.length, settled });
+    const refunds = this.state.storage.sql.exec<{ id: string }>(`SELECT DISTINCT r.id FROM public_rooms r
+      JOIN public_room_players p ON p.room_id = r.id WHERE r.status IN ('CANCELLED','EXPIRED') AND p.reserved_units > 0 LIMIT 100`).toArray();
+    let refunded = 0;
+    for (const room of refunds) if (await this.refundRoom(room.id)) refunded++;
+    return reply({ checked: rows.length, settled, refundsChecked: refunds.length, refundsReturned: refunded });
   }
 
   private async adminRooms(gameId: string | null): Promise<Response> {
@@ -524,21 +567,21 @@ export class Matchmaker {
     const params = gameId ? [gameId] : [];
     const rows = this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms ${filter} ORDER BY created_at DESC LIMIT 100`, ...params).toArray();
     const stats = this.state.storage.sql.exec<{ status: PublicStatus; count: number; volume: number; fees: number; players: number }>(`SELECT status, COUNT(*) AS count,
-      SUM(CASE WHEN status = 'COMPLETED' THEN pool_tenths ELSE 0 END) AS volume,
-      SUM(CASE WHEN status = 'COMPLETED' THEN fee_tenths ELSE 0 END) AS fees,
+      SUM(CASE WHEN status = 'COMPLETED' AND wallet_kind = 'real' THEN pool_tenths ELSE 0 END) AS volume,
+      SUM(CASE WHEN status = 'COMPLETED' AND wallet_kind = 'real' THEN fee_tenths ELSE 0 END) AS fees,
       SUM(player_count) AS players FROM public_rooms ${filter} GROUP BY status`, ...params).toArray();
-    const counts: Record<string, number> = { total: 0, active: 0, waiting: 0, full: 0, inProgress: 0, completed: 0, cancelled: 0, expired: 0, simulatedVolumeCredits: 0, simulatedCommissionCredits: 0, averagePlayers: 0 };
+    const counts: Record<string, number> = { total: 0, active: 0, waiting: 0, full: 0, inProgress: 0, completed: 0, cancelled: 0, expired: 0, realVolumeEtb: 0, realCommissionEtb: 0, averagePlayers: 0 };
     for (const stat of stats) {
       counts.total += stat.count;
       if (stat.status === 'WAITING') counts.waiting = stat.count;
       if (stat.status === 'FULL') counts.full = stat.count;
-      if (stat.status === 'IN_PROGRESS' || stat.status === 'STARTING') counts.inProgress += stat.count;
+      if (stat.status === 'IN_PROGRESS' || stat.status === 'STARTING' || stat.status === 'SETTLING') counts.inProgress += stat.count;
       if (stat.status === 'COMPLETED') counts.completed = stat.count;
       if (stat.status === 'CANCELLED') counts.cancelled = stat.count;
       if (stat.status === 'EXPIRED') counts.expired = stat.count;
-      if (['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS'].includes(stat.status)) counts.active += stat.count;
-      counts.simulatedVolumeCredits += credits(stat.volume || 0);
-      counts.simulatedCommissionCredits += credits(stat.fees || 0);
+      if (['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING'].includes(stat.status)) counts.active += stat.count;
+      counts.realVolumeEtb += credits(stat.volume || 0);
+      counts.realCommissionEtb += credits(stat.fees || 0);
     }
     const totalPlayers = stats.reduce((sum, item) => sum + item.players, 0);
     counts.averagePlayers = counts.total ? Math.round((totalPlayers / counts.total) * 100) / 100 : 0;
@@ -611,9 +654,9 @@ export class Matchmaker {
     if (!Number.isSafeInteger(userId) || userId <= 0) return null;
     const row = gameId && isMarketplaceGame(gameId)
       ? this.state.storage.sql.exec<{ room_id: string }>(`SELECT p.room_id FROM public_room_players p JOIN public_rooms r ON r.id = p.room_id
-        WHERE p.user_id = ? AND r.game_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId, gameId).toArray()[0]
+        WHERE p.user_id = ? AND r.game_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId, gameId).toArray()[0]
       : this.state.storage.sql.exec<{ room_id: string }>(`SELECT p.room_id FROM public_room_players p JOIN public_rooms r ON r.id = p.room_id
-        WHERE p.user_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId).toArray()[0];
+        WHERE p.user_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId).toArray()[0];
     return row ? this.roomViewForUser(row.room_id, userId) : null;
   }
 
@@ -625,20 +668,20 @@ export class Matchmaker {
     const row = this.roomRow(id);
     if (!row) return null;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', id).toArray();
-    const expected = calculateDemoSettlement(row.entry_credits, row.capacity, row.commission_bps);
+    const expected = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, row.capacity, row.commission_bps) : { poolTenths: 0, feeTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     let options: Record<string, unknown> = {};
     try { options = JSON.parse(row.options_json) as Record<string, unknown>; } catch { /* Keep malformed stored options out of the response. */ }
     return {
       id: row.id, code: row.code, gameId: row.game_id, creatorName: row.creator_name,
       creatorAvatar: (row.creator_name.trim()[0] || 'P').toUpperCase(),
       players: players.map((player) => ({ name: player.display_name, avatar: (player.display_name.trim()[0] || 'P').toUpperCase(), seat: player.seat })),
-      playerCount: row.player_count, capacity: row.capacity, entryCredits: row.entry_credits,
+      playerCount: row.player_count, capacity: row.capacity, entryCredits: row.wallet_kind === 'demo' ? 0 : row.entry_credits,
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
       feeCredits: credits(row.status === 'COMPLETED' ? row.fee_tenths : expected.feeTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),
       commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? `Classic · ${Number(options.crownTarget) || 4} ${Number(options.crownTarget) === 1 ? 'crown' : 'crowns'}` : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
       options, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at,
-      matchId: row.match_id, winner: row.winner === -1 ? null : row.winner,
+      matchId: row.match_id, winner: row.winner === -1 ? null : row.winner, walletKind: row.wallet_kind,
     };
   }
 
@@ -653,13 +696,6 @@ export class Matchmaker {
     return Boolean(this.state.storage.sql.exec('SELECT 1 FROM public_room_players WHERE room_id = ? AND user_id = ?', roomId, userId).toArray().length);
   }
 
-  private setStatus(roomId: string, status: PublicStatus, event: string, actor: number | null, payload: unknown): void {
-    this.state.storage.transactionSync(() => {
-      this.state.storage.sql.exec('UPDATE public_rooms SET status = ? WHERE id = ?', status, roomId);
-      this.recordEvent(roomId, actor, event, payload);
-    });
-  }
-
   private recordEvent(roomId: string, actor: number | null, event: string, payload: unknown): void {
     this.state.storage.sql.exec('INSERT INTO public_room_events (room_id, actor_user_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)', roomId, actor, event, JSON.stringify(payload), Date.now());
   }
@@ -668,27 +704,34 @@ export class Matchmaker {
     this.state.storage.sql.exec('INSERT INTO marketplace_admin_audit (admin_user_id, action, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)', adminId, action, entityId, JSON.stringify(payload), Date.now());
   }
 
-  private addCredits(userId: number, units: number): void {
-    this.state.storage.sql.exec('UPDATE demo_credit_accounts SET balance_tenths = balance_tenths + ?, updated_at = ? WHERE user_id = ?', units, Date.now(), userId);
-  }
-
-  private refundRoom(roomId: string): void {
+  private async refundRoom(roomId: string): Promise<boolean> {
+    const room = this.roomRow(roomId);
+    if (!room) return false;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? AND reserved_units > 0', roomId).toArray();
-    for (const player of players) this.addCredits(player.user_id, player.reserved_units);
-    this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ?', roomId);
-    if (players.length) this.recordEvent(roomId, null, 'DEMO_CREDITS_RETURNED', { players: players.length, units: players.reduce((sum, player) => sum + player.reserved_units, 0) });
+    for (const player of players) {
+      if (room.wallet_kind === 'real' && !(await this.refundWallet(player.user_id, player.reserved_units, `public-room-entry:${room.code}:${player.seat}`, room.code))) {
+        this.recordEvent(roomId, null, 'WALLET_REFUND_PENDING', { userId: player.user_id, seat: player.seat });
+        return false;
+      }
+      this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ? AND user_id = ? AND reserved_units = ?', roomId, player.user_id, player.reserved_units);
+    }
+    if (players.length) this.recordEvent(roomId, null, room.wallet_kind === 'real' ? 'WALLET_FUNDS_RETURNED' : 'LEGACY_PREVIEW_ROOM_CLOSED', { players: players.length });
+    return true;
   }
 
   private async cancelBySystem(roomId: string, reason: string, cancelGameRoom = true): Promise<void> {
     const row = this.roomRow(roomId);
     if (!row) return;
-    this.state.storage.transactionSync(() => {
+    const shouldClose = this.state.storage.transactionSync(() => {
       const current = this.roomRow(roomId);
-      if (!current || ['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(current.status)) return;
-      this.refundRoom(roomId);
+      if (!current || current.status === 'COMPLETED' || current.status === 'SETTLING') return false;
+      if (current.status === 'CANCELLED' || current.status === 'EXPIRED') return true;
       this.state.storage.sql.exec("UPDATE public_rooms SET status = 'CANCELLED' WHERE id = ?", roomId);
       this.recordEvent(roomId, null, 'ROOM_CANCELLED_BY_SYSTEM', { reason });
+      return true;
     });
+    if (!shouldClose) return;
+    if (!(await this.refundRoom(roomId))) this.recordEvent(roomId, null, 'WALLET_REFUND_PENDING', { reason });
     if (cancelGameRoom) await this.cancelGameRoom(row.code);
     this.broadcast();
   }
@@ -696,13 +739,15 @@ export class Matchmaker {
   private async expireRoom(roomId: string): Promise<void> {
     const row = this.roomRow(roomId);
     if (!row) return;
-    this.state.storage.transactionSync(() => {
+    const expired = this.state.storage.transactionSync(() => {
       const current = this.roomRow(roomId);
-      if (!current || current.status !== 'WAITING' || current.expires_at > Date.now()) return;
-      this.refundRoom(roomId);
+      if (!current || current.status !== 'WAITING' || current.expires_at > Date.now()) return current?.status === 'EXPIRED';
       this.state.storage.sql.exec("UPDATE public_rooms SET status = 'EXPIRED' WHERE id = ?", roomId);
       this.recordEvent(roomId, null, 'ROOM_EXPIRED', {});
+      return true;
     });
+    if (!expired) return;
+    if (!(await this.refundRoom(roomId))) this.recordEvent(roomId, null, 'WALLET_REFUND_PENDING', { reason: 'ROOM_EXPIRED' });
     await this.cancelGameRoom(row.code);
     await this.scheduleAlarm();
     this.broadcast();

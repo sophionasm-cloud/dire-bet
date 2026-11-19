@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { calculateDemoSettlement, DEFAULT_MARKETPLACE_SETTINGS, parseEntryChoice, parseLudoRoomOptions, validateMarketplaceSettings } from './marketplace';
+import { calculateSettlement, DEFAULT_MARKETPLACE_SETTINGS, parseEntryChoice, parseLudoRoomOptions, validateMarketplaceSettings } from './marketplace';
 
-describe('public room demo entry rules', () => {
-  it.each([10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000])('accepts standard demo entry %i', (amount) => {
+describe('public room entry rules', () => {
+  it.each([10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000])('accepts standard entry %i ETB', (amount) => {
     expect(parseEntryChoice({ kind: 'standard', amount }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(amount);
   });
 
@@ -18,7 +18,7 @@ describe('public room demo entry rules', () => {
     expect(parseEntryChoice({ kind: 'standard', amount: 150 }, DEFAULT_MARKETPLACE_SETTINGS)).toBeNull();
   });
 
-  it('allows FREE without reserving demo credits', () => {
+  it('allows FREE without reserving wallet funds', () => {
     expect(parseEntryChoice({ kind: 'free' }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(0);
   });
 
@@ -34,12 +34,13 @@ describe('public room demo entry rules', () => {
     expect(parseLudoRoomOptions({ player0Color: 'green', crownTarget: 3 })).toBeNull();
   });
 
-  it('uses one simulated 10% fee for a completed two-player pool', () => {
-    expect(calculateDemoSettlement(50, 2, 1000)).toEqual({ poolTenths: 1000, feeTenths: 100, payoutTenths: 900, perWinnerTenths: 450 });
+  it('calculates real money in ETB tenths and santim conversion units', () => {
+    expect(calculateSettlement(50, 2, 0)).toEqual({ poolTenths: 1000, feeTenths: 0, payoutTenths: 1000, perWinnerTenths: 500 });
+    expect(calculateSettlement(50, 2, 1000).payoutTenths * 10).toBe(9_000);
   });
 
-  it('calculates four-player demo pools with one fee', () => {
-    expect(calculateDemoSettlement(20, 4, 1000)).toEqual({ poolTenths: 800, feeTenths: 80, payoutTenths: 720, perWinnerTenths: 180 });
+  it('calculates a commission only once from the complete pool', () => {
+    expect(calculateSettlement(20, 4, 1000)).toEqual({ poolTenths: 800, feeTenths: 80, payoutTenths: 720, perWinnerTenths: 180 });
   });
 
   it('rejects malformed administrator settings', () => {

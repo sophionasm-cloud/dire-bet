@@ -14,16 +14,16 @@ type Props = {
   onExit: () => void;
 };
 type MarketState = { type: 'market'; rooms: MarketplaceRoom[]; ownRoom: MarketplaceRoom | null; serverTime: number };
-type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balanceCredits?: number; settings?: MarketplaceSettings };
+type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balance?: number; settings?: MarketplaceSettings };
 
-const defaultSettings: MarketplaceSettings = { standardAmounts: [10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000], customEnabled: true, customMaximum: 1000, commissionBps: 1000, waitingSeconds: 30, startingCredits: 1000 };
+const defaultSettings: MarketplaceSettings = { standardAmounts: [], customEnabled: false, customMaximum: 1000, commissionBps: 0, waitingSeconds: 30, realMoneyEnabled: false };
 
 export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom, onPractice, onExit }: Props) {
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [balance, setBalance] = useState<number | null>(null);
-  const [entry, setEntry] = useState<number | 'free'>(100);
+  const [entry, setEntry] = useState<number | 'free'>('free');
   const [customAmount, setCustomAmount] = useState('150');
   const [crownTarget, setCrownTarget] = useState<1 | 2 | 4>(1);
   const [player0Color, setPlayer0Color] = useState<'yellow'|'green'>('yellow');
@@ -61,12 +61,12 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       if (token) {
         const [configResult, balanceResult, ownResult] = await Promise.allSettled([
           fetch('/api/public-rooms/config').then((response) => response.json() as Promise<MarketplaceSettings>),
-          fetch('/api/public-rooms/balance', { headers }).then(async (response) => response.ok ? await response.json() as { balanceCredits: number } : null),
+          fetch('/api/public-rooms/balance', { headers }).then(async (response) => response.ok ? await response.json() as { balance: number } : null),
           fetch(`/api/public-rooms/mine?gameId=${gameId}`, { headers }).then((response) => response.json() as Promise<{ room?: MarketplaceRoom | null }>),
         ]);
         if (!live) return;
         if (configResult.status === 'fulfilled') setSettings(configResult.value);
-        if (balanceResult.status === 'fulfilled' && balanceResult.value) setBalance(balanceResult.value.balanceCredits);
+        if (balanceResult.status === 'fulfilled' && balanceResult.value) setBalance(balanceResult.value.balance);
         if (ownResult.status === 'fulfilled' && ownResult.value.room) {
           setActiveRoom(ownResult.value.room);
           setRooms((current) => current.filter((room) => room.id !== ownResult.value.room?.id));
@@ -141,21 +141,21 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
       requestKey.current = crypto.randomUUID();
-      setActiveRoom(result.room); setBalance(result.balanceCredits ?? balance);
+      setActiveRoom(result.room); setBalance(result.balance ?? balance);
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
     finally { setBusy(false); }
   };
 
   const join = async (room: MarketplaceRoom) => {
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
-    const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('marketDemoCredits')}`;
+    const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ETB`;
     if (!window.confirm(t('marketJoinConfirm').replace('{game}', gameTitle(room.gameId)).replace('{amount}', entryLabel))) return;
     setBusy(true); setMessage('');
     try {
       const response = await fetch(`/api/public-rooms/${room.code}/join`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
-      setActiveRoom(result.room); setBalance(result.balanceCredits ?? balance);
+      setActiveRoom(result.room); setBalance(result.balance ?? balance);
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
     finally { setBusy(false); }
   };

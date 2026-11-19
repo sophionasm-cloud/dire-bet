@@ -1,6 +1,6 @@
 import type { GameId } from '@dire-bet/shared';
 
-export type PublicRoomStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
+export type PublicRoomStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'SETTLING' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
 export type MarketplaceRoom = {
   id: string;
   code: string;
@@ -22,6 +22,7 @@ export type MarketplaceRoom = {
   expiresAt: number;
   matchId: string | null;
   winner: number | null;
+  walletKind: 'demo' | 'real' | 'free';
   viewerSeat?: number;
   viewerIsCreator?: boolean;
 };
@@ -32,7 +33,7 @@ export type MarketplaceSettings = {
   customMaximum: number;
   commissionBps: number;
   waitingSeconds: number;
-  startingCredits: number;
+  realMoneyEnabled?: boolean;
 };
 
 export type RoomConfig = { code: string; ticket: string; gameId: GameId; publicRoom?: MarketplaceRoom };
