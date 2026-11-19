@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { winningLine, type XOState } from '@dire-bet/engines/xo';
 import { type LudoState } from '@dire-bet/engines/ludo';
-import type { DominoAction, DominoesState, Tile } from '@dire-bet/engines/dominoes';
+import type { CheckersState } from '@dire-bet/engines/checkers';
 import { viewPoker, type Card, type PokerAction, type Suit } from '@dire-bet/engines/poker';
 import type { GameId } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 import type { RoomConfig } from './marketplaceTypes';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
 import { LudoDie, useLudoTurnClock } from './LudoDie';
+import { CheckersRoom, type CheckersSnapshot } from './CheckersRoom';
 
 export type { RoomConfig } from './marketplaceTypes';
 
 type Translator = (key: TranslationKey) => string;
 type Props = { t: Translator; token: string | null };
 type RoomPlayer = { id: number; name: string; mark: 'X' | 'O' | null; online: boolean };
-type DominoPublic = Omit<DominoesState, 'hands'> & { hands: [Tile[] | number, Tile[] | number] };
 type PokerPublic = ReturnType<typeof viewPoker>;
-type RoomGame = XOState | LudoState | DominoPublic | PokerPublic;
-type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; publicRoom?: { id: string; entryCredits: number; commissionBps: number; options: Record<string, unknown> } };
+type RoomGame = XOState | LudoState | CheckersState | PokerPublic;
+type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' } | null; drawOfferBy?: number | null; publicRoom?: { id: string; entryCredits: number; commissionBps: number; options: Record<string, unknown> } };
 type ApiResult = { code?: string; ticket?: string; gameId?: GameId; error?: string };
 
 export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: RoomConfig) => void }) {
@@ -40,7 +40,7 @@ export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: Roo
   const join = (event: FormEvent) => { event.preventDefault(); const value = code.trim().toUpperCase(); if (value) void requestRoom(`/api/rooms/${encodeURIComponent(value)}/join`, {}); };
   return <section className="screen online-matches">
     <span className="eyebrow">{t('onlineMatches')}</span><h1>{t('matchesTitle')}</h1><p>{t('matchesHelp')}</p>
-    <label className="online-game-select"><span>{t('chooseGame')}</span><select value={gameId} onChange={(event) => setGameId(event.target.value as GameId)}><option value="xo">XO</option><option value="ludo">Ludo</option><option value="dominoes">Dominoes</option><option value="poker">Texas Hold’em</option></select></label>
+    <label className="online-game-select"><span>{t('chooseGame')}</span><select value={gameId} onChange={(event) => setGameId(event.target.value as GameId)}><option value="xo">XO</option><option value="ludo">Ludo</option><option value="checkers">Checkers</option><option value="poker">Texas Hold’em</option></select></label>
     <div className="online-game-card"><div className="online-xo-mark">{gameSymbol(gameId)}</div><div><strong>{gameTitle(gameId)}</strong><small>{t('freeRoomNotice')}</small></div></div>
     <button className="primary-button wide" disabled={busy || !token} onClick={() => void create()}>{busy ? t('onlineConnecting') : t('createPrivateRoom')}<span>＋</span></button>
     {!token && <p className="online-hint">{t('onlineRequiresTelegram')}</p>}
@@ -99,6 +99,20 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   const statusText = snapshot?.status === 'waiting' ? t('waitingForPlayer') : snapshot?.status === 'active' ? (isMyTurn(snapshot) ? t('yourTurn') : t('opponent')) : '';
   const clockGame = snapshot?.gameId === 'ludo' ? snapshot.game as LudoState : null;
   const turnSeconds = useLudoTurnClock(clockGame ? `${clockGame.turn}-${clockGame.lastEvent}-${clockGame.lastMove?.player ?? ''}-${clockGame.lastMove?.token ?? ''}` : 'inactive');
+  if (room.gameId === 'checkers') {
+    const checkersSnapshot: CheckersSnapshot | null = snapshot && snapshot.gameId === 'checkers' ? {
+      code: snapshot.code,
+      status: snapshot.status,
+      players: snapshot.players,
+      game: snapshot.game as CheckersState,
+      seat: snapshot.seat,
+      matchId: snapshot.matchId ?? null,
+      terminal: snapshot.terminal ?? null,
+      drawOfferBy: snapshot.drawOfferBy ?? null,
+      publicRoom: snapshot.publicRoom,
+    } : null;
+    return <CheckersRoom snapshot={checkersSnapshot} room={room} connection={connection} error={error} t={t} send={send} onReconnect={() => void reconnect()} onExit={onExit} onCopy={() => void copy()} onShare={() => void share()} />;
+  }
   if (snapshot?.gameId === 'ludo' && snapshot.publicRoom) {
     const state = snapshot.game as LudoState;
     const roomMeta = snapshot.publicRoom;
@@ -137,7 +151,6 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       <div className="online-game-status" aria-live="polite">{statusText}</div>
       {snapshot.gameId === 'xo' && <XOBoard game={snapshot.game as XOState} enabled={isMyTurn(snapshot)} winning={winning} onMove={(index) => send({ type: 'move', index })} />}
       {snapshot.gameId === 'ludo' && <OnlineLudo game={snapshot.game as LudoState} seat={snapshot.seat} playerZeroColor={snapshot.publicRoom?.options.player0Color === 'white' ? 'white' : 'blue'} t={t} send={send} />}
-      {snapshot.gameId === 'dominoes' && <OnlineDominoes game={snapshot.game as DominoPublic} seat={snapshot.seat} t={t} send={send} />}
       {snapshot.gameId === 'poker' && <OnlinePoker game={snapshot.game as PokerPublic} seat={snapshot.seat} t={t} send={send} />}
     </>}
     {snapshot?.status === 'finished' && <div className="practice-result"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
@@ -176,20 +189,6 @@ function LudoPlayerPanel({ player, seat, color, active, own, finished, seconds, 
   </article>;
 }
 
-function OnlineDominoes({ game, seat, t, send }: { game: DominoPublic; seat: number; t: Translator; send: (payload: unknown) => void }) {
-  const handValue = game.hands[seat]; const hand = Array.isArray(handValue) ? handValue : [];
-  const placement = hand.flatMap((tile, index) => legalTileActions(tile, index, game.chain));
-  const canPlay = game.status === 'playing' && game.turn === seat;
-  const blocked = placement.length === 0;
-  return <>
-    <div className="table-score"><span>{t('gameScore')}</span><strong>{game.scores[seat]} <i>:</i> {game.scores[seat === 0 ? 1 : 0]}</strong><small>{t('roundNumber')} {game.round}</small></div>
-    <div className="domino-chain">{game.chain.length ? game.chain.map((tile, index) => <DominoTile tile={tile} key={`${index}-${tile[0]}-${tile[1]}`}/>) : <span className="chain-empty">{t('yourTurn')}</span>}</div>
-    {canPlay && blocked && <div className="domino-actions">{game.boneyard.length > 0 ? <button className="secondary-button" onClick={() => send({ type: 'action', action: { type: 'draw' } satisfies DominoAction })}>{t('drawTile')} ＋</button> : <button className="secondary-button" onClick={() => send({ type: 'action', action: { type: 'pass' } satisfies DominoAction })}>{t('passTurn')} →</button>}</div>}
-    {canPlay && <><h2 className="practice-section-title">{t('yourTiles')}</h2><div className="domino-hand">{hand.map((tile, index) => { const choices = placement.filter((action) => action.tile === index); return <div className="domino-hand-item" key={`${index}-${tile[0]}-${tile[1]}`}><DominoTile tile={tile}/><div>{choices.map((action) => <button key={`${action.end}-${action.flip}`} onClick={() => send({ type: 'action', action })}>{action.end === 'left' ? `← ${t('placeLeft')}` : `${t('placeRight')} →`}</button>)}</div></div>; })}</div></>}
-    {game.status !== 'playing' && <div className="practice-result"><strong>{game.status === 'finished' ? (game.winner === seat ? t('gameWinTitle') : t('gameLossTitle')) : game.roundWinner === null ? t('blockedRound') : game.roundWinner === seat ? t('gameWinTitle') : t('gameLossTitle')}</strong>{game.status === 'between-rounds' && <button className="primary-button" onClick={() => send({ type: 'next-round' })}>{t('nextRound')} →</button>}</div>}
-  </>;
-}
-
 function OnlinePoker({ game, seat, t, send }: { game: PokerPublic; seat: number; t: Translator; send: (payload: unknown) => void }) {
   const player = game.players[seat]; const opponent = game.players[seat === 0 ? 1 : 0];
   const call = Math.max(0, game.currentBet - game.bets[seat]);
@@ -211,36 +210,26 @@ function isMyTurn(snapshot: RoomSnapshot): boolean {
   if (snapshot.status !== 'active') return false;
   if (snapshot.gameId === 'xo') return snapshot.you !== null && (snapshot.game as XOState).turn === snapshot.you && (snapshot.game as XOState).winner === null;
   if (snapshot.gameId === 'ludo') return (snapshot.game as LudoState).turn === snapshot.seat && (snapshot.game as LudoState).winner === null;
-  if (snapshot.gameId === 'dominoes') return (snapshot.game as DominoPublic).turn === snapshot.seat && (snapshot.game as DominoPublic).status === 'playing';
+  if (snapshot.gameId === 'checkers') return (snapshot.game as CheckersState).turn === snapshot.seat && (snapshot.game as CheckersState).winner === null;
   return (snapshot.game as PokerPublic).turn === snapshot.seat;
 }
 
 function isFinished(id: GameId, state: RoomGame): boolean {
   if (id === 'xo') return (state as XOState).winner !== null;
   if (id === 'ludo') return (state as LudoState).winner !== null;
-  if (id === 'dominoes') return (state as DominoPublic).status === 'finished';
+  if (id === 'checkers') return (state as CheckersState).winner !== null;
   const poker = state as PokerPublic; return poker.street === 'showdown' || poker.street === 'folded';
 }
 
 function resultCopy(id: GameId, state: RoomGame, seat: number, you: 'X'|'O'|null, t: Translator): string {
   if (id === 'xo') { const winner = (state as XOState).winner; return winner === 'draw' ? t('gameSplitTitle') : winner ? winner === you ? t('gameWinTitle') : t('gameLossTitle') : ''; }
   if (id === 'ludo') return (state as LudoState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
-  if (id === 'dominoes') return (state as DominoPublic).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
+  if (id === 'checkers') return (state as CheckersState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
   const winner = (state as PokerPublic).winner; return winner === 'split' ? t('gameSplitTitle') : winner === seat ? t('gameWinTitle') : t('gameLossTitle');
 }
 
-function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Dominoes'; }
-function gameSymbol(id: GameId): string { return id === 'xo' ? '× ○' : id === 'ludo' ? '⚄' : id === 'dominoes' ? '▥' : '♠'; }
-
-function legalTileActions(tile: Tile, index: number, chain: Tile[]): Extract<DominoAction, { type: 'place' }>[] {
-  if (!chain.length) return [{ type: 'place', tile: index, end: 'right', flip: false }];
-  const actions: Extract<DominoAction, { type: 'place' }>[] = []; const left = chain[0][0]; const right = chain[chain.length - 1][1];
-  if (tile[0] === left) actions.push({ type: 'place', tile: index, end: 'left', flip: false });
-  if (tile[1] === left && tile[0] !== tile[1]) actions.push({ type: 'place', tile: index, end: 'left', flip: true });
-  if (tile[0] === right) actions.push({ type: 'place', tile: index, end: 'right', flip: false });
-  if (tile[1] === right && tile[0] !== tile[1]) actions.push({ type: 'place', tile: index, end: 'right', flip: true });
-  return actions;
-}
+function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }
+function gameSymbol(id: GameId): string { return id === 'xo' ? '× ○' : id === 'ludo' ? '⚄' : id === 'checkers' ? '♛' : '♠'; }
 
 function ringPoint(index: number): React.CSSProperties { const angle = -Math.PI / 2 + (Math.PI * 2 * index) / 52; return { left: `${50 + Math.cos(angle) * 38}%`, top: `${50 + Math.sin(angle) * 38}%` }; }
 function tokenPoint(position: number, token: number, player: 0 | 1): React.CSSProperties {
@@ -249,7 +238,6 @@ function tokenPoint(position: number, token: number, player: 0 | 1): React.CSSPr
   return { left: `${50 + Math.cos(angle) * radius}%`, top: `${50 + Math.sin(angle) * radius}%` };
 }
 
-function DominoTile({ tile }: { tile: Tile }) { return <span className="domino-tile" aria-label={`${tile[0]}-${tile[1]}`}><i>{tile[0]}</i><b/><i>{tile[1]}</i></span>; }
 function PlayingCard({ card }: { card: Card | null }) {
   if (!card) return <span className="playing-card card-back" aria-hidden="true">✦</span>;
   const symbols: Record<Suit, string> = { clubs: '♣', diamonds: '♦', hearts: '♥', spades: '♠' };

@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Wooden checkers board with ivory and graphite pieces">
+  <defs>
+    <radialGradient id="bg" cx="55%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#3a373d"/>
+      <stop offset=".55" stop-color="#242328"/>
+      <stop offset="1" stop-color="#161519"/>
+    </radialGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ad7040"/>
+      <stop offset=".38" stop-color="#945b30"/>
+      <stop offset=".72" stop-color="#7d4a24"/>
+      <stop offset="1" stop-color="#6e3e16"/>
+    </linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8ddba"/>
+      <stop offset=".7" stop-color="#dccfa5"/>
+      <stop offset="1" stop-color="#cfbf90"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a06637"/>
+      <stop offset=".55" stop-color="#945b30"/>
+      <stop offset="1" stop-color="#784620"/>
+    </linearGradient>
+    <radialGradient id="ivory" cx="34%" cy="27%" r="78%">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset=".44" stop-color="#efe4c4"/>
+      <stop offset=".68" stop-color="#e0d2a8"/>
+      <stop offset="1" stop-color="#c3b183"/>
+    </radialGradient>
+    <radialGradient id="graphite" cx="34%" cy="27%" r="78%">
+      <stop offset="0" stop-color="#5f656f"/>
+      <stop offset=".46" stop-color="#3a3e45"/>
+      <stop offset=".68" stop-color="#30343a"/>
+      <stop offset="1" stop-color="#191c20"/>
+    </radialGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e2c58d" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#e2c58d" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000" flood-opacity=".55"/>
+    </filter>
+    <filter id="pieceShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="10" stdDeviation="7" flood-color="#0b0603" flood-opacity=".6"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <ellipse cx="700" cy="250" rx="430" ry="250" fill="url(#glow)"/>
+
+  <g filter="url(#soft)" transform="translate(360 110)">
+    <rect width="620" height="620" rx="34" fill="#57300f" opacity=".55" transform="translate(0 12)"/>
+    <rect width="620" height="620" rx="30" fill="url(#frame)"/>
+    <rect x="5" y="5" width="610" height="610" rx="26" fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="2"/>
+    <rect x="58" y="58" width="504" height="504" rx="8" fill="#5c3312"/>
+    <g transform="translate(62 62)">
+      <g>
+        <rect width="62.5" height="62.5" fill="url(#light)"/><rect x="62.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="125" width="62.5" height="62.5" fill="url(#light)"/><rect x="187.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="250" width="62.5" height="62.5" fill="url(#light)"/><rect x="312.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="375" width="62.5" height="62.5" fill="url(#light)"/><rect x="437.5" width="62.5" height="62.5" fill="url(#dark)"/>
+        <rect y="62.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="62.5" y="62.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="125" y="62.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="187.5" y="62.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="250" y="62.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="312.5" y="62.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="375" y="62.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="437.5" y="62.5" width="62.5" height="62.5" fill="url(#light)"/>
+        <rect y="125" width="62.5" height="62.5" fill="url(#light)"/><rect x="62.5" y="125" width="62.5" height="62.5" fill="url(#dark)"/><rect x="125" y="125" width="62.5" height="62.5" fill="url(#light)"/><rect x="187.5" y="125" width="62.5" height="62.5" fill="url(#dark)"/><rect x="250" y="125" width="62.5" height="62.5" fill="url(#light)"/><rect x="312.5" y="125" width="62.5" height="62.5" fill="url(#dark)"/><rect x="375" y="125" width="62.5" height="62.5" fill="url(#light)"/><rect x="437.5" y="125" width="62.5" height="62.5" fill="url(#dark)"/>
+        <rect y="187.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="62.5" y="187.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="125" y="187.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="187.5" y="187.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="250" y="187.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="312.5" y="187.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="375" y="187.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="437.5" y="187.5" width="62.5" height="62.5" fill="url(#light)"/>
+        <rect y="250" width="62.5" height="62.5" fill="url(#light)"/><rect x="62.5" y="250" width="62.5" height="62.5" fill="url(#dark)"/><rect x="125" y="250" width="62.5" height="62.5" fill="url(#light)"/><rect x="187.5" y="250" width="62.5" height="62.5" fill="url(#dark)"/><rect x="250" y="250" width="62.5" height="62.5" fill="url(#light)"/><rect x="312.5" y="250" width="62.5" height="62.5" fill="url(#dark)"/><rect x="375" y="250" width="62.5" height="62.5" fill="url(#light)"/><rect x="437.5" y="250" width="62.5" height="62.5" fill="url(#dark)"/>
+        <rect y="312.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="62.5" y="312.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="125" y="312.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="187.5" y="312.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="250" y="312.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="312.5" y="312.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="375" y="312.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="437.5" y="312.5" width="62.5" height="62.5" fill="url(#light)"/>
+        <rect y="375" width="62.5" height="62.5" fill="url(#light)"/><rect x="62.5" y="375" width="62.5" height="62.5" fill="url(#dark)"/><rect x="125" y="375" width="62.5" height="62.5" fill="url(#light)"/><rect x="187.5" y="375" width="62.5" height="62.5" fill="url(#dark)"/><rect x="250" y="375" width="62.5" height="62.5" fill="url(#light)"/><rect x="312.5" y="375" width="62.5" height="62.5" fill="url(#dark)"/><rect x="375" y="375" width="62.5" height="62.5" fill="url(#light)"/><rect x="437.5" y="375" width="62.5" height="62.5" fill="url(#dark)"/>
+        <rect y="437.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="62.5" y="437.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="125" y="437.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="187.5" y="437.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="250" y="437.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="312.5" y="437.5" width="62.5" height="62.5" fill="url(#light)"/><rect x="375" y="437.5" width="62.5" height="62.5" fill="url(#dark)"/><rect x="437.5" y="437.5" width="62.5" height="62.5" fill="url(#light)"/>
+      </g>
+      <g filter="url(#pieceShadow)">
+        <g fill="url(#graphite)" stroke="#737981" stroke-width="3">
+          <circle cx="93.75" cy="31.25" r="22"/><circle cx="218.75" cy="31.25" r="22"/><circle cx="343.75" cy="31.25" r="22"/><circle cx="468.75" cy="31.25" r="22"/>
+          <circle cx="31.25" cy="93.75" r="22"/><circle cx="156.25" cy="93.75" r="22"/><circle cx="281.25" cy="93.75" r="22"/><circle cx="406.25" cy="93.75" r="22"/>
+          <circle cx="93.75" cy="156.25" r="22"/><circle cx="218.75" cy="156.25" r="22"/><circle cx="343.75" cy="156.25" r="22"/><circle cx="468.75" cy="156.25" r="22"/>
+        </g>
+        <g fill="url(#ivory)" stroke="#b7a679" stroke-width="3">
+          <circle cx="31.25" cy="406.25" r="22"/><circle cx="156.25" cy="406.25" r="22"/><circle cx="281.25" cy="406.25" r="22"/><circle cx="406.25" cy="406.25" r="22"/>
+          <circle cx="93.75" cy="468.75" r="22"/><circle cx="218.75" cy="468.75" r="22"/><circle cx="343.75" cy="468.75" r="22"/><circle cx="468.75" cy="468.75" r="22"/>
+          <circle cx="31.25" cy="343.75" r="22"/><circle cx="156.25" cy="343.75" r="22"/><circle cx="281.25" cy="343.75" r="22"/><circle cx="406.25" cy="343.75" r="22"/>
+        </g>
+        <g fill="none" stroke="#fff" stroke-opacity=".22">
+          <circle cx="93.75" cy="31.25" r="12"/><circle cx="218.75" cy="31.25" r="12"/><circle cx="343.75" cy="31.25" r="12"/><circle cx="468.75" cy="31.25" r="12"/>
+          <circle cx="31.25" cy="406.25" r="12"/><circle cx="156.25" cy="406.25" r="12"/><circle cx="281.25" cy="406.25" r="12"/><circle cx="406.25" cy="406.25" r="12"/>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <g filter="url(#pieceShadow)" transform="translate(150 620)">
+    <circle cx="0" cy="0" r="78" fill="url(#ivory)" stroke="#b7a679" stroke-width="5"/>
+    <circle cx="0" cy="0" r="50" fill="none" stroke="#8d7b4d" stroke-opacity=".55" stroke-width="2"/>
+    <text x="0" y="20" text-anchor="middle" font-family="Georgia,serif" font-size="56" fill="#b18c3c">♛</text>
+  </g>
+  <g filter="url(#pieceShadow)" transform="translate(1075 185)">
+    <circle cx="0" cy="0" r="64" fill="url(#graphite)" stroke="#737981" stroke-width="5"/>
+    <circle cx="0" cy="0" r="40" fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="2"/>
+  </g>
+</svg>

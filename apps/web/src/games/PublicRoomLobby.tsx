@@ -224,7 +224,7 @@ function WaitingRoom({ room, countdown, busy, onCancel, onBack, t }: { room: Mar
   </section>;
 }
 
-function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Dominoes'; }
-function gameSymbol(id: GameId): string { return id === 'ludo' ? '⚄' : id === 'dominoes' ? '▥' : id === 'poker' ? '♠' : '× ○'; }
-function gameMode(id: GameId): string { return id === 'ludo' ? 'Classic · two players' : id === 'poker' ? 'Heads-up' : id === 'dominoes' ? 'Classic · two players' : 'Classic 3 × 3'; }
+function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }
+function gameSymbol(id: GameId): string { return id === 'ludo' ? '⚄' : id === 'checkers' ? '♛' : id === 'poker' ? '♠' : '× ○'; }
+function gameMode(id: GameId): string { return id === 'ludo' ? 'Classic · two players' : id === 'poker' ? 'Heads-up' : id === 'checkers' ? 'American · two players' : 'Classic 3 × 3'; }
 function formatCredits(amount: number): string { return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(amount); }

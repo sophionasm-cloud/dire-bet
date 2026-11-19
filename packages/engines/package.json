@@ -7,6 +7,7 @@
   "exports": {
     "./xo": "./src/xo.ts",
     "./ludo": "./src/ludo.ts",
+    "./checkers": "./src/checkers.ts",
     "./dominoes": "./src/dominoes.ts",
     "./poker": "./src/poker.ts"
   }

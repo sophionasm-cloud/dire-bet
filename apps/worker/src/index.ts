@@ -1,7 +1,7 @@
 import { PUBLIC_GAMES, TelegramAuthRequestSchema, type GameId } from '@dire-bet/shared';
 import { applyXO, initXO, type Mark, type XOState } from '@dire-bet/engines/xo';
 import { initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
-import { applyDominoAction, newDominoesGame, nextDominoesRound, viewDominoes, type DominoAction, type DominoesState } from '@dire-bet/engines/dominoes';
+import { applyCheckerMove, newCheckersGame, type CheckersState } from '@dire-bet/engines/checkers';
 import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type PokerState } from '@dire-bet/engines/poker';
 import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
@@ -34,10 +34,11 @@ const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_TTL_MS = 15 * 60 * 1000;
 const RECONNECT_GRACE_MS = 60 * 1000;
 
-type RoomGame = 'xo' | 'ludo' | 'dominoes' | 'poker';
-type RoomState = XOState | LudoState | DominoesState | PokerState;
+type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
+type RoomState = XOState | LudoState | CheckersState | PokerState;
 type RoomPlayer = { id: number; name: string; mark: Mark | null; online: boolean };
-type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; commissionBps?: number };
+type RoomTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' };
+type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; commissionBps?: number; terminal?: RoomTerminal; drawOfferBy?: number };
 type RoomTicket = { userId: number; displayName: string; code: string; expiresAt: number };
 
 const securityHeaders = {
@@ -142,34 +143,31 @@ function secureInt(minimum: number, maximum: number): number {
 function createGame(gameId: RoomGame): RoomState {
   if (gameId === 'xo') return initXO();
   if (gameId === 'ludo') return initLudo();
-  if (gameId === 'dominoes') return newDominoesGame(secureRandom);
+  if (gameId === 'checkers') return newCheckersGame(1);
   return initTexasHoldem(secureRandom, [1000, 1000]);
 }
 
 function gameTurn(room: StoredRoom): number | null {
   if (room.gameId === 'xo') return room.players.findIndex((player) => player.mark === (room.game as XOState).turn);
   if (room.gameId === 'ludo') return (room.game as LudoState).turn;
-  if (room.gameId === 'dominoes') return (room.game as DominoesState).turn;
+  if (room.gameId === 'checkers') return (room.game as CheckersState).turn;
   return (room.game as PokerState).turn;
 }
 
 function gameComplete(room: StoredRoom): { done: boolean; winner: number | 'draw' | null } {
+  if (room.terminal) return { done: true, winner: room.terminal.winner };
   if (room.gameId === 'xo') {
     const game = room.game as XOState;
     return { done: game.winner !== null, winner: game.winner === 'draw' ? 'draw' : game.winner ? room.players.findIndex((player) => player.mark === game.winner) : null };
   }
   if (room.gameId === 'ludo') { const game = room.game as LudoState; return { done: game.winner !== null, winner: game.winner }; }
-  if (room.gameId === 'dominoes') { const game = room.game as DominoesState; return { done: game.status === 'finished', winner: game.winner }; }
+  if (room.gameId === 'checkers') { const game = room.game as CheckersState; return { done: game.winner !== null, winner: game.winner }; }
   const game = room.game as PokerState;
   return { done: game.street === 'showdown' || game.street === 'folded', winner: game.winner === 'split' ? 'draw' : game.winner };
 }
 
 function roomAuditView(room: StoredRoom): unknown {
-  if (room.gameId === 'xo' || room.gameId === 'ludo') return room.game;
-  if (room.gameId === 'dominoes') {
-    const { hands, boneyard, ...publicState } = room.game as DominoesState;
-    return { ...publicState, hands: hands.map((hand) => hand.length), boneyardCount: boneyard.length };
-  }
+  if (room.gameId === 'xo' || room.gameId === 'ludo' || room.gameId === 'checkers') return room.game;
   const { deck, players, ...publicState } = room.game as PokerState;
   return { ...publicState, players: players.map(({ stack, invested }) => ({ stack, invested })), deckCount: deck.length };
 }
@@ -241,7 +239,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   if (!(await allowRoomAction(env, userId, 'create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   let body: { gameId?: unknown };
   try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
-  if (body.gameId !== 'xo' && body.gameId !== 'ludo' && body.gameId !== 'dominoes' && body.gameId !== 'poker') return json({ error: 'This game cannot be played online.' }, 409);
+  if (body.gameId !== 'xo' && body.gameId !== 'ludo' && body.gameId !== 'checkers' && body.gameId !== 'poker') return json({ error: 'This game cannot be played online.' }, 409);
   const displayName = await gameDisplayName(env, userId);
   if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
   const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(body.gameId).first<{ enabled: number }>();
@@ -273,7 +271,7 @@ async function joinRoom(request: Request, env: Env, code: string): Promise<Respo
   if (!(await allowRoomAction(env, userId, 'join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   const row = await env.DB.prepare('SELECT id, game_id, status, expires_at FROM game_rooms WHERE code = ?').bind(code.toUpperCase()).first<{ id: string; game_id: string; status: string; expires_at: string | null }>();
   if (!row || (row.expires_at && Date.parse(row.expires_at) < Date.now())) return json({ error: 'Room not found or expired.' }, 404);
-  if (row.game_id !== 'xo' && row.game_id !== 'ludo' && row.game_id !== 'dominoes' && row.game_id !== 'poker') return json({ error: 'This game is not available online yet.' }, 409);
+  if (row.game_id !== 'xo' && row.game_id !== 'ludo' && row.game_id !== 'checkers' && row.game_id !== 'poker') return json({ error: 'This game is not available online yet.' }, 409);
   const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(row.game_id).first<{ enabled: number }>();
   if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
   const displayName = await gameDisplayName(env, userId);
@@ -509,10 +507,10 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   const base = new URL(request.url).origin;
   const isOwner = Boolean(env.SUPER_ADMIN_TELEGRAM_ID && message.from && String(message.from.id) === env.SUPER_ADMIN_TELEGRAM_ID);
   const gameList: Record<string, string> = {
-    en: 'Free practice vs a bot: XO, Ludo, Dominoes and Texas Hold’em. Create a private online room for any of the four games.',
-    am: 'በነፃ ከቦት ጋር ይለማመዱ፦ XO፣ Ludo፣ Dominoes እና Texas Hold’em። ከአራቱ ጨዋታዎች ለማንኛውም የግል ኦንላይን ክፍል ይፍጠሩ።',
-    so: 'Tababar bilaash ah la ciyaar bot: XO, Ludo, Dominoes iyo Texas Hold’em. U samee qol gaar ah mid kasta oo ka mid ah afarta ciyaarood.',
-    om: 'Shaakala bilisaa bot waliin: XO, Ludo, Dominoes fi Texas Hold’em. Tapha afran keessaa kamiyyuu irratti kutaa dhuunfaa uumi.',
+    en: 'Free practice vs a bot: XO, Ludo, Checkers and Texas Hold’em. Create a private online room for any of the four games.',
+    am: 'በነፃ ከቦት ጋር ይለማመዱ፦ XO፣ Ludo፣ Checkers እና Texas Hold’em። ከአራቱ ጨዋታዎች ለማንኛውም የግል ኦንላይን ክፍል ይፍጠሩ።',
+    so: 'Tababar bilaash ah la ciyaar bot: XO, Ludo, Checkers iyo Texas Hold’em. U samee qol gaar ah mid kasta oo ka mid ah afarta ciyaarood.',
+    om: 'Shaakala bilisaa bot waliin: XO, Ludo, Checkers fi Texas Hold’em. Tapha afran keessaa kamiyyuu irratti kutaa dhuunfaa uumi.',
   };
   const responses: Record<string, string> = {
     '/start': welcome[lang],
@@ -1184,7 +1182,7 @@ export class GameRoom {
       if (existing) return json({ error: 'Room code is already in use.' }, 409);
       let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown; publicRoomId?: unknown; publicRoomOptions?: unknown; entryCredits?: unknown; commissionBps?: unknown };
       try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
-      if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'dominoes' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
+      if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'checkers' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
       const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId), matchId: null, sequence: 0, expiresAt: input.expiresAt as number,
         ...(typeof input.publicRoomId === 'string' ? { publicRoomId: input.publicRoomId } : {}),
         ...(input.publicRoomOptions && typeof input.publicRoomOptions === 'object' ? { publicRoomOptions: input.publicRoomOptions as Record<string, unknown> } : {}),
@@ -1219,7 +1217,7 @@ export class GameRoom {
     const userId = attachment?.userId;
     const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
     if (!userId || text.length > 512) return this.sendError(socket, 'Move could not be read.');
-    let input: { type?: unknown; index?: unknown; token?: unknown; action?: unknown };
+    let input: { type?: unknown; index?: unknown; token?: unknown; action?: unknown; from?: unknown; to?: unknown };
     try { input = JSON.parse(text) as typeof input; } catch { return this.sendError(socket, 'Move could not be read.'); }
     if (typeof input.type !== 'string') return this.sendError(socket, 'Move is not allowed.');
     const room = await this.state.storage.get<StoredRoom>('room');
@@ -1227,27 +1225,50 @@ export class GameRoom {
     const player = room.players.find((entry) => entry.id === userId);
     const playerIndex = room.players.findIndex((entry) => entry.id === userId);
     if (!player || playerIndex < 0) return this.sendError(socket, 'You are not seated in this room.');
-    if (input.type !== 'next-round' && gameTurn(room) !== playerIndex) return this.sendError(socket, 'Please wait for your turn.');
-    const previous = room.game;
+    if (room.terminal) return this.sendError(socket, 'This match has finished.');
+    const control = input.type === 'resign' || input.type === 'draw-offer' || input.type === 'draw-accept' || input.type === 'draw-decline';
+    if (!control && gameTurn(room) !== playerIndex) return this.sendError(socket, 'Please wait for your turn.');
+    const previous = { game: room.game, status: room.status, terminal: room.terminal, drawOfferBy: room.drawOfferBy };
     try {
-      if (room.gameId === 'xo' && input.type === 'move' && Number.isInteger(input.index) && player.mark) room.game = applyXO(room.game as XOState, player.mark, input.index as number);
-      else if (room.gameId === 'ludo' && input.type === 'roll') room.game = rollLudo(room.game as LudoState, secureInt(1, 6));
-      else if (room.gameId === 'ludo' && input.type === 'move' && Number.isInteger(input.token)) room.game = moveLudo(room.game as LudoState, input.token as number);
-      else if (room.gameId === 'dominoes' && input.type === 'action' && input.action && typeof input.action === 'object') room.game = applyDominoAction(room.game as DominoesState, input.action as DominoAction);
-      else if (room.gameId === 'dominoes' && input.type === 'next-round') room.game = nextDominoesRound(room.game as DominoesState, secureRandom);
-      else if (room.gameId === 'poker' && input.type === 'action' && input.action && typeof input.action === 'object') room.game = applyPokerAction(room.game as PokerState, playerIndex as 0 | 1, input.action as PokerAction);
-      else return this.sendError(socket, 'Move is not allowed for this game.');
+      if (control) {
+        if (room.gameId !== 'checkers') return this.sendError(socket, 'Move is not allowed for this game.');
+        if (input.type === 'resign') {
+          room.terminal = { winner: playerIndex === 0 ? 1 : 0, reason: 'resign' };
+          room.status = 'finished';
+        } else if (input.type === 'draw-offer') {
+          if (room.drawOfferBy !== undefined) return this.sendError(socket, 'A draw offer is already pending.');
+          room.drawOfferBy = playerIndex;
+        } else if (input.type === 'draw-accept') {
+          if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to accept.');
+          room.terminal = { winner: 'draw', reason: 'draw' };
+          room.drawOfferBy = undefined;
+          room.status = 'finished';
+        } else {
+          if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to decline.');
+          room.drawOfferBy = undefined;
+        }
+      } else {
+        room.drawOfferBy = undefined;
+        if (room.gameId === 'xo' && input.type === 'move' && Number.isInteger(input.index) && player.mark) room.game = applyXO(room.game as XOState, player.mark, input.index as number);
+        else if (room.gameId === 'ludo' && input.type === 'roll') room.game = rollLudo(room.game as LudoState, secureInt(1, 6));
+        else if (room.gameId === 'ludo' && input.type === 'move' && Number.isInteger(input.token)) room.game = moveLudo(room.game as LudoState, input.token as number);
+        else if (room.gameId === 'checkers' && input.type === 'move' && Number.isInteger(input.from) && Number.isInteger(input.to)) room.game = applyCheckerMove(room.game as CheckersState, input.from as number, input.to as number);
+        else if (room.gameId === 'poker' && input.type === 'action' && input.action && typeof input.action === 'object') room.game = applyPokerAction(room.game as PokerState, playerIndex as 0 | 1, input.action as PokerAction);
+        else return this.sendError(socket, 'Move is not allowed for this game.');
+      }
     } catch { return this.sendError(socket, 'That move is not allowed.'); }
     room.sequence++;
     const completion = gameComplete(room);
     if (completion.done) room.status = 'finished';
     try {
-      await this.recordMove(room, player.id, { type: input.type, ...(Number.isInteger(input.index) ? { index: input.index } : {}), ...(Number.isInteger(input.token) ? { token: input.token } : {}), ...(input.action && typeof input.action === 'object' ? { action: input.action } : {}) }, completion.winner);
+      await this.recordMove(room, player.id, { type: input.type, ...(Number.isInteger(input.index) ? { index: input.index } : {}), ...(Number.isInteger(input.token) ? { token: input.token } : {}), ...(Number.isInteger(input.from) ? { from: input.from } : {}), ...(Number.isInteger(input.to) ? { to: input.to } : {}), ...(input.action && typeof input.action === 'object' ? { action: input.action } : {}) }, completion.winner);
       await this.state.storage.put('room', room);
     } catch {
-      room.game = previous;
+      room.game = previous.game;
       room.sequence--;
-      room.status = 'active';
+      room.status = previous.status;
+      room.terminal = previous.terminal;
+      room.drawOfferBy = previous.drawOfferBy;
       return this.sendError(socket, 'Move could not be saved. Please try again.');
     }
     this.broadcast(room);
@@ -1300,6 +1321,8 @@ export class GameRoom {
     room.status = 'active';
     room.matchId = `${room.gameId}-${room.code}`;
     room.sequence = 0;
+    room.terminal = undefined;
+    room.drawOfferBy = undefined;
     await this.env.DB.batch([
       this.env.DB.prepare("UPDATE game_rooms SET status = 'active' WHERE id = ? AND status = 'waiting'").bind(room.code),
       this.env.DB.prepare("INSERT INTO matches (id, room_id, game_id, status, bot_match) VALUES (?, ?, ?, 'active', 0)").bind(room.matchId, room.code, room.gameId),
@@ -1371,9 +1394,8 @@ export class GameRoom {
       const attachment = socket.deserializeAttachment() as { userId?: number } | null;
       const seat = room.players.findIndex((player) => player.id === attachment?.userId);
       let game: unknown = room.game;
-      if (room.gameId === 'dominoes' && seat >= 0) game = viewDominoes(room.game as DominoesState, seat as 0 | 1);
       if (room.gameId === 'poker' && seat >= 0) game = viewPoker(room.game as PokerState, seat as 0 | 1);
-      try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat,
+      try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat, matchId: room.matchId, terminal: room.terminal || null, drawOfferBy: room.drawOfferBy ?? null,
         ...(room.publicRoomId ? { publicRoom: { id: room.publicRoomId, entryCredits: room.entryCredits || 0, commissionBps: room.commissionBps || 0, options: room.publicRoomOptions || {} } } : {}) })); }
       catch { socket.close(1011, 'Unable to send room update'); }
     }

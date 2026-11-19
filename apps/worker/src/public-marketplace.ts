@@ -8,7 +8,7 @@ import {
 } from './marketplace';
 import { addisWeekStart } from './agent-report';
 
-type RoomGame = 'xo' | 'ludo' | 'dominoes' | 'poker';
+type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
 type PublicStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
 type MarketEnv = { DB: D1Database; GAME_ROOM: DurableObjectNamespace; SESSION_SECRET?: string };
 type RoomRow = {
@@ -568,7 +568,7 @@ export class Matchmaker {
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
       feeCredits: credits(row.status === 'COMPLETED' ? row.fee_tenths : expected.feeTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),
-      commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? 'Classic · two players' : row.game_id === 'poker' ? 'Heads-up' : 'Classic · two players',
+      commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? 'Classic · two players' : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
       options, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at,
       matchId: row.match_id, winner: row.winner === -1 ? null : row.winner,
     };

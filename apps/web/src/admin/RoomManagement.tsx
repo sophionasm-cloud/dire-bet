@@ -11,7 +11,7 @@ type Detail = { room: MarketplaceRoom; events: RoomEvent[] };
 type ErrorBody = { error?: string };
 
 const games: { id: GameId | ''; name: string }[] = [
-  { id: '', name: 'All games' }, { id: 'ludo', name: 'Ludo' }, { id: 'dominoes', name: 'Dominoes' }, { id: 'poker', name: 'Texas Hold’em' }, { id: 'xo', name: 'XO' },
+  { id: '', name: 'All games' }, { id: 'ludo', name: 'Ludo' }, { id: 'checkers', name: 'Checkers' }, { id: 'poker', name: 'Texas Hold’em' }, { id: 'xo', name: 'XO' },
 ];
 
 export default function RoomManagement({ token }: Props) {
@@ -132,6 +132,6 @@ export default function RoomManagement({ token }: Props) {
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) { return <article><span>{label}</span><strong>{value}</strong></article>; }
-function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Dominoes'; }
+function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }
 function formatCredits(value: number): string { return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value); }
 function statusLabel(status: PublicRoomStatus): string { return status.replaceAll('_', ' '); }

@@ -65,6 +65,6 @@ export function validateMarketplaceSettings(input: unknown): MarketplaceSettings
   };
 }
 
-export function isMarketplaceGame(gameId: unknown): gameId is 'xo' | 'ludo' | 'dominoes' | 'poker' {
-  return gameId === 'xo' || gameId === 'ludo' || gameId === 'dominoes' || gameId === 'poker';
+export function isMarketplaceGame(gameId: unknown): gameId is 'xo' | 'ludo' | 'checkers' | 'poker' {
+  return gameId === 'xo' || gameId === 'ludo' || gameId === 'checkers' || gameId === 'poker';
 }

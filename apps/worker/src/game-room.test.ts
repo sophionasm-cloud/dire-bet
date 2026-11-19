@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { legalCheckerMoves, type CheckersState } from '@dire-bet/engines/checkers';
 import { GameRoom } from './index';
 
 function createFixture() {
@@ -75,9 +76,9 @@ describe('authoritative XO room', () => {
 });
 
 describe('free room game catalog', () => {
-  it.each(['xo', 'ludo', 'dominoes', 'poker'] as const)('records %s with its own game identity', async (gameId) => {
+  it.each(['xo', 'ludo', 'checkers', 'poker'] as const)('records %s with its own game identity', async (gameId) => {
     const { room, boundStatements } = createFixture();
-    const code = gameId === 'xo' ? 'GHI234' : gameId === 'ludo' ? 'JKL345' : gameId === 'dominoes' ? 'MNP456' : 'QRS567';
+    const code = gameId === 'xo' ? 'GHI234' : gameId === 'ludo' ? 'JKL345' : gameId === 'checkers' ? 'MNP456' : 'QRS567';
     await room.fetch(request('/create', { code, gameId, userId: 41, displayName: 'Host', expiresAt: Date.now() + 60_000 }));
     await room.fetch(request('/join', { code, userId: 42, displayName: 'Friend' }));
     const statement = boundStatements.find((entry) => entry.sql.includes('INSERT INTO matches'))!;
@@ -96,5 +97,28 @@ describe('free room game catalog', () => {
     expect(payload.state.players.every((player) => !('hole' in player))).toBe(true);
     expect(payload.state).not.toHaveProperty('deck');
     expect(payload.state.deckCount).toBe(48);
+  });
+
+  it('validates authoritative checkers turns and records a resign', async () => {
+    const { room, records, batches } = createFixture();
+    const code = 'CHK234';
+    await room.fetch(request('/create', { code, gameId: 'checkers', userId: 71, displayName: 'Host', expiresAt: Date.now() + 60_000 }));
+    await room.fetch(request('/join', { code, userId: 72, displayName: 'Friend' }));
+    let current = records.get('room') as { game: CheckersState; status: string; terminal?: { winner: number | 'draw' } };
+    expect(current.game.board.filter((piece) => piece?.player === 0)).toHaveLength(12);
+    expect(current.game.turn).toBe(1);
+    const move = legalCheckerMoves(current.game)[0];
+    const sent: string[] = [];
+    await room.webSocketMessage(socket(71, sent), JSON.stringify({ type: 'move', from: move.from, to: move.to }));
+    expect(sent[0]).toContain('Please wait for your turn');
+    await room.webSocketMessage(socket(72, []), JSON.stringify({ type: 'move', from: move.from, to: move.to }));
+    current = records.get('room') as typeof current;
+    expect(current.game.moveCount).toBe(1);
+    expect(current.game.turn).toBe(0);
+    await room.webSocketMessage(socket(71, []), JSON.stringify({ type: 'resign' }));
+    current = records.get('room') as typeof current;
+    expect(current.status).toBe('finished');
+    expect(current.terminal?.winner).toBe(1);
+    expect(batches.some((batch) => batch.some((sql) => sql.includes("status = 'completed'")))).toBe(true);
   });
 });

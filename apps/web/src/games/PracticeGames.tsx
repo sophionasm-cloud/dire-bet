@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { botLudoToken, initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
-import { applyDominoAction, botDominoAction, legalDominoActions, newDominoesGame, nextDominoesRound, type DominoAction, type DominoesState, type Tile } from '@dire-bet/engines/dominoes';
 import { applyPokerAction, botPokerAction, initTexasHoldem, legalPokerActions, type Card, type PokerAction, type PokerState, type Suit } from '@dire-bet/engines/poker';
 import type { TranslationKey } from '../i18n';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
 import { LudoDie, useLudoTurnClock } from './LudoDie';
+
+export { CheckersPractice } from './CheckersRoom';
 
 type Translator = (key: TranslationKey) => string;
 type PracticeProps = { t: Translator; onExit: () => void; reduceEffects: boolean };
@@ -58,40 +59,6 @@ function PracticeLudoPlayerPanel({ name, color, active, finished, seconds, t, bo
   </article>;
 }
 
-export function DominoesPractice({ t, onExit, reduceEffects }: PracticeProps) {
-  const [state, setState] = useState<DominoesState>(() => newDominoesGame());
-  const actions = legalDominoActions(state);
-  useEffect(() => {
-    if (state.turn !== 1 || state.status !== 'playing') return;
-    const timer = window.setTimeout(() => setState((current) => {
-      const action = botDominoAction(current);
-      return action ? applyDominoAction(current, action) : current;
-    }), reduceEffects ? 180 : 620);
-    return () => window.clearTimeout(timer);
-  }, [state, reduceEffects]);
-
-  const apply = (action: DominoAction) => setState((current) => applyDominoAction(current, action));
-  return <section className="screen practice-screen dominoes-screen">
-    <PracticeHeading title="Dominoes" t={t} onExit={onExit} />
-    <div className="table-score"><span>{t('gameScore')}</span><strong>{state.scores[0]} <i>:</i> {state.scores[1]}</strong><small>{t('roundNumber')} {state.round} · {t('you')} vs {t('bot')}</small></div>
-    <div className="domino-opponent"><span className="bot-avatar">✦</span><strong>{t('bot')}</strong><small>{state.hands[1].length} · {t('yourTiles').toLowerCase()}</small></div>
-    <div className="domino-chain" aria-label="Domino line">{state.chain.length ? state.chain.map((tile, index) => <DominoTile tile={tile} key={`${index}-${tile[0]}-${tile[1]}`} />) : <span className="chain-empty">{t('yourTurn')}</span>}</div>
-    {state.status === 'playing' && <p className="practice-turn domino-turn" aria-live="polite">{state.turn === 0 ? t('yourTurn') : t('botTurn')}</p>}
-    {state.status === 'playing' && state.turn === 0 && <>
-      <div className="domino-actions">
-        {actions.some((action) => action.type === 'draw') && <button className="secondary-button" onClick={() => apply({ type: 'draw' })}>{t('drawTile')}<span>＋</span></button>}
-        {actions.some((action) => action.type === 'pass') && <button className="secondary-button" onClick={() => apply({ type: 'pass' })}>{t('passTurn')}<span>↗</span></button>}
-      </div>
-      <h2 className="practice-section-title">{t('yourTiles')}</h2>
-      <div className="domino-hand">{state.hands[0].map((tile, index) => {
-        const placements = actions.filter((action): action is Extract<DominoAction, { type: 'place' }> => action.type === 'place' && action.tile === index);
-        return <div className="domino-hand-item" key={`${index}-${tile[0]}-${tile[1]}`}><DominoTile tile={tile} /><div>{placements.map((action) => <button key={`${action.end}-${action.flip}`} aria-label={`${action.end === 'left' ? t('placeLeft') : t('placeRight')} ${tile[0]}-${tile[1]}`} onClick={() => apply(action)}>{action.end === 'left' ? `← ${t('placeLeft')}` : `${t('placeRight')} →`}</button>)}</div></div>;
-      })}</div>
-    </>}
-    {state.status !== 'playing' && <div className="practice-result"><strong>{state.status === 'finished' ? outcome(state.winner!, t) : state.roundWinner === null ? t('blockedRound') : state.roundWinner === 0 ? t('gameWinTitle') : t('gameLossTitle')}</strong>{state.status === 'between-rounds' ? <button className="primary-button" onClick={() => setState((current) => nextDominoesRound(current))}>{t('nextRound')}<span>→</span></button> : <button className="primary-button" onClick={() => setState(newDominoesGame())}>{t('practiceAgain')}<span>↻</span></button>}</div>}
-  </section>;
-}
-
 export function PokerPractice({ t, onExit, reduceEffects }: PracticeProps) {
   const [state, setState] = useState<PokerState>(() => initTexasHoldem());
   useEffect(() => {
@@ -128,10 +95,6 @@ function PracticeHeading({ title, t, onExit }: { title: string; t: Translator; o
     <button className="back-button" onClick={onExit}>← {t('home')}</button>
     <div className="practice-heading"><div><span className="eyebrow">{t('freePractice')} · {t('bot')}</span><h1>{title}</h1></div><span className="bot-pill"><span className="bot-dot"/>{t('bot')}</span></div>
   </>;
-}
-
-function DominoTile({ tile }: { tile: Tile }) {
-  return <span className="domino-tile" aria-label={`${tile[0]}-${tile[1]}`}><i>{tile[0]}</i><b/><i>{tile[1]}</i></span>;
 }
 
 function PokerCard({ card }: { card: Card | null }) {

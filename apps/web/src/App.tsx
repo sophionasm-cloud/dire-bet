@@ -3,7 +3,7 @@ import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
 import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
 import { languageFromTelegram, languageNames, translate, type Language, type TranslationKey } from './i18n';
 import { xoRules } from './i18n/rules';
-import { DominoesPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
+import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby from './games/PublicRoomLobby';
 import WalletApp from './wallet/WalletApp';
@@ -20,7 +20,7 @@ const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', 
 const bannerSlides: { game: string; title: TranslationKey; copy: TranslationKey; action: 'quick'|'board'|'cards' }[] = [
   { game: 'xo', title: 'bannerXoTitle', copy: 'bannerXoCopy', action: 'quick' },
   { game: 'ludo', title: 'bannerLudoTitle', copy: 'bannerLudoCopy', action: 'board' },
-  { game: 'dominoes', title: 'bannerDominoesTitle', copy: 'bannerDominoesCopy', action: 'board' },
+  { game: 'checkers', title: 'bannerCheckersTitle', copy: 'bannerCheckersCopy', action: 'board' },
   { game: 'poker', title: 'bannerPokerTitle', copy: 'bannerPokerCopy', action: 'cards' },
 ];
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -47,8 +47,12 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 function GameArt({ id }: { id: string }) {
   if (id === 'ethiopian-41') return <div className="art art-disabled"><span>41</span></div>;
   return <div className={`art art-${id} art-poster`} aria-hidden="true">
-    <img src={`/posters/${id}.jpg`} alt="" loading="lazy" decoding="async" />
+    <img src={posterSrc(id)} alt="" loading="lazy" decoding="async" />
   </div>;
+}
+
+function posterSrc(id: string): string {
+  return id === 'checkers' ? '/posters/checkers.svg' : `/posters/${id}.jpg`;
 }
 
 function App() {
@@ -305,7 +309,7 @@ function App() {
     {page === 'home' && <section className="screen home-screen">
       {!sessionToken && <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><div className="guest-actions"><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a><button className="guest-login" onClick={() => nav('login')}>{t('webLogin')}</button></div></div>}
       <section className={`hero hero-${banner}`} aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }}>
-        <img key={bannerSlides[banner].game} className="hero-poster" src={`/posters/${bannerSlides[banner].game}.jpg`} alt="" />
+        <img key={bannerSlides[banner].game} className="hero-poster" src={posterSrc(bannerSlides[banner].game)} alt="" />
         <div className="hero-copy" key={banner}><span className="eyebrow">DIRE BET · {t('freePractice')}</span><h1>{t(bannerSlides[banner].title)}</h1><p>{t(bannerSlides[banner].copy)}</p><button className="primary-button" onClick={activateBanner}>{t(bannerSlides[banner].action === 'quick' ? 'quickPlay' : bannerSlides[banner].action === 'cards' ? 'browseCardGames' : 'browseBoardGames')}<span>{bannerSlides[banner].action === 'quick' ? '↗' : '⌄'}</span></button></div>
         <div className="hero-shade" aria-hidden="true" />
         <div className="hero-dots" role="group" aria-label={t('chooseGame')}>{bannerSlides.map((slide, index) => <button key={slide.game} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => setBanner(index)} />)}</div>
@@ -345,7 +349,7 @@ function App() {
     </section>}
 
     {page === 'ludo' && <LudoPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
-    {page === 'dominoes' && <DominoesPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
+    {page === 'checkers' && <CheckersPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
     {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
 
     {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
