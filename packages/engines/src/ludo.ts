@@ -3,6 +3,7 @@ export type LudoEvent = 'roll' | 'move' | 'no-move' | 'extra-roll' | 'triple-six
 export type LudoState = {
   tokens: [number[], number[]];
   turn: LudoPlayer;
+  crownTarget: 1 | 2 | 4;
   dice: number | null;
   lastDice: number | null;
   rollVersion: number;
@@ -17,8 +18,9 @@ const TRACK_LENGTH = 52;
 const STARTS: [number, number] = [0, 26];
 const SAFE_TRACK_CELLS = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
 
-export function initLudo(firstPlayer: LudoPlayer = 0): LudoState {
-  return { tokens: [[-1, -1, -1, -1], [-1, -1, -1, -1]], turn: firstPlayer, dice: null, lastDice: null, rollVersion: 0, consecutiveSixes: 0, winner: null, lastEvent: null, lastMove: null };
+export function initLudo(firstPlayer: LudoPlayer = 0, crownTarget: 1 | 2 | 4 = 4): LudoState {
+  if (![1, 2, 4].includes(crownTarget)) throw new Error('Ludo crown target must be 1, 2, or 4.');
+  return { tokens: [[-1, -1, -1, -1], [-1, -1, -1, -1]], turn: firstPlayer, crownTarget, dice: null, lastDice: null, rollVersion: 0, consecutiveSixes: 0, winner: null, lastEvent: null, lastMove: null };
 }
 
 export function legalLudoActions(state: LudoState): number[] {
@@ -56,7 +58,7 @@ export function moveLudo(state: LudoState, token: number): LudoState {
       if (victim >= 0) { tokens[opponent][victim] = -1; captured = { player: opponent, token: victim }; }
     }
   }
-  const winner = tokens[player].every((value) => value === HOME) ? player : null;
+  const winner = tokens[player].filter((value) => value === HOME).length >= (state.crownTarget ?? 4) ? player : null;
   const lastEvent: LudoEvent = winner !== null ? 'win' : position === HOME ? 'home' : captured ? 'capture' : 'move';
   return {
     ...state,

@@ -6,7 +6,7 @@ import { viewPoker, type Card, type PokerAction, type Suit } from '@dire-bet/eng
 import type { GameId } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 import type { RoomConfig } from './marketplaceTypes';
-import { TraditionalLudoBoard } from './TraditionalLudoBoard';
+import { TraditionalLudoBoard, type LudoBoardColor } from './TraditionalLudoBoard';
 import { LudoDie, useLudoTurnClock } from './LudoDie';
 import { CheckersRoom, type CheckersSnapshot } from './CheckersRoom';
 
@@ -116,11 +116,8 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   if (snapshot?.gameId === 'ludo' && snapshot.publicRoom) {
     const state = snapshot.game as LudoState;
     const roomMeta = snapshot.publicRoom;
-    const playerZeroColor = roomMeta.options.player0Color === 'white' ? 'white' : 'blue';
-    const colorAt = (seat: number): 'red'|'yellow' => {
-      const storedColor = seat === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
-      return storedColor === 'blue' ? 'red' : 'yellow';
-    };
+    const playerZeroColor = roomLudoColor(roomMeta.options.player0Color);
+    const colorAt = (seat: number): LudoBoardColor => seat === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
     const notice = state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.winner !== null ? result : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
     const fee = Math.floor(roomMeta.entryCredits * 2 * roomMeta.commissionBps / 10_000);
     const payout = roomMeta.entryCredits * 2 - fee;
@@ -128,9 +125,9 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     return <section className="online-room-screen public-ludo-shell ludo-room-layout">
       <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
       <div className="ludo-notification" role="status" aria-live="polite"><span>✦</span><strong>{notice}</strong></div>
-      <div className="ludo-match-meta"><span>{roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')} · ${t('marketPerPlayer').toLowerCase()}` : t('marketFree')}</span><small>{t('marketSimulationNote')}</small></div>
+      <div className="ludo-match-meta"><span>{roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')} · ${t('marketPerPlayer').toLowerCase()}` : t('marketFree')}</span><small>{t('marketCrownTarget').replace('{count}', String(state.crownTarget ?? 4))}</small><small>{t('marketSimulationNote')}</small></div>
       <div className="ludo-two-player-layout">
-        {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>) }
+        {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} crownTarget={state.crownTarget ?? 4} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>) }
         <div className="ludo-board-stage">
           {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
           {snapshot.status === 'finished' && <div className="ludo-result-banner"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
@@ -150,7 +147,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     {snapshot?.status === 'active' && <>
       <div className="online-game-status" aria-live="polite">{statusText}</div>
       {snapshot.gameId === 'xo' && <XOBoard game={snapshot.game as XOState} enabled={isMyTurn(snapshot)} winning={winning} onMove={(index) => send({ type: 'move', index })} />}
-      {snapshot.gameId === 'ludo' && <OnlineLudo game={snapshot.game as LudoState} seat={snapshot.seat} playerZeroColor={snapshot.publicRoom?.options.player0Color === 'white' ? 'white' : 'blue'} t={t} send={send} />}
+      {snapshot.gameId === 'ludo' && <OnlineLudo game={snapshot.game as LudoState} seat={snapshot.seat} playerZeroColor={roomLudoColor(snapshot.publicRoom?.options.player0Color)} t={t} send={send} />}
       {snapshot.gameId === 'poker' && <OnlinePoker game={snapshot.game as PokerPublic} seat={snapshot.seat} t={t} send={send} />}
     </>}
     {snapshot?.status === 'finished' && <div className="practice-result"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
@@ -165,11 +162,8 @@ function XOBoard({ game, enabled, winning, onMove }: { game: XOState; enabled: b
   return <div className="xo-board online-xo-board" role="grid" aria-label="XO">{game.board.map((cell, index) => <button key={index} role="gridcell" className={`xo-cell ${cell ? `mark-${cell.toLowerCase()}` : ''} ${winning.includes(index) ? 'winning-cell' : ''}`} disabled={!enabled || Boolean(cell)} onClick={() => onMove(index)} aria-label={`XO ${index + 1}${cell ? ` ${cell}` : ''}`}>{cell === 'X' ? <span className="x-mark">×</span> : cell === 'O' ? <span className="o-mark">○</span> : ''}</button>)}</div>;
 }
 
-function OnlineLudo({ game, seat, playerZeroColor, t, send }: { game: LudoState; seat: number; playerZeroColor: 'blue'|'white'; t: Translator; send: (payload: unknown) => void }) {
-  const colorFor = (player: number) => {
-    const storedColor = player === 0 ? playerZeroColor : playerZeroColor === 'blue' ? 'white' : 'blue';
-    return storedColor === 'blue' ? 'red' : 'yellow';
-  };
+function OnlineLudo({ game, seat, playerZeroColor, t, send }: { game: LudoState; seat: number; playerZeroColor: LudoBoardColor; t: Translator; send: (payload: unknown) => void }) {
+  const colorFor = (player: number) => player === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
   const canRoll = game.turn === seat && game.dice === null && game.winner === null;
   return <>
     <TraditionalLudoBoard game={game} seat={seat} playerZeroColor={playerZeroColor} onMove={(token) => send({ type: 'move', token })}/>
@@ -179,12 +173,12 @@ function OnlineLudo({ game, seat, playerZeroColor, t, send }: { game: LudoState;
   </>;
 }
 
-function LudoPlayerPanel({ player, seat, color, active, own, finished, seconds, t }: { player?: RoomPlayer; seat: number; color: 'red'|'yellow'; active: boolean; own: boolean; finished: number; seconds: number; t: Translator }) {
+function LudoPlayerPanel({ player, seat, color, crownTarget, active, own, finished, seconds, t }: { player?: RoomPlayer; seat: number; color: LudoBoardColor; crownTarget: number; active: boolean; own: boolean; finished: number; seconds: number; t: Translator }) {
   const name = player?.name || t('marketPlayer');
   return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
     <span className={`ludo-player-avatar ${color}`}>{player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')}</span>
-    <div className="ludo-player-copy"><strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong><small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {color === 'red' ? t('marketRed') : t('marketYellow')}</small>{active && <span className="ludo-turn-clock">◷ {seconds}s</span>}</div>
-    <span className={`ludo-player-score ${color}`}>{finished}/4</span>
+    <div className="ludo-player-copy"><strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong><small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {ludoColorName(color, t)}</small>{active && <span className="ludo-turn-clock">◷ {seconds}s</span>}</div>
+    <span className={`ludo-player-score ${color}`}>{finished}/{crownTarget}</span>
     <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? t('yourTurn') : t('marketWaiting')}</span>
   </article>;
 }
@@ -226,6 +220,16 @@ function resultCopy(id: GameId, state: RoomGame, seat: number, you: 'X'|'O'|null
   if (id === 'ludo') return (state as LudoState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
   if (id === 'checkers') return (state as CheckersState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
   const winner = (state as PokerPublic).winner; return winner === 'split' ? t('gameSplitTitle') : winner === seat ? t('gameWinTitle') : t('gameLossTitle');
+}
+
+function roomLudoColor(value: unknown): LudoBoardColor {
+  if (value === 'white') return 'yellow';
+  if (value === 'blue') return 'red';
+  return value === 'red' || value === 'yellow' || value === 'green' ? value : 'red';
+}
+function oppositeLudoColor(color: LudoBoardColor): LudoBoardColor { return color === 'red' ? 'yellow' : color === 'yellow' ? 'red' : color === 'green' ? 'blue' : 'green'; }
+function ludoColorName(color: LudoBoardColor, t: Translator): string {
+  return color === 'red' ? t('marketRed') : color === 'yellow' ? t('marketYellow') : color === 'green' ? t('marketGreen') : t('marketBlue');
 }
 
 function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }

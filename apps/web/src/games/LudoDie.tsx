@@ -22,7 +22,7 @@ function DieFace({ value, side }: { value: number; side: string }) {
 export function LudoDie({ value, rollVersion, color, canRoll, onRoll, rollLabel, reducedMotion = false }: {
   value: number | null;
   rollVersion: number;
-  color: 'red' | 'yellow';
+  color: 'red' | 'yellow' | 'green' | 'blue';
   canRoll: boolean;
   onRoll: () => void;
   rollLabel: string;

@@ -6,6 +6,8 @@ import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type Po
 import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
 import { addisWeekStart } from './agent-report';
+import { moneyActivationRecorded, moneyEligibilityError } from './activation';
+export { moneyActivationRecorded } from './activation';
 
 interface Env {
   ASSETS: Fetcher;
@@ -140,9 +142,12 @@ function secureInt(minimum: number, maximum: number): number {
   return minimum + Math.floor(secureRandom() * (maximum - minimum + 1));
 }
 
-function createGame(gameId: RoomGame): RoomState {
+function createGame(gameId: RoomGame, publicRoomOptions?: Record<string, unknown>): RoomState {
   if (gameId === 'xo') return initXO();
-  if (gameId === 'ludo') return initLudo();
+  if (gameId === 'ludo') {
+    const target = publicRoomOptions?.crownTarget;
+    return initLudo(0, target === 1 || target === 2 || target === 4 ? target : 4);
+  }
   if (gameId === 'checkers') return newCheckersGame(1);
   return initTexasHoldem(secureRandom, [1000, 1000]);
 }
@@ -324,9 +329,9 @@ async function handlePublicMarketplace(request: Request, env: Env): Promise<Resp
   }
   if (url.pathname === '/api/public-rooms/balance' && request.method === 'GET') {
     const userId = await readSession(request, env.SESSION_SECRET);
-    if (!userId) return json({ error: 'Sign in through Telegram to view demo credits.' }, 401);
+    if (!userId) return json({ error: 'Sign in to view your wallet balance.' }, 401);
     if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your Telegram contact to view a room balance.' }, 403);
-    return publicMarketplace(env).fetch(`https://market/balance?userId=${userId}`);
+    return playerWalletBalance(env, userId);
   }
   if (url.pathname === '/api/public-rooms/mine' && request.method === 'GET') {
     const userId = await readSession(request, env.SESSION_SECRET);
@@ -433,21 +438,8 @@ async function readSession(request: Request, secret?: string): Promise<number | 
   } catch { return null; }
 }
 
-export async function moneyActivationRecorded(env: Env): Promise<boolean> {
-  if (env.REAL_MONEY_ENABLED !== 'true' || env.DEMO_MODE !== 'false') return false;
-  try {
-    const record = await env.DB.prepare('SELECT id, evidence_json, minimum_age FROM activation_records ORDER BY approved_at DESC LIMIT 1').first<{ id: string; evidence_json: string; minimum_age: number }>();
-    if (!record || !Number.isInteger(record.minimum_age) || record.minimum_age < 1) return false;
-    const audit = await env.DB.prepare("SELECT id FROM audit_logs WHERE action = 'REAL_MONEY_ACTIVATED' AND entity_type = 'activation_record' AND entity_id = ? LIMIT 1").bind(record.id).first();
-    if (!audit) return false;
-    const evidence = JSON.parse(record.evidence_json) as Record<string, unknown>;
-    return typeof evidence.counselApproval === 'string' && evidence.counselApproval.length > 0
-      && Array.isArray(evidence.providerApprovals) && evidence.providerApprovals.length > 0
-      && typeof evidence.telegramApproval === 'string' && evidence.telegramApproval.length > 0
-      && Array.isArray(evidence.licenseReferences) && evidence.licenseReferences.length > 0
-      && Number.isInteger(evidence.minimumAge) && evidence.minimumAge === record.minimum_age
-      && typeof evidence.ownerSignedAt === 'string' && evidence.ownerSignedAt.length > 0;
-  } catch { return false; }
+function validEvidenceReference(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length >= 3 && value.trim().length <= 240;
 }
 
 async function telegramApi<T>(token: string, method: string, body: unknown): Promise<T> {
@@ -769,33 +761,140 @@ async function recordAdminAudit(env: Env, adminId: number, action: string, entit
     .bind(crypto.randomUUID(), String(adminId), action, entityType, entityId, before === null ? null : JSON.stringify(before), after === null ? null : JSON.stringify(after)).run();
 }
 
+async function adminActivationStatus(env: Env): Promise<Response> {
+  const row = await env.DB.prepare('SELECT minimum_age, approved_at FROM activation_records ORDER BY approved_at DESC, id DESC LIMIT 1').first<{ minimum_age: number; approved_at: string }>();
+  return json({ active: await moneyActivationRecorded(env), configured: env.REAL_MONEY_ENABLED === 'true' && env.DEMO_MODE === 'false', record: row || null });
+}
+
+async function recordActivationEvidence(request: Request, env: Env, adminId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as {
+    counselApproval?: unknown; licenseReview?: unknown; licenseReferences?: unknown; providerApprovals?: unknown;
+    telegramApproval?: unknown; nationalBankReview?: unknown; ageVerificationMethod?: unknown;
+    responsiblePlayPolicy?: unknown; privacyReview?: unknown; minimumAge?: unknown; ownerSignedAt?: unknown;
+  } | null;
+  const providers = input?.providerApprovals as { telebirr?: unknown; ebirr?: unknown } | undefined;
+  const licenseReferences = input?.licenseReferences;
+  if (!input || !validEvidenceReference(input.counselApproval) || !validEvidenceReference(input.licenseReview)
+    || !Array.isArray(licenseReferences) || licenseReferences.length > 20 || !licenseReferences.every(validEvidenceReference)
+    || !validEvidenceReference(providers?.telebirr) || !validEvidenceReference(providers?.ebirr)
+    || !validEvidenceReference(input.telegramApproval) || !validEvidenceReference(input.nationalBankReview)
+    || !validEvidenceReference(input.ageVerificationMethod) || !validEvidenceReference(input.responsiblePlayPolicy)
+    || !validEvidenceReference(input.privacyReview) || !Number.isInteger(input.minimumAge) || (input.minimumAge as number) < 18 || (input.minimumAge as number) > 120
+    || typeof input.ownerSignedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.ownerSignedAt)
+    || !Number.isFinite(Date.parse(`${input.ownerSignedAt}T00:00:00Z`)) || Date.parse(`${input.ownerSignedAt}T00:00:00Z`) > Date.now()) {
+    return json({ error: 'Record the legal, license, Telebirr, eBirr, Telegram, age, responsible-play, privacy and owner approval references before activation.' }, 400);
+  }
+  const evidence = {
+    counselApproval: input.counselApproval.trim(), licenseReview: input.licenseReview.trim(),
+    licenseReferences: licenseReferences.map((value) => value.trim()),
+    providerApprovals: { telebirr: providers!.telebirr!.trim(), ebirr: providers!.ebirr!.trim() },
+    telegramApproval: input.telegramApproval.trim(), nationalBankReview: input.nationalBankReview.trim(),
+    ageVerificationMethod: input.ageVerificationMethod.trim(), responsiblePlayPolicy: input.responsiblePlayPolicy.trim(),
+    privacyReview: input.privacyReview.trim(), minimumAge: input.minimumAge, ownerSignedAt: input.ownerSignedAt,
+  };
+  const id = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO activation_records (id, evidence_json, minimum_age, approved_by) VALUES (?, ?, ?, ?)')
+      .bind(id, JSON.stringify(evidence), input.minimumAge, String(adminId)),
+    env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, after_json)
+      VALUES (?, 'admin', ?, 'REAL_MONEY_ACTIVATION_RECORDED', 'activation_record', ?, ?)`)
+      .bind(crypto.randomUUID(), String(adminId), id, JSON.stringify({ minimumAge: input.minimumAge, evidence })),
+  ]);
+  return json({ recorded: true, active: await moneyActivationRecorded(env), configured: env.REAL_MONEY_ENABLED === 'true' && env.DEMO_MODE === 'false', id }, 201);
+}
+
 async function publicPaymentSettings(env: Env): Promise<Response> {
+  const moneyEnabled = await moneyActivationRecorded(env);
   const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim
     FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
       provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null;
     }>();
-  return json({ mode: 'demo', providers: result.results.map((row) => ({
-    provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.enabled === 1 ? row.account_number || '' : '',
-    enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+  return json({ moneyEnabled, providers: result.results.map((row) => ({
+    provider: row.provider, accountLabel: moneyEnabled && row.enabled === 1 ? row.account_label || '' : '',
+    accountNumber: moneyEnabled && row.enabled === 1 ? row.account_number || '' : '',
+    enabled: moneyEnabled && row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
   })) });
+}
+
+async function playerWalletBalance(env: Env, userId: number): Promise<Response> {
+  if (!(await moneyActivationRecorded(env))) return json({ enabled: false, balance: null, error: 'Wallet services are unavailable until required approvals are recorded.' }, 403);
+  const eligibility = await moneyEligibilityError(env, userId);
+  if (eligibility) return json({ enabled: true, balance: null, error: eligibility }, 403);
+  const row = await env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>();
+  return json({ enabled: true, balanceSantim: row?.balance_santim || 0, balance: (row?.balance_santim || 0) / 100 });
+}
+
+async function submitAgeVerification(request: Request, env: Env, userId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { verificationReference?: unknown; confirmsAdult?: unknown } | null;
+  const reference = typeof input?.verificationReference === 'string' ? input.verificationReference.trim() : '';
+  if (input?.confirmsAdult !== true || reference.length < 3 || reference.length > 240) return json({ error: 'Confirm you are at least 18 and enter the reference from your age check.' }, 400);
+  const profile = await env.DB.prepare('SELECT age_eligibility FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_eligibility: string }>();
+  if (profile?.age_eligibility === 'blocked') return json({ error: 'Contact support to request a new age review.' }, 409);
+  const ciphertext = await encryptContact(reference, env.SESSION_SECRET || '');
+  await env.DB.prepare(`INSERT INTO user_profiles (user_id, age_eligibility, age_review_reference)
+    VALUES (?, 'unverified', ?) ON CONFLICT(user_id) DO UPDATE SET age_review_reference = excluded.age_review_reference,
+    updated_at = CURRENT_TIMESTAMP WHERE user_profiles.age_eligibility = 'unverified'`)
+    .bind(userId, ciphertext).run();
+  return json({ submitted: true, status: 'unverified' }, 202);
+}
+
+async function adminAgeRequests(env: Env): Promise<Response> {
+  const rows = await env.DB.prepare(`SELECT u.id AS user_id, u.first_name, u.username, u.web_username, p.age_review_reference, p.updated_at
+    FROM user_profiles p JOIN users u ON u.id = p.user_id
+    WHERE p.age_eligibility = 'unverified' AND p.age_review_reference IS NOT NULL
+    ORDER BY p.updated_at LIMIT 100`).all<{ user_id: number; first_name: string; username: string | null; web_username: string | null; age_review_reference: string; updated_at: string }>();
+  const requests = await Promise.all(rows.results.map(async (row) => {
+    let verificationReference = '';
+    try { verificationReference = await decryptContact(row.age_review_reference, env.SESSION_SECRET || ''); } catch { /* Keep the review visible without the protected reference. */ }
+    return { userId: row.user_id, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), verificationReference, submittedAt: row.updated_at };
+  }));
+  return json({ requests });
+}
+
+async function reviewAgeRequest(request: Request, env: Env, adminId: number, userId: number): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  const input = await request.json().catch(() => null) as { status?: unknown; verifiedAge?: unknown; reason?: unknown } | null;
+  if (!input || (input.status !== 'verified' && input.status !== 'blocked')) return json({ error: 'Choose verified or blocked.' }, 400);
+  const minimumAge = await env.DB.prepare('SELECT minimum_age FROM activation_records ORDER BY approved_at DESC, id DESC LIMIT 1').first<{ minimum_age: number }>();
+  const requiredAge = Math.max(18, minimumAge?.minimum_age || 18);
+  if (input.status === 'verified' && (!Number.isInteger(input.verifiedAge) || (input.verifiedAge as number) < requiredAge)) return json({ error: `Verify an age of at least ${requiredAge} before approving this account.` }, 400);
+  const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 240) : '';
+  if (input.status === 'blocked' && reason.length < 3) return json({ error: 'Add a short reason for blocking this account.' }, 400);
+  const row = await env.DB.prepare('SELECT age_eligibility FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_eligibility: string }>();
+  if (!row) return json({ error: 'Age review request not found.' }, 404);
+  if (row.age_eligibility !== 'unverified') return json({ error: 'This age request has already been reviewed.' }, 409);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE user_profiles SET age_eligibility = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND age_eligibility = 'unverified'`).bind(input.status, userId),
+    env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, before_json, after_json)
+      SELECT ?, 'admin', ?, ?, 'user_profile', ?, json_object('ageEligibility', 'unverified'), json_object('ageEligibility', ?, 'verifiedAge', ?, 'reason', ?)
+      WHERE changes() = 1`)
+      .bind(crypto.randomUUID(), String(adminId), input.status === 'verified' ? 'AGE_VERIFIED' : 'AGE_BLOCKED', String(userId), input.status, input.verifiedAge || null, reason || null),
+  ]);
+  return json({ ok: true, status: input.status });
 }
 
 async function playerWalletRequests(env: Env, userId: number): Promise<Response> {
   const [deposits, withdrawals] = await Promise.all([
     env.DB.prepare(`SELECT id, provider, amount_santim, provider_reference, status, review_reason, created_at, reviewed_at
-      FROM deposit_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+      FROM deposit_requests WHERE user_id = ? AND wallet_kind = 'real' ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
         id: string; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       }>(),
     env.DB.prepare(`SELECT id, provider, amount_santim, status, review_reason, created_at, reviewed_at
-      FROM withdrawal_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+      FROM withdrawal_requests WHERE user_id = ? AND wallet_kind = 'real' ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
         id: string; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       }>(),
   ]);
   return json({ deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })), withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })) });
 }
 
-async function createDemoDeposit(request: Request, env: Env, userId: number): Promise<Response> {
+async function createRealDeposit(request: Request, env: Env, userId: number): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!(await moneyActivationRecorded(env))) return json({ error: 'Deposits are unavailable until required approvals are recorded.' }, 403);
+  const eligibility = await moneyEligibilityError(env, userId);
+  if (eligibility) return json({ error: eligibility }, 403);
   if (request.headers.get('content-length') && Number(request.headers.get('content-length')) > 3_200_000) return json({ error: 'Receipt must be 2 MB or smaller.' }, 413);
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'deposit-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
@@ -805,8 +904,8 @@ async function createDemoDeposit(request: Request, env: Env, userId: number): Pr
   const reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
   if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
-  const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
-  if (!settings || settings.enabled !== 1) return json({ error: 'That demo payment method is not available.' }, 409);
+  const settings = await env.DB.prepare('SELECT account_number, enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
+  if (!settings || settings.enabled !== 1 || !settings.account_number) return json({ error: 'That payment method is not available.' }, 409);
   if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
   const old = await env.DB.prepare('SELECT id, user_id, status FROM deposit_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
   if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
@@ -823,13 +922,14 @@ async function createDemoDeposit(request: Request, env: Env, userId: number): Pr
     receiptType = png ? 'image/png' : 'image/jpeg';
     receiptBase64 = match[2];
   }
+  if (!receiptBase64 || !receiptType) return json({ error: 'Upload the payment confirmation screenshot before submitting.' }, 400);
   const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
   if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
   const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
   const statements = [env.DB.prepare(`INSERT INTO deposit_requests
     (id, user_id, wallet_kind, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext)
-    VALUES (?, ?, 'demo', ?, ?, ?, 'pending', ?, ?)`)
+    VALUES (?, ?, 'real', ?, ?, ?, 'pending', ?, ?)`)
     .bind(id, userId, provider, amount * 100, reference, idempotencyKey, senderCiphertext)];
   if (receiptBase64 && receiptType) {
     const encryptedReceipt = await encryptContact(receiptBase64, env.SESSION_SECRET || '');
@@ -839,11 +939,14 @@ async function createDemoDeposit(request: Request, env: Env, userId: number): Pr
   }
   try { await env.DB.batch(statements); }
   catch { return json({ error: 'That request could not be saved. Check whether its reference was already used.' }, 409); }
-  return json({ requestId: id, status: 'pending', demoOnly: true }, 201);
+  return json({ requestId: id, status: 'pending' }, 201);
 }
 
-async function createDemoWithdrawal(request: Request, env: Env, userId: number): Promise<Response> {
+async function createRealWithdrawal(request: Request, env: Env, userId: number): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!(await moneyActivationRecorded(env))) return json({ error: 'Withdrawals are unavailable until required approvals are recorded.' }, 403);
+  const eligibility = await moneyEligibilityError(env, userId);
+  if (eligibility) return json({ error: eligibility }, 403);
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'withdrawal-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; destinationPhone?: unknown; accountHolderName?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
@@ -853,7 +956,7 @@ async function createDemoWithdrawal(request: Request, env: Env, userId: number):
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
   if (!input || !provider || !amount || !destination || accountHolder.length < 2 || accountHolder.length > 100 || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, phone number and account name.' }, 400);
   const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
-  if (!settings || settings.enabled !== 1) return json({ error: 'That demo withdrawal method is not available.' }, 409);
+  if (!settings || settings.enabled !== 1) return json({ error: 'That withdrawal method is not available.' }, 409);
   if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
   const old = await env.DB.prepare('SELECT id, user_id, status FROM withdrawal_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
   if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
@@ -863,17 +966,17 @@ async function createDemoWithdrawal(request: Request, env: Env, userId: number):
   try {
     await env.DB.prepare(`INSERT INTO withdrawal_requests
       (id, user_id, wallet_kind, amount_santim, provider, status, idempotency_key, destination_phone_ciphertext, account_holder_ciphertext)
-      VALUES (?, ?, 'demo', ?, ?, 'pending', ?, ?, ?)`)
+      VALUES (?, ?, 'real', ?, ?, 'pending', ?, ?, ?)`)
       .bind(id, userId, amount * 100, provider, idempotencyKey, phoneCiphertext, nameCiphertext).run();
-  } catch { return json({ error: 'That request could not be saved. Try again.' }, 409); }
-  return json({ requestId: id, status: 'pending', demoOnly: true }, 201);
+  } catch { return json({ error: 'The request could not be saved. Check the available balance and try again.' }, 409); }
+  return json({ requestId: id, status: 'pending' }, 201);
 }
 
 async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'withdrawals'): Promise<Response> {
   if (kind === 'deposits') {
     const rows = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
       u.first_name, u.username, u.web_username, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt
-      FROM deposit_requests d JOIN users u ON u.id = d.user_id ORDER BY d.created_at DESC LIMIT 100`).all<{
+      FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.wallet_kind = 'real' ORDER BY d.created_at DESC LIMIT 100`).all<{
         id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
         first_name: string; username: string | null; web_username: string | null; has_receipt: number;
       }>();
@@ -886,7 +989,7 @@ async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'wi
     return json({ requests: details, count: details.length });
   }
   const rows = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
-    u.first_name, u.username, u.web_username FROM withdrawal_requests w JOIN users u ON u.id = w.user_id ORDER BY w.created_at DESC LIMIT 100`).all<{
+    u.first_name, u.username, u.web_username FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.wallet_kind = 'real' ORDER BY w.created_at DESC LIMIT 100`).all<{
       id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       first_name: string; username: string | null; web_username: string | null;
     }>();
@@ -902,20 +1005,42 @@ async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'wi
 
 async function reviewWalletRequest(request: Request, env: Env, adminId: number, kind: 'deposits' | 'withdrawals', id: string): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-  const input = await request.json().catch(() => null) as { status?: unknown; reason?: unknown } | null;
-  const allowed = kind === 'deposits' ? ['needs_info', 'approved', 'rejected'] : ['reviewing', 'approved', 'rejected'];
-  if (!input || typeof input.status !== 'string' || !allowed.includes(input.status)) return json({ error: 'That review action is not available in demo mode.' }, 400);
+  const input = await request.json().catch(() => null) as { status?: unknown; reason?: unknown; paymentReference?: unknown } | null;
+  if (!input || typeof input.status !== 'string') return json({ error: 'Choose a valid review action.' }, 400);
   const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '';
   if ((input.status === 'needs_info' || input.status === 'rejected') && reason.length < 3) return json({ error: 'Add a short note for this request.' }, 400);
   const table = kind === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
-  const old = await env.DB.prepare(`SELECT status FROM ${table} WHERE id = ?`).bind(id).first<{ status: string }>();
+  const old = await env.DB.prepare(`SELECT status, wallet_kind, user_id FROM ${table} WHERE id = ?`).bind(id).first<{ status: string; wallet_kind: string; user_id: number }>();
   if (!old) return json({ error: 'Request not found.' }, 404);
-  const result = await env.DB.prepare(`UPDATE ${table} SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND status IN ('pending','needs_info','reviewing')`)
-    .bind(input.status, reason || null, String(adminId), id).run();
+  if (old.wallet_kind !== 'real') return json({ error: 'This is a legacy preview request and cannot move real funds.' }, 409);
+  const transitions = kind === 'deposits'
+    ? { pending: ['needs_info', 'approved', 'rejected'], needs_info: ['needs_info', 'approved', 'rejected'] } as Record<string, string[]>
+    : { pending: ['reviewing', 'approved', 'rejected'], reviewing: ['approved', 'rejected'], approved: ['paid', 'rejected'] } as Record<string, string[]>;
+  if (!transitions[old.status]?.includes(input.status)) return json({ error: 'This request cannot move to that status.' }, 409);
+  if (kind === 'deposits' && input.status === 'approved') {
+    if (!(await moneyActivationRecorded(env))) return json({ error: 'Deposits are locked until the approval gate is active.' }, 403);
+    const eligibility = await moneyEligibilityError(env, old.user_id);
+    if (eligibility) return json({ error: eligibility }, 409);
+  }
+  if (kind === 'withdrawals' && input.status === 'approved' && !(await moneyActivationRecorded(env))) return json({ error: 'New withdrawal approvals are locked until the approval gate is active.' }, 403);
+  const paymentReference = typeof input.paymentReference === 'string' ? input.paymentReference.trim().slice(0, 100) : '';
+  if (input.status === 'paid' && paymentReference.length < 3) return json({ error: 'Enter the payout transfer reference before marking it complete.' }, 400);
+  let result: D1Result;
+  try {
+    result = kind === 'deposits'
+      ? await env.DB.prepare(`UPDATE deposit_requests SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND wallet_kind = 'real' AND status = ?`)
+        .bind(input.status, reason || null, String(adminId), id, old.status).run()
+      : await env.DB.prepare(`UPDATE withdrawal_requests SET status = ?, review_reason = ?, reviewed_by = ?,
+          approved_by = CASE WHEN ? = 'approved' THEN ? ELSE approved_by END,
+          paid_at = CASE WHEN ? = 'paid' THEN CURRENT_TIMESTAMP ELSE paid_at END,
+          payment_reference = CASE WHEN ? = 'paid' THEN ? ELSE payment_reference END,
+          reviewed_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND wallet_kind = 'real' AND status = ?`)
+        .bind(input.status, reason || null, String(adminId), input.status, String(adminId), input.status, input.status, paymentReference || null, id, old.status).run();
+  } catch { return json({ error: 'The review could not be saved. No status or balance was changed.' }, 409); }
   if (!result.meta.changes) return json({ error: 'This request has already been reviewed.' }, 409);
-  await recordAdminAudit(env, adminId, `WALLET_${kind.toUpperCase()}_${String(input.status).toUpperCase()}`, `${kind.slice(0, -1)}_request`, id, { status: old.status }, { status: input.status, reason: reason || null, balanceChanged: false });
-  return json({ ok: true, status: input.status, balanceChanged: false });
+  return json({ ok: true, status: input.status, balanceChanged: (kind === 'deposits' && input.status === 'approved') || (kind === 'withdrawals' && input.status === 'rejected') });
 }
 
 async function adminPaymentSettings(env: Env): Promise<Response> {
@@ -935,11 +1060,13 @@ async function updateAdminPaymentSettings(request: Request, env: Env, adminId: n
     const row = entry as { provider?: unknown; accountLabel?: unknown; accountNumber?: unknown; enabled?: unknown };
     const provider = paymentProvider(row.provider);
     const label = typeof row.accountLabel === 'string' ? row.accountLabel.trim() : '';
-    const number = validPaymentPhone(row.accountNumber);
-    if (!provider || label.length > 100 || !number || typeof row.enabled !== 'boolean') return null;
+    const accountNumber = typeof row.accountNumber === 'string' ? row.accountNumber.trim() : '';
+    const number = accountNumber ? validPaymentPhone(accountNumber) : null;
+    if (!provider || label.length > 100 || (accountNumber && !number) || (row.enabled === true && !number) || typeof row.enabled !== 'boolean') return null;
     return { provider, label, number, enabled: row.enabled };
   });
   if (parsed.some((item) => item === null) || new Set(parsed.map((item) => item?.provider)).size !== 2) return json({ error: 'Check both account names, numbers and enabled switches.' }, 400);
+  if (parsed.some((row) => row?.enabled) && !(await moneyActivationRecorded(env))) return json({ error: 'Payment methods cannot be shown until the legal and provider approval gate is active.' }, 403);
   const before = await adminPaymentSettings(env);
   const beforeData = await before.json() as { providers: unknown[] };
   const statements = parsed.map((row) => env.DB.prepare(`UPDATE payment_settings SET account_label = ?, account_number = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ?`)
@@ -1026,12 +1153,17 @@ async function agentDashboard(env: Env, userId: number): Promise<Response> {
 async function handleWalletAndStaff(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === '/api/wallet/settings' && request.method === 'GET') return publicPaymentSettings(env);
+  if (url.pathname === '/api/account/age-verification' && request.method === 'POST') {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    return userId ? submitAgeVerification(request, env, userId) : json({ error: 'Sign in before requesting an age review.' }, 401);
+  }
   if (url.pathname.startsWith('/api/wallet/')) {
     const userId = await readSession(request, env.SESSION_SECRET);
     if (!userId) return json({ error: 'Sign in through Telegram or your web account to continue.' }, 401);
+    if (url.pathname === '/api/wallet/balance' && request.method === 'GET') return playerWalletBalance(env, userId);
     if (url.pathname === '/api/wallet/requests' && request.method === 'GET') return playerWalletRequests(env, userId);
-    if (url.pathname === '/api/wallet/deposits' && request.method === 'POST') return createDemoDeposit(request, env, userId);
-    if (url.pathname === '/api/wallet/withdrawals' && request.method === 'POST') return createDemoWithdrawal(request, env, userId);
+    if (url.pathname === '/api/wallet/deposits' && request.method === 'POST') return createRealDeposit(request, env, userId);
+    if (url.pathname === '/api/wallet/withdrawals' && request.method === 'POST') return createRealWithdrawal(request, env, userId);
   }
   if (url.pathname === '/api/referrals/claim' && request.method === 'POST') {
     const userId = await readSession(request, env.SESSION_SECRET);
@@ -1041,10 +1173,15 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
     const userId = await readSession(request, env.SESSION_SECRET);
     return userId ? agentDashboard(env, userId) : json({ error: 'Sign in with the agent Telegram account.' }, 401);
   }
-  if (url.pathname.startsWith('/api/admin/identity') || url.pathname.startsWith('/api/admin/wallet') || url.pathname.startsWith('/api/admin/agents')) {
+  if (url.pathname.startsWith('/api/admin/identity') || url.pathname.startsWith('/api/admin/wallet') || url.pathname.startsWith('/api/admin/agents') || url.pathname.startsWith('/api/admin/activation')) {
     const adminId = await superAdmin(request, env);
     if (adminId instanceof Response) return adminId;
     if (url.pathname === '/api/admin/identity' && request.method === 'GET') return json({ isSuperAdmin: true });
+    if (url.pathname === '/api/admin/identity/age-requests' && request.method === 'GET') return adminAgeRequests(env);
+    const ageReview = url.pathname.match(/^\/api\/admin\/identity\/age-requests\/(\d+)$/);
+    if (ageReview && request.method === 'PATCH') return reviewAgeRequest(request, env, adminId, Number(ageReview[1]));
+    if (url.pathname === '/api/admin/activation' && request.method === 'GET') return adminActivationStatus(env);
+    if (url.pathname === '/api/admin/activation' && request.method === 'POST') return recordActivationEvidence(request, env, adminId);
     if (url.pathname === '/api/admin/wallet/settings' && request.method === 'GET') return adminPaymentSettings(env);
     if (url.pathname === '/api/admin/wallet/settings' && request.method === 'PUT') return updateAdminPaymentSettings(request, env, adminId);
     if (url.pathname === '/api/admin/wallet/deposits' && request.method === 'GET') return adminWalletList(env, adminId, 'deposits');
@@ -1054,7 +1191,7 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
       const table = detail[1] === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
       if (detail[1] === 'deposits') {
         const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ?`).bind(detail[2]).first<{
+          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ? AND d.wallet_kind = 'real'`).bind(detail[2]).first<{
             id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
             first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null;
           }>();
@@ -1074,7 +1211,7 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
       }
       const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
         w.destination_phone_ciphertext, w.account_holder_ciphertext, u.first_name, u.username, u.web_username
-        FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.id = ?`).bind(detail[2]).first<{
+        FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.id = ? AND w.wallet_kind = 'real'`).bind(detail[2]).first<{
           id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
           destination_phone_ciphertext: string | null; account_holder_ciphertext: string | null; first_name: string; username: string | null; web_username: string | null;
         }>();
@@ -1101,10 +1238,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: securityHeaders });
   if (url.pathname === '/api/health' && request.method === 'GET') {
-    return json({ ok: true, mode: 'demo', realMoneyAvailable: await moneyActivationRecorded(env) });
+    return json({ ok: true, mode: await moneyActivationRecorded(env) ? 'real' : 'free-play', realMoneyAvailable: await moneyActivationRecorded(env) });
   }
   if (url.pathname === '/api/games' && request.method === 'GET') {
-    return json({ games: PUBLIC_GAMES, liveMoney: false });
+    return json({ games: PUBLIC_GAMES, liveMoney: await moneyActivationRecorded(env) });
   }
   if (url.pathname === '/api/auth/telegram' && request.method === 'POST') return authenticate(request, env);
   if (url.pathname === '/api/auth/password' && request.method === 'POST') return authenticatePassword(request, env);
@@ -1183,9 +1320,10 @@ export class GameRoom {
       let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown; publicRoomId?: unknown; publicRoomOptions?: unknown; entryCredits?: unknown; commissionBps?: unknown };
       try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
       if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'checkers' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
-      const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId), matchId: null, sequence: 0, expiresAt: input.expiresAt as number,
+      const publicRoomOptions = input.publicRoomOptions && typeof input.publicRoomOptions === 'object' ? input.publicRoomOptions as Record<string, unknown> : undefined;
+      const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId, publicRoomOptions), matchId: null, sequence: 0, expiresAt: input.expiresAt as number,
         ...(typeof input.publicRoomId === 'string' ? { publicRoomId: input.publicRoomId } : {}),
-        ...(input.publicRoomOptions && typeof input.publicRoomOptions === 'object' ? { publicRoomOptions: input.publicRoomOptions as Record<string, unknown> } : {}),
+        ...(publicRoomOptions ? { publicRoomOptions } : {}),
         ...(Number.isSafeInteger(input.entryCredits) ? { entryCredits: input.entryCredits as number } : {}),
         ...(Number.isSafeInteger(input.commissionBps) ? { commissionBps: input.commissionBps as number } : {}) };
       await this.state.storage.put('room', room);
@@ -1317,7 +1455,7 @@ export class GameRoom {
     const hostMark: Mark = secureInt(0, 1) ? 'X' : 'O';
     room.players[0].mark = room.gameId === 'xo' ? hostMark : null;
     room.players.push({ id: userId, name: (input.displayName as string).slice(0, 32), mark: room.gameId === 'xo' ? (hostMark === 'X' ? 'O' : 'X') : null, online: false });
-    room.game = room.gameId === 'xo' ? initXO(room.players.find((player) => player.mark === 'X')?.mark || 'X') : createGame(room.gameId);
+    room.game = room.gameId === 'xo' ? initXO(room.players.find((player) => player.mark === 'X')?.mark || 'X') : createGame(room.gameId, room.publicRoomOptions);
     room.status = 'active';
     room.matchId = `${room.gameId}-${room.code}`;
     room.sequence = 0;

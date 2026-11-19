@@ -19,10 +19,10 @@ export default function RoomManagement({ token }: Props) {
   const [data, setData] = useState<AdminData | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [selectedId, setSelectedId] = useState('');
-  const [standardText, setStandardText] = useState('10, 20, 50, 100');
+  const [standardText, setStandardText] = useState('10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000');
   const [maximumText, setMaximumText] = useState('1000');
   const [commissionText, setCommissionText] = useState('10');
-  const [waitingText, setWaitingText] = useState('60');
+  const [waitingText, setWaitingText] = useState('30');
   const [customEnabled, setCustomEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

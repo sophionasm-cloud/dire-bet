@@ -40,7 +40,7 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
     <div className="ludo-match-meta practice-ludo-meta"><span>{t('ludoRuleText')}</span></div>
     <div className="ludo-two-player-layout">
       <PracticeLudoPlayerPanel name={t('you')} color="yellow" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>
-      <div className="ludo-board-stage"><TraditionalLudoBoard game={state} seat={0} playerZeroColor="white" onMove={(token) => setState((current) => moveLudo(current, token))}/></div>
+      <div className="ludo-board-stage"><TraditionalLudoBoard game={state} seat={0} playerZeroColor="yellow" onMove={(token) => setState((current) => moveLudo(current, token))}/></div>
       <PracticeLudoPlayerPanel name={t('bot')} color="red" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === 57).length} seconds={turnSeconds} t={t} bot/>
     </div>
     <div className="ludo-controls-wrap practice-ludo-controls">

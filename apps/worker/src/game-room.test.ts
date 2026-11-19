@@ -73,6 +73,16 @@ describe('authoritative XO room', () => {
     expect(current.game.lastEvent).not.toBeNull();
     expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT INTO match_events')))).toBe(true);
   });
+
+  it.each([1, 2, 4] as const)('carries a %i-crown public-room target into the match engine', async (crownTarget) => {
+    const { room, records } = createFixture();
+    const code = crownTarget === 1 ? 'ABC567' : crownTarget === 2 ? 'DEF678' : 'GHI789';
+    await room.fetch(request('/create', { code, gameId: 'ludo', userId: 61, displayName: 'Host', expiresAt: Date.now() + 60_000, publicRoomOptions: { player0Color: 'yellow', crownTarget } }));
+    await room.fetch(request('/join', { code, userId: 62, displayName: 'Friend' }));
+    const current = records.get('room') as { game: { crownTarget: number }; publicRoomOptions: { crownTarget: number } };
+    expect(current.game.crownTarget).toBe(crownTarget);
+    expect(current.publicRoomOptions.crownTarget).toBe(crownTarget);
+  });
 });
 
 describe('free room game catalog', () => {

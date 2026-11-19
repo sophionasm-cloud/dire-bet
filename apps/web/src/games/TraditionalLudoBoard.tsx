@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { legalLudoActions, type LudoPlayer, type LudoState } from '@dire-bet/engines/ludo';
 
-type PlayerColor = 'blue' | 'white';
-type BoardColor = 'red' | 'yellow';
+export type LudoBoardColor = 'red' | 'yellow' | 'green' | 'blue';
+type BoardColor = LudoBoardColor;
 
 const TRACK: [number, number][] = [
   ...[1, 2, 3, 4, 5].map((column) => [6, column] as [number, number]),
@@ -29,8 +29,11 @@ const HOME_SPACES: [number, number][][] = [
   [[10, 10], [10, 13], [13, 10], [13, 13]],
 ];
 
-function rotate([row, column]: [number, number], clockwise: boolean): [number, number] {
-  return clockwise ? [column, 14 - row] : [14 - column, row];
+function rotate([row, column]: [number, number], turns: 0 | 1 | 2 | 3): [number, number] {
+  if (turns === 1) return [column, 14 - row];
+  if (turns === 2) return [14 - row, 14 - column];
+  if (turns === 3) return [14 - column, row];
+  return [row, column];
 }
 
 function cellStyle([row, column]: [number, number]): CSSProperties {
@@ -44,11 +47,16 @@ function copyTokens(tokens: LudoState['tokens']): LudoState['tokens'] {
 export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
   game: LudoState;
   seat: number;
-  playerZeroColor: PlayerColor;
+  playerZeroColor: LudoBoardColor;
   onMove: (token: number) => void;
 }) {
-  const colors: [BoardColor, BoardColor] = playerZeroColor === 'blue' ? ['red', 'yellow'] : ['yellow', 'red'];
-  const clockwise = colors[0] === 'red';
+  const board: Record<LudoBoardColor, { colors: [BoardColor, BoardColor]; rotation: 0 | 1 | 2 | 3 }> = {
+    red: { colors: ['red', 'yellow'], rotation: 1 },
+    yellow: { colors: ['yellow', 'red'], rotation: 3 },
+    blue: { colors: ['blue', 'green'], rotation: 0 },
+    green: { colors: ['green', 'blue'], rotation: 2 },
+  };
+  const { colors, rotation } = board[playerZeroColor];
   const [visibleTokens, setVisibleTokens] = useState(() => copyTokens(game.tokens));
   const previousTokens = useRef(copyTokens(game.tokens));
   const actions = legalLudoActions(game);
@@ -84,14 +92,14 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
     for (let token = 0; token < 4; token++) {
       const position = visibleTokens[player][token];
       if (position === -1) {
-        const [row, col] = rotate(HOME_SPACES[player][token], clockwise);
+        const [row, col] = rotate(HOME_SPACES[player][token], rotation);
         tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -1 });
       } else if (position < 52) {
         const pathIndex = (position + player * 26) % 52;
-        const [row, col] = rotate(TRACK[pathIndex], clockwise);
+        const [row, col] = rotate(TRACK[pathIndex], rotation);
         tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: pathIndex });
       } else if (position < 57) {
-        const [row, col] = rotate(HOME_LANES[player][position - 52], clockwise);
+        const [row, col] = rotate(HOME_LANES[player][position - 52], rotation);
         tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -2 });
       } else {
         tokens.push({ player: player as LudoPlayer, token, row: 7, col: 7, pathPosition: -3 });
@@ -109,13 +117,14 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
       <div className="home-pad" aria-hidden="true">{[0, 1, 2, 3].map((well) => <i key={well}/>)}</div>
     </div>)}
     {TRACK.map((point, index) => {
-      const [row, col] = rotate(point, clockwise);
+      const [row, col] = rotate(point, rotation);
       const color = index === 0 ? colors[0] : index === 26 ? colors[1] : null;
-      const arrow = index === 0 ? (clockwise ? '↓' : '↑') : index === 26 ? (clockwise ? '↑' : '↓') : '';
+      const directions = ['→', '↓', '←', '↑'];
+      const arrow = index === 0 ? directions[rotation] : index === 26 ? directions[(rotation + 2) % 4] : '';
       return <span key={`track-${index}`} className={`ludo-track-cell ${SAFE.has(index) ? 'safe' : ''} ${color ? `start ${color}` : ''}`} style={cellStyle([row, col])}>{SAFE.has(index) ? '★' : arrow}</span>;
     })}
-    {HOME_LANES.map((lane, player) => lane.map((point, index) => <span key={`lane-${player}-${index}`} className={`ludo-home-lane ${colors[player]}`} style={cellStyle(rotate(point, clockwise))}/>))}
-    {NEUTRAL_LANE.map((point, index) => <span key={`neutral-${index}`} className="ludo-neutral-lane" style={cellStyle(rotate(point, clockwise))}/>)}
+    {HOME_LANES.map((lane, player) => lane.map((point, index) => <span key={`lane-${player}-${index}`} className={`ludo-home-lane ${colors[player]}`} style={cellStyle(rotate(point, rotation))}/>))}
+    {NEUTRAL_LANE.map((point, index) => <span key={`neutral-${index}`} className="ludo-neutral-lane" style={cellStyle(rotate(point, rotation))}/>)}
     <div className="ludo-finish-area" style={{ gridRow: '7 / span 3', gridColumn: '7 / span 3' }} aria-label="Finish"><span>✦</span></div>
     {tokens.map(({ player, token, row, col, pathPosition }) => <button
       key={`${player}-${token}`}

@@ -1,21 +1,23 @@
 import {
-  calculateDemoSettlement,
+  calculateSettlement,
   DEFAULT_MARKETPLACE_SETTINGS,
   isMarketplaceGame,
   parseEntryChoice,
+  parseLudoRoomOptions,
   validateMarketplaceSettings,
   type MarketplaceSettings,
 } from './marketplace';
 import { addisWeekStart } from './agent-report';
+import { moneyActivationRecorded, moneyEligibilityError, type ActivationEnv } from './activation';
 
 type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
 type PublicStatus = 'WAITING' | 'FULL' | 'STARTING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
-type MarketEnv = { DB: D1Database; GAME_ROOM: DurableObjectNamespace; SESSION_SECRET?: string };
+type MarketEnv = ActivationEnv & { GAME_ROOM: DurableObjectNamespace; SESSION_SECRET?: string };
 type RoomRow = {
   id: string; code: string; game_id: RoomGame; creator_id: number; creator_name: string; status: PublicStatus;
   capacity: number; player_count: number; entry_credits: number; options_json: string; created_at: number;
   expires_at: number; commission_bps: number; match_id: string | null; pool_tenths: number; game_ready: number;
-  fee_tenths: number; payout_tenths: number; winner: number | null;
+  fee_tenths: number; payout_tenths: number; winner: number | null; wallet_kind: 'demo' | 'real' | 'free';
 };
 type PlayerRow = { user_id: number; display_name: string; seat: number; reserved_units: number };
 type MarketPlayer = { name: string; avatar: string; seat: number };
@@ -46,11 +48,7 @@ function roomCode(): string {
 }
 
 function safeOptions(gameId: RoomGame, input: unknown): Record<string, unknown> | null {
-  if (gameId === 'ludo') {
-    if (!input || typeof input !== 'object') return { player0Color: 'blue' };
-    const color = (input as { player0Color?: unknown }).player0Color;
-    return color === 'blue' || color === 'white' ? { player0Color: color } : null;
-  }
+  if (gameId === 'ludo') return parseLudoRoomOptions(input);
   if (input && typeof input === 'object' && Object.keys(input).length > 0) return null;
   return {};
 }
@@ -58,16 +56,18 @@ function safeOptions(gameId: RoomGame, input: unknown): Record<string, unknown> 
 function credits(tenths: number): number { return Math.round(tenths) / 10; }
 
 export class Matchmaker {
+  private moneyActive = false;
   constructor(private readonly state: DurableObjectState, private readonly env: MarketEnv) {}
 
   async fetch(request: Request): Promise<Response> {
     this.ensureSchema();
+    this.moneyActive = await moneyActivationRecorded(this.env);
     const url = new URL(request.url);
     const path = url.pathname;
     try {
       if (path === '/connect' && request.method === 'GET') return this.connect(request);
-      if (path === '/list' && request.method === 'GET') return reply({ rooms: this.waitingRooms(url.searchParams.get('gameId')) });
-      if (path === '/config' && request.method === 'GET') return reply(this.settings());
+      if (path === '/list' && request.method === 'GET') return reply({ rooms: this.waitingRooms(url.searchParams.get('gameId'), this.moneyActive) });
+      if (path === '/config' && request.method === 'GET') return reply(this.marketConfig());
       if (path === '/balance' && request.method === 'GET') return this.balance(Number(url.searchParams.get('userId')));
       if (path === '/mine' && request.method === 'GET') return reply({ room: this.myRoom(Number(url.searchParams.get('userId')), url.searchParams.get('gameId')) });
       if (path === '/create' && request.method === 'POST') return this.createRoom(request);
@@ -123,10 +123,13 @@ export class Matchmaker {
       entry_credits INTEGER NOT NULL, options_json TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
       commission_bps INTEGER NOT NULL, match_id TEXT, game_ready INTEGER NOT NULL DEFAULT 1, pool_tenths INTEGER NOT NULL DEFAULT 0,
       fee_tenths INTEGER NOT NULL DEFAULT 0, payout_tenths INTEGER NOT NULL DEFAULT 0, winner INTEGER,
-      settled_at INTEGER)`);
+      settled_at INTEGER, wallet_kind TEXT NOT NULL DEFAULT 'demo' CHECK (wallet_kind IN ('demo','real','free')))`);
     const roomColumns = sql.exec<{ name: string }>('PRAGMA table_info(public_rooms)').toArray();
     if (!roomColumns.some((column) => column.name === 'game_ready')) {
       sql.exec('ALTER TABLE public_rooms ADD COLUMN game_ready INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!roomColumns.some((column) => column.name === 'wallet_kind')) {
+      sql.exec("ALTER TABLE public_rooms ADD COLUMN wallet_kind TEXT NOT NULL DEFAULT 'demo' CHECK (wallet_kind IN ('demo','real','free'))");
     }
     sql.exec(`CREATE INDEX IF NOT EXISTS public_rooms_status_time ON public_rooms(status, created_at DESC)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS public_room_players (
@@ -150,20 +153,72 @@ export class Matchmaker {
 
   private settings(): MarketplaceSettings {
     const raw = this.state.storage.sql.exec<{ settings_json: string }>('SELECT settings_json FROM marketplace_settings WHERE singleton = 1').toArray()[0]?.settings_json;
-    try { return validateMarketplaceSettings(JSON.parse(raw || '')) || DEFAULT_MARKETPLACE_SETTINGS; }
+    try {
+      const parsed = validateMarketplaceSettings(JSON.parse(raw || ''));
+      if (!parsed) return DEFAULT_MARKETPLACE_SETTINGS;
+      if (parsed.standardAmounts.join(',') === '10,20,50,100' && parsed.customEnabled && parsed.customMaximum === 1000 && parsed.commissionBps === 1000 && parsed.waitingSeconds === 60 && parsed.startingCredits === 1000) {
+        this.state.storage.sql.exec('UPDATE marketplace_settings SET settings_json = ?, updated_at = ? WHERE singleton = 1', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
+        return DEFAULT_MARKETPLACE_SETTINGS;
+      }
+      return parsed;
+    }
     catch { return DEFAULT_MARKETPLACE_SETTINGS; }
   }
 
-  private ensureCredits(userId: number, settings: MarketplaceSettings): number {
-    this.state.storage.sql.exec('INSERT OR IGNORE INTO demo_credit_accounts (user_id, balance_tenths, updated_at) VALUES (?, ?, ?)', userId, settings.startingCredits * 10, Date.now());
-    return this.state.storage.sql.exec<{ balance_tenths: number }>('SELECT balance_tenths FROM demo_credit_accounts WHERE user_id = ?', userId).toArray()[0]?.balance_tenths ?? 0;
+  private marketConfig(): MarketplaceSettings {
+    const settings = this.settings();
+    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, commissionBps: 0, realMoneyEnabled: this.moneyActive };
   }
 
-  private balance(userId: number): Response {
+  private async balance(userId: number): Promise<Response> {
     if (!Number.isSafeInteger(userId) || userId <= 0) return reply({ error: 'Player account is unavailable.' }, 400);
-    const settings = this.settings();
-    const balance = this.state.storage.transactionSync(() => this.ensureCredits(userId, settings));
-    return reply({ balanceCredits: credits(balance), label: 'DEMO CREDITS' });
+    if (!this.moneyActive) return reply({ error: 'Wallet services are unavailable until required approvals are recorded.' }, 403);
+    const eligibility = await moneyEligibilityError(this.env, userId);
+    if (eligibility) return reply({ error: eligibility }, 403);
+    const wallet = await this.env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>();
+    return reply({ balanceSantim: wallet?.balance_santim || 0, balance: (wallet?.balance_santim || 0) / 100 });
+  }
+
+  private async reserveWallet(userId: number, amountSantim: number, key: string, reference: string): Promise<boolean> {
+    const previous = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+    if (previous) return previous.user_id === userId && previous.amount_santim === -amountSantim;
+    try {
+      const result = await this.env.DB.prepare(`INSERT INTO wallet_transactions
+        (id, wallet_id, wallet_kind, category, amount_santim, balance_after_santim, idempotency_key, actor_type, actor_id, reference)
+        SELECT ?, id, 'real', 'match_entry', -?, balance_santim - ?, ?, 'user', ?, ?
+        FROM wallets WHERE user_id = ? AND wallet_kind = 'real' AND balance_santim >= ?`)
+        .bind(crypto.randomUUID(), amountSantim, amountSantim, key, String(userId), reference, userId, amountSantim).run();
+      if (result.meta.changes === 1) return true;
+    } catch { /* A concurrent request may have reserved these funds first. */ }
+    const repeated = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+    return Boolean(repeated && repeated.user_id === userId && repeated.amount_santim === -amountSantim);
+  }
+
+  private async creditWallet(userId: number, amountSantim: number, category: 'match_payout' | 'refund', key: string, reference: string): Promise<boolean> {
+    const previous = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+    if (previous) return previous.user_id === userId && previous.amount_santim === amountSantim;
+    try {
+      const result = await this.env.DB.prepare(`INSERT INTO wallet_transactions
+        (id, wallet_id, wallet_kind, category, amount_santim, balance_after_santim, idempotency_key, actor_type, actor_id, reference)
+        SELECT ?, id, 'real', ?, ?, balance_santim + ?, ?, 'system', NULL, ?
+        FROM wallets WHERE user_id = ? AND wallet_kind = 'real'`)
+        .bind(crypto.randomUUID(), category, amountSantim, amountSantim, key, reference, userId).run();
+      if (result.meta.changes === 1) return true;
+    } catch { /* The idempotency key can be written by a concurrent settlement. */ }
+    const repeated = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+    return Boolean(repeated && repeated.user_id === userId && repeated.amount_santim === amountSantim);
+  }
+
+  private async refundWallet(userId: number, amountSantim: number, holdKey: string, reference: string): Promise<boolean> {
+    const hold = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(holdKey).first<{ amount_santim: number; user_id: number }>();
+    if (!hold) return true;
+    if (hold.user_id !== userId || hold.amount_santim !== -amountSantim) return false;
+    return this.creditWallet(userId, amountSantim, 'refund', `room-refund:${holdKey}`, reference);
   }
 
   private async createRoom(request: Request): Promise<Response> {
@@ -173,63 +228,75 @@ export class Matchmaker {
       options?: unknown; idempotencyKey?: unknown;
     } | null;
     if (!input) return reply({ error: 'Room details are invalid.' }, 400);
-      if (!isMarketplaceGame(input.gameId) || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room details are invalid.' }, 400);
-      if (typeof input.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,80}$/.test(input.idempotencyKey)) return reply({ error: 'Room request key is invalid.' }, 400);
-      const options = safeOptions(input.gameId, input.options);
-      if (!options) return reply({ error: 'Those game settings are not supported.' }, 400);
-      const settings = this.settings();
-      const entryCredits = parseEntryChoice(input.entry, settings);
-      if (entryCredits === null) return reply({ error: 'Choose FREE or an available demo-credit entry amount.' }, 400);
-      const userId = input.userId as number;
-      const displayName = input.displayName.slice(0, 32);
-      const createdAt = Date.now();
-      const expiresAt = createdAt + settings.waitingSeconds * 1000;
-      const transaction = this.state.storage.transactionSync(() => {
-        const existing = this.state.storage.sql.exec<{ room_id: string }>('SELECT room_id FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey).toArray()[0];
-        if (existing) return { roomId: existing.room_id, error: '', created: false };
-        const balance = this.ensureCredits(userId, settings);
-        const reservedUnits = entryCredits * 10;
-        if (balance < reservedUnits) return { roomId: '', error: 'Not enough demo credits for this entry. Choose a lower amount or FREE.', created: false };
-        let code = roomCode();
-        for (let attempt = 0; attempt < 8 && this.roomRow(code); attempt++) code = roomCode();
-        this.state.storage.sql.exec('UPDATE demo_credit_accounts SET balance_tenths = balance_tenths - ?, updated_at = ? WHERE user_id = ?', reservedUnits, createdAt, userId);
-        this.state.storage.sql.exec(`INSERT INTO public_rooms (id, code, game_id, creator_id, creator_name, status, capacity, player_count,
-          entry_credits, options_json, created_at, expires_at, commission_bps, match_id, game_ready) VALUES (?, ?, ?, ?, ?, 'WAITING', 2, 1, ?, ?, ?, ?, ?, NULL, 0)`,
-          code, code, input.gameId, userId, displayName, entryCredits, JSON.stringify(options), createdAt, expiresAt, settings.commissionBps);
-        this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, 0, ?, ?)', code, userId, displayName, reservedUnits, createdAt);
-        this.state.storage.sql.exec('INSERT INTO public_room_idempotency (user_id, request_key, room_id) VALUES (?, ?, ?)', userId, input.idempotencyKey, code);
-        this.recordEvent(code, userId, 'ROOM_CREATED', { gameId: input.gameId, entryCredits, options });
-        return { roomId: code, error: '', created: true };
-      });
-      if (transaction.error) return reply({ error: transaction.error }, 402);
-      const room = this.roomRow(transaction.roomId);
-      if (!room) return reply({ error: 'Room request could not be found.' }, 503);
-      if (transaction.created) {
-        try {
-          await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at, is_public)
-            VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?, 1)`)
-            .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString()).run();
-        } catch {
-          await this.cancelBySystem(room.id, 'GAME_ROOM_RECORD_FAILED', false);
-          return reply({ error: 'Could not save the game room. Demo credits were returned.' }, 503);
-        }
-        const stub = this.env.GAME_ROOM.get(this.env.GAME_ROOM.idFromName(room.code));
-        const initialized = await stub.fetch('https://room/create', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code: room.code, gameId: room.game_id, userId, displayName, expiresAt,
-            publicRoomId: room.id, publicRoomOptions: options, entryCredits, commissionBps: room.commission_bps }),
-        });
-        if (!initialized.ok) {
-          await this.cancelBySystem(room.id, 'ROOM_SETUP_FAILED');
-          return reply({ error: 'Could not start the room service. Demo credits were returned.' }, 503);
-        }
-        this.state.storage.sql.exec('UPDATE public_rooms SET game_ready = 1 WHERE id = ? AND status = \'WAITING\'', room.id);
-        this.recordEvent(room.id, null, 'GAME_ROOM_READY', {});
+    if (!isMarketplaceGame(input.gameId) || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room details are invalid.' }, 400);
+    if (typeof input.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,80}$/.test(input.idempotencyKey)) return reply({ error: 'Room request key is invalid.' }, 400);
+    const options = safeOptions(input.gameId, input.options);
+    if (!options) return reply({ error: 'Those game settings are not supported.' }, 400);
+    const settings = this.settings();
+    const entryAmount = parseEntryChoice(input.entry, settings);
+    if (entryAmount === null) return reply({ error: 'Choose free play or an available ETB entry amount.' }, 400);
+    const userId = input.userId as number;
+    if (entryAmount > 0) {
+      if (!this.moneyActive) return reply({ error: 'Paid rooms are unavailable until required approvals are recorded.' }, 403);
+      const eligibility = await moneyEligibilityError(this.env, userId);
+      if (eligibility) return reply({ error: eligibility }, 403);
+    }
+    const displayName = input.displayName.slice(0, 32);
+    const createdAt = Date.now();
+    const expiresAt = createdAt + settings.waitingSeconds * 1000;
+    const transaction = this.state.storage.transactionSync(() => {
+      const existing = this.state.storage.sql.exec<{ room_id: string }>('SELECT room_id FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey).toArray()[0];
+      if (existing) return { roomId: existing.room_id, created: false };
+      let code = roomCode();
+      for (let attempt = 0; attempt < 8 && this.roomRow(code); attempt++) code = roomCode();
+      const walletKind = entryAmount > 0 ? 'real' : 'free';
+      const reservedSantim = entryAmount * 100;
+      this.state.storage.sql.exec(`INSERT INTO public_rooms (id, code, game_id, creator_id, creator_name, status, capacity, player_count,
+        entry_credits, options_json, created_at, expires_at, commission_bps, match_id, game_ready, wallet_kind)
+        VALUES (?, ?, ?, ?, ?, 'WAITING', 2, 1, ?, ?, ?, ?, 0, NULL, 0, ?)`,
+        code, code, input.gameId, userId, displayName, entryAmount, JSON.stringify(options), createdAt, expiresAt, walletKind);
+      this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, 0, ?, ?)', code, userId, displayName, reservedSantim, createdAt);
+      this.state.storage.sql.exec('INSERT INTO public_room_idempotency (user_id, request_key, room_id) VALUES (?, ?, ?)', userId, input.idempotencyKey, code);
+      this.recordEvent(code, userId, 'ROOM_CREATED', { gameId: input.gameId, entryAmount, options });
+      return { roomId: code, created: true };
+    });
+    const room = this.roomRow(transaction.roomId);
+    if (!room) return reply({ error: 'Room request could not be found.' }, 503);
+    if (room.status === 'CANCELLED' || room.status === 'EXPIRED') return reply({ error: 'That room request could not be completed. Start a new request.' }, 409);
+    if (!transaction.created && room.game_ready !== 1) return reply({ error: 'Room setup is still in progress. Refresh in a moment.' }, 409);
+    if (transaction.created && entryAmount > 0) {
+      const holdKey = `public-room-entry:${room.code}:0`;
+      if (!(await this.reserveWallet(userId, entryAmount * 100, holdKey, room.code))) {
+        await this.cancelBySystem(room.id, 'INSUFFICIENT_WALLET_BALANCE', false);
+        return reply({ error: 'Your available wallet balance is too low for this room.' }, 402);
       }
-      await this.scheduleAlarm();
-      this.broadcast();
-      const balance = this.state.storage.sql.exec<{ balance_tenths: number }>('SELECT balance_tenths FROM demo_credit_accounts WHERE user_id = ?', userId).toArray()[0]?.balance_tenths ?? 0;
-      return reply({ room: this.roomViewForUser(room.id, userId), balanceCredits: credits(balance) }, 201);
+    }
+    if (transaction.created) {
+      try {
+        await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at, is_public, entry_amount_santim, wallet_kind)
+          VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?, 1, ?, ?)`)
+          .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString(), entryAmount * 100, room.wallet_kind).run();
+      } catch {
+        await this.cancelBySystem(room.id, 'GAME_ROOM_RECORD_FAILED', false);
+        return reply({ error: 'Could not save the game room. Any held wallet funds were returned.' }, 503);
+      }
+      const stub = this.env.GAME_ROOM.get(this.env.GAME_ROOM.idFromName(room.code));
+      const initialized = await stub.fetch('https://room/create', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: room.code, gameId: room.game_id, userId, displayName, expiresAt,
+          publicRoomId: room.id, publicRoomOptions: options, entryCredits: entryAmount, commissionBps: 0 }),
+      });
+      if (!initialized.ok) {
+        await this.cancelBySystem(room.id, 'ROOM_SETUP_FAILED');
+        return reply({ error: 'Could not start the room. Any held wallet funds were returned.' }, 503);
+      }
+      this.state.storage.sql.exec('UPDATE public_rooms SET game_ready = 1 WHERE id = ? AND status = \'WAITING\'', room.id);
+      this.recordEvent(room.id, null, 'GAME_ROOM_READY', {});
+    }
+    await this.scheduleAlarm();
+    this.broadcast();
+    const wallet = this.moneyActive ? await this.env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>() : null;
+    return reply({ room: this.roomViewForUser(room.id, userId), balanceSantim: wallet?.balance_santim || 0, balance: (wallet?.balance_santim || 0) / 100 }, transaction.created ? 201 : 200);
   }
 
   private async joinRoom(request: Request, id: string): Promise<Response> {
@@ -531,11 +598,12 @@ export class Matchmaker {
     }
   }
 
-  private waitingRooms(gameId: string | null): MarketRoom[] {
+  private waitingRooms(gameId: string | null, moneyActive = this.moneyActive): MarketRoom[] {
     const now = Date.now();
+    const visibility = moneyActive ? "AND wallet_kind IN ('free','real')" : "AND wallet_kind = 'free'";
     const rows = gameId && isMarketplaceGame(gameId)
-      ? this.state.storage.sql.exec<RoomRow>("SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? AND game_id = ? ORDER BY created_at DESC LIMIT 100", now, gameId).toArray()
-      : this.state.storage.sql.exec<RoomRow>("SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? ORDER BY created_at DESC LIMIT 100", now).toArray();
+      ? this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? AND game_id = ? ${visibility} ORDER BY created_at DESC LIMIT 100`, now, gameId).toArray()
+      : this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? ${visibility} ORDER BY created_at DESC LIMIT 100`, now).toArray();
     return rows.map((row) => this.roomView(row.id)!).filter(Boolean);
   }
 
@@ -568,7 +636,7 @@ export class Matchmaker {
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
       feeCredits: credits(row.status === 'COMPLETED' ? row.fee_tenths : expected.feeTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),
-      commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? 'Classic · two players' : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
+      commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? `Classic · ${Number(options.crownTarget) || 4} ${Number(options.crownTarget) === 1 ? 'crown' : 'crowns'}` : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
       options, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at,
       matchId: row.match_id, winner: row.winner === -1 ? null : row.winner,
     };
