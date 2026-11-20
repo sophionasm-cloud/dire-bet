@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker, { moneyActivationRecorded, validateInitData } from './index';
 import { ageEligibilityError } from './activation';
+import { PUBLIC_GAMES } from '@dire-bet/shared';
 
 const token = 'test-bot-token';
 const encoder = new TextEncoder();
@@ -18,6 +19,12 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function hex(bytes: Uint8Array): string { return [...bytes].map((byte) => byte.toString(16).padStart(2,'0')).join(''); }
 function base64url(bytes: Uint8Array): string { return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'); }
+function fromBase64url(value: string): Uint8Array { return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4)), (character) => character.charCodeAt(0)); }
+
+async function passwordHash(password: string, salt: string, secret: string): Promise<string> {
+  const material = await crypto.subtle.importKey('raw', encoder.encode(`${secret}\u0000${password}`), 'PBKDF2', false, ['deriveBits']);
+  return base64url(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: ownedBuffer(fromBase64url(salt)), iterations: 600_000, hash: 'SHA-256' }, material, 256)));
+}
 
 async function initData(authDate: number): Promise<string> {
   const params = new URLSearchParams({
@@ -30,6 +37,11 @@ async function initData(authDate: number): Promise<string> {
   const key = await crypto.subtle.importKey('raw', ownedBuffer(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   params.set('hash', hex(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(check)))));
   return params.toString();
+}
+
+async function signedSession(secret: string, userId: number): Promise<string> {
+  const body = `${base64url(encoder.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))}.${base64url(encoder.encode(JSON.stringify({ sub: String(userId), exp: Math.floor(Date.now() / 1000) + 60 })))}`;
+  return `${body}.${base64url(await sign(secret, body))}`;
 }
 
 describe('Telegram initData verification', () => {
@@ -45,6 +57,67 @@ describe('Telegram initData verification', () => {
   it('rejects duplicate fields', async () => {
     const valid = await initData(Math.floor(Date.now()/1000));
     expect(await validateInitData(`${valid}&user=%7B%7D`, token)).toBeNull();
+  });
+});
+
+describe('account sign-in paths', () => {
+  it('authenticates an existing Telegram account and returns its saved contact status', async () => {
+    const statements: string[] = [];
+    const db = { prepare: (sql: string) => ({ bind: () => ({ first: async () => {
+      statements.push(sql);
+      if (sql.includes('INSERT INTO users (telegram_id')) return { id: 42 };
+      if (sql.includes('SELECT id, first_name, web_username, language')) return { id: 42, first_name: 'Existing', web_username: 'existing_user', language: 'am', age_eligibility: 'verified', age_review_pending: 0, phone_shared: 1 };
+      return null;
+    } }) }) };
+    const env = { TELEGRAM_BOT_TOKEN: token, SESSION_SECRET: 'session-secret', DB: db } as never;
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/telegram', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData: await initData(Math.floor(Date.now() / 1000)) }),
+    }), env);
+    expect(response.status).toBe(200);
+    const data = await response.json() as { token: string };
+    expect(statements.filter((sql) => sql.includes('INSERT INTO users (telegram_id'))).toHaveLength(1);
+    expect(statements[0]).toContain('ON CONFLICT(telegram_id) DO UPDATE');
+    const profile = await worker.fetch(new Request('https://dire-bet.test/api/me', { headers: { Authorization: `Bearer ${data.token}` } }), env);
+    expect(profile.status).toBe(200);
+    expect((await profile.json() as { user: { displayName: string; phoneShared: boolean } }).user).toMatchObject({ displayName: 'existing_user', phoneShared: true });
+  });
+
+  it('keeps the regular browser username and PIN login working', async () => {
+    const secret = 'browser-session-secret';
+    const salt = 'AAECAwQFBgcICQoLDA0ODw';
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ id: 7, first_name: 'Browser', web_username: 'browser_user', password_salt: salt, password_hash: await passwordHash('12345678', salt, secret) }) }) }) };
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/password', {
+      method: 'POST', headers: { Origin: 'https://dire-bet.test', 'content-type': 'application/json' }, body: JSON.stringify({ username: 'browser_user', password: '12345678' }),
+    }), { SESSION_SECRET: secret, DB: db, RATE_LIMITER: rateLimiter } as never);
+    expect(response.status).toBe(200);
+    expect((await response.json() as { token: string; user: { displayName: string } })).toMatchObject({ user: { displayName: 'browser_user' } });
+  });
+});
+
+describe('American Texas listing', () => {
+  it('stays listed but cannot be started', () => {
+    expect(PUBLIC_GAMES.find((game) => game.id === 'poker')).toMatchObject({ title: 'American Texas', availability: 'coming-soon' });
+  });
+
+  it('rejects direct private and public room creation', async () => {
+    const secret = 'coming-soon-room-secret';
+    const authorization = `Bearer ${await signedSession(secret, 9)}`;
+    const db = { prepare: (sql: string) => ({ bind: () => ({ first: async () => {
+      if (sql.includes('LEFT JOIN user_profiles')) return { status: 'active', age_eligibility: 'verified' };
+      if (sql.includes('FROM user_contacts')) return { user_id: 9 };
+      return null;
+    } }) }) };
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
+    const env = { SESSION_SECRET: secret, DB: db, RATE_LIMITER: rateLimiter } as never;
+    const privateRoom = await worker.fetch(new Request('https://dire-bet.test/api/rooms', {
+      method: 'POST', headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'content-type': 'application/json' }, body: JSON.stringify({ gameId: 'poker' }),
+    }), env);
+    const publicRoom = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+      method: 'POST', headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'content-type': 'application/json' }, body: JSON.stringify({ gameId: 'poker', entry: 'free', idempotencyKey: 'american-texas-key' }),
+    }), env);
+    expect(privateRoom.status).toBe(409);
+    expect(publicRoom.status).toBe(409);
   });
 });
 

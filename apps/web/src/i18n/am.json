@@ -160,6 +160,8 @@
   "shareInvite": "ግብዣ አጋራ",
   "onlineConnected": "ተገናኝቷል",
   "onlineConnecting": "በመገናኘት ላይ…",
+  "telegramAuthFailed": "ቴሌግራም ይህን ክፍለ ጊዜ ማረጋገጥ አልቻለም። DIRE BET ን ከቴሌግራም እንደገና ይክፈቱ ወይም ይሞክሩ።",
+  "retryTelegramAuth": "እንደገና ይሞክሩ",
   "onlineDisconnected": "ግንኙነቱ ተቋርጧል",
   "reconnect": "እንደገና ይገናኙ",
   "roomFull": "ይህ ክፍል ተሞልቷል።",

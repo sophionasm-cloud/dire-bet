@@ -244,7 +244,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   if (!(await allowRoomAction(env, userId, 'create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   let body: { gameId?: unknown };
   try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
-  if (body.gameId !== 'xo' && body.gameId !== 'ludo' && body.gameId !== 'checkers' && body.gameId !== 'poker') return json({ error: 'This game cannot be played online.' }, 409);
+  if (body.gameId !== 'xo' && body.gameId !== 'ludo' && body.gameId !== 'checkers') return json({ error: 'This game cannot be played online.' }, 409);
   const displayName = await gameDisplayName(env, userId);
   if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
   const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(body.gameId).first<{ enabled: number }>();
@@ -276,7 +276,7 @@ async function joinRoom(request: Request, env: Env, code: string): Promise<Respo
   if (!(await allowRoomAction(env, userId, 'join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   const row = await env.DB.prepare('SELECT id, game_id, status, expires_at FROM game_rooms WHERE code = ?').bind(code.toUpperCase()).first<{ id: string; game_id: string; status: string; expires_at: string | null }>();
   if (!row || (row.expires_at && Date.parse(row.expires_at) < Date.now())) return json({ error: 'Room not found or expired.' }, 404);
-  if (row.game_id !== 'xo' && row.game_id !== 'ludo' && row.game_id !== 'checkers' && row.game_id !== 'poker') return json({ error: 'This game is not available online yet.' }, 409);
+  if (row.game_id !== 'xo' && row.game_id !== 'ludo' && row.game_id !== 'checkers') return json({ error: 'This game is not available online yet.' }, 409);
   const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(row.game_id).first<{ enabled: number }>();
   if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
   const displayName = await gameDisplayName(env, userId);
@@ -298,7 +298,7 @@ async function createPublicRoom(request: Request, env: Env): Promise<Response> {
   if (!(await hasRegisteredContact(env, userId))) return json({ error: 'Share your contact with the DIRE BET bot to finish registration.' }, 403);
   if (!(await allowRoomAction(env, userId, 'public-create'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
   const input = await request.json().catch(() => null) as { gameId?: unknown; entry?: unknown; options?: unknown; idempotencyKey?: unknown } | null;
-  if (!input || !isMarketplaceGame(input.gameId)) return json({ error: 'This game cannot be opened in the public room list.' }, 409);
+  if (!input || !isMarketplaceGame(input.gameId) || input.gameId === 'poker') return json({ error: 'This game cannot be opened in the public room list.' }, 409);
   const game = await env.DB.prepare('SELECT enabled FROM games WHERE id = ?').bind(input.gameId).first<{ enabled: number }>();
   if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
   const displayName = await gameDisplayName(env, userId);
@@ -324,7 +324,7 @@ async function handlePublicMarketplace(request: Request, env: Env): Promise<Resp
   if (url.pathname === '/api/public-rooms/config' && request.method === 'GET') return publicMarketplace(env).fetch('https://market/config');
   if (url.pathname === '/api/public-rooms' && request.method === 'GET') {
     const gameId = url.searchParams.get('gameId') || '';
-    if (gameId && !isMarketplaceGame(gameId)) return json({ error: 'Game filter is invalid.' }, 400);
+    if (gameId && (!isMarketplaceGame(gameId) || gameId === 'poker')) return json({ error: 'Game filter is invalid.' }, 400);
     return publicMarketplace(env).fetch(`https://market/list?gameId=${encodeURIComponent(gameId)}`);
   }
   if (url.pathname === '/api/public-rooms/balance' && request.method === 'GET') {
@@ -404,6 +404,8 @@ async function connectRoom(request: Request, env: Env, code: string): Promise<Re
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'WebSocket upgrade required.' }, 426);
   const ticket = await readRoomTicket(new URL(request.url).searchParams.get('ticket') || '', env.SESSION_SECRET);
   if (!ticket || ticket.code !== code) return json({ error: 'Room ticket is invalid or expired.' }, 401);
+  const room = await env.DB.prepare('SELECT game_id FROM game_rooms WHERE id = ?').bind(code).first<{ game_id: string }>();
+  if (room?.game_id === 'poker') return json({ error: 'American Texas is coming soon.' }, 409);
   const ageError = await ageEligibilityError(env, ticket.userId);
   if (ageError) return json({ error: ageError }, 403);
   const headers = new Headers(request.headers);
@@ -1301,7 +1303,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (url.pathname === '/ws/public-rooms' && request.method === 'GET') {
     if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
     const gameId = url.searchParams.get('gameId') || '';
-    if (!isMarketplaceGame(gameId)) return json({ error: 'Game filter is invalid.' }, 400);
+    if (!isMarketplaceGame(gameId) || gameId === 'poker') return json({ error: 'Game filter is invalid.' }, 400);
     const headers = new Headers(request.headers);
     headers.delete('X-Market-User');
     const ticketValue = url.searchParams.get('ticket');

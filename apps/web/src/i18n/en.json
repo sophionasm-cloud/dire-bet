@@ -160,6 +160,8 @@
   "shareInvite": "Share invite",
   "onlineConnected": "Connected",
   "onlineConnecting": "Connecting…",
+  "telegramAuthFailed": "Telegram could not verify this session. Reopen DIRE BET from Telegram, or try again.",
+  "retryTelegramAuth": "Try again",
   "onlineDisconnected": "Connection lost",
   "reconnect": "Reconnect",
   "roomFull": "This room is already full.",

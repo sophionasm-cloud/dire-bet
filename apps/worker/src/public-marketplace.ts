@@ -212,7 +212,7 @@ export class Matchmaker {
       options?: unknown; idempotencyKey?: unknown;
     } | null;
     if (!input) return reply({ error: 'Room details are invalid.' }, 400);
-    if (!isMarketplaceGame(input.gameId) || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room details are invalid.' }, 400);
+    if (!isMarketplaceGame(input.gameId) || input.gameId === 'poker' || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room details are invalid.' }, 400);
     if (typeof input.idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{12,80}$/.test(input.idempotencyKey)) return reply({ error: 'Room request key is invalid.' }, 400);
     const options = safeOptions(input.gameId, input.options);
     if (!options) return reply({ error: 'Those game settings are not supported.' }, 400);
@@ -289,6 +289,7 @@ export class Matchmaker {
     if (!/^[23456789A-HJ-NP-Z]{6}$/.test(code) || !input || !Number.isSafeInteger(input.userId) || (input.userId as number) <= 0 || typeof input.displayName !== 'string') return reply({ error: 'Room or player details are invalid.' }, 400);
     const room = this.roomRow(code);
     if (!room) return reply({ error: 'Public room not found.' }, 404);
+    if (room.game_id === 'poker') return reply({ error: 'American Texas is coming soon.' }, 409);
     if (room.wallet_kind === 'demo') return reply({ error: 'This old preview room cannot accept players or move funds.' }, 409);
     if (this.isPlayer(code, input.userId as number)) return reply({ error: 'You already joined this room.' }, 409);
     if (room.status !== 'WAITING' || room.game_ready !== 1 || room.expires_at <= Date.now()) {
@@ -394,6 +395,7 @@ export class Matchmaker {
     const code = id.toUpperCase();
     const row = this.roomRow(code);
     if (!row || !this.isPlayer(code, userId)) return reply({ error: 'You are not a player in this room.' }, 403);
+    if (row.game_id === 'poker') return reply({ error: 'American Texas is coming soon.' }, 409);
     if (row.status !== 'IN_PROGRESS' && row.status !== 'SETTLING' && row.status !== 'COMPLETED') return reply({ error: 'This room is still preparing the game.' }, 409);
     return reply({ code: row.code, gameId: row.game_id, matchId: row.match_id, room: this.roomViewForUser(row.id, userId) });
   }
@@ -564,6 +566,7 @@ export class Matchmaker {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return reply({ error: 'WebSocket upgrade required.' }, 426);
     const gameId = new URL(request.url).searchParams.get('gameId') || '';
     if (!isMarketplaceGame(gameId)) return reply({ error: 'Game filter is invalid.' }, 400);
+    if (gameId === 'poker') return reply({ error: 'American Texas is coming soon.' }, 409);
     const userId = Number(request.headers.get('X-Market-User') || 0);
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -591,13 +594,13 @@ export class Matchmaker {
     const now = Date.now();
     const visibility = moneyActive ? "AND wallet_kind IN ('free','real')" : "AND wallet_kind = 'free'";
     const rows = gameId && isMarketplaceGame(gameId)
-      ? this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? AND game_id = ? ${visibility} ORDER BY created_at DESC LIMIT 100`, now, gameId).toArray()
-      : this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? ${visibility} ORDER BY created_at DESC LIMIT 100`, now).toArray();
+      ? this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? AND game_id = ? AND game_id != 'poker' ${visibility} ORDER BY created_at DESC LIMIT 100`, now, gameId).toArray()
+      : this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms WHERE status = 'WAITING' AND game_ready = 1 AND expires_at > ? AND game_id != 'poker' ${visibility} ORDER BY created_at DESC LIMIT 100`, now).toArray();
     return rows.map((row) => this.roomView(row.id)!).filter(Boolean);
   }
 
   private myRoom(userId: number, gameId: string | null): MarketRoom | null {
-    if (!Number.isSafeInteger(userId) || userId <= 0) return null;
+    if (!Number.isSafeInteger(userId) || userId <= 0 || gameId === 'poker') return null;
     const row = gameId && isMarketplaceGame(gameId)
       ? this.state.storage.sql.exec<{ room_id: string }>(`SELECT p.room_id FROM public_room_players p JOIN public_rooms r ON r.id = p.room_id
         WHERE p.user_id = ? AND r.game_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId, gameId).toArray()[0]

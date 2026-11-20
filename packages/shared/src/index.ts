@@ -9,7 +9,7 @@ export type GameId = z.infer<typeof GameIdSchema>;
 export const PUBLIC_GAMES = [
   { id: 'ludo', title: 'Ludo', category: 'board', availability: 'playable' },
   { id: 'checkers', title: 'Checkers', category: 'board', availability: 'playable' },
-  { id: 'poker', title: 'Texas Hold’em', category: 'cards', availability: 'playable' },
+  { id: 'poker', title: 'American Texas', category: 'cards', availability: 'coming-soon' },
   { id: 'xo', title: 'XO', category: 'quick', availability: 'playable' },
   { id: 'ethiopian-41', title: 'Ethiopian 41', category: 'cards', availability: 'unavailable' },
 ] as const;

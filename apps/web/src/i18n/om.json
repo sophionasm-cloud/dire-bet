@@ -160,6 +160,8 @@
   "shareInvite": "Affeerraa qoodi",
   "onlineConnected": "Wal qabateera",
   "onlineConnecting": "Wal qabamaa jira…",
+  "telegramAuthFailed": "Telegram yeroo kana mirkaneessuu hin dandeenye. DIRE BET Telegram keessaa irra deebi’ii bani ykn irra deebi’ii yaali.",
+  "retryTelegramAuth": "Irra deebi’ii yaali",
   "onlineDisconnected": "Wal qunnamtiin citeera",
   "reconnect": "Irra deebi’ii wal qabi",
   "roomFull": "Kutaankun duraan guutameera.",

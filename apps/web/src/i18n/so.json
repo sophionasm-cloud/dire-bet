@@ -160,6 +160,8 @@
   "shareInvite": "La wadaag martiqaadka",
   "onlineConnected": "Wuu xiran yahay",
   "onlineConnecting": "Waa la xiriirayaa…",
+  "telegramAuthFailed": "Telegram ma xaqiijin karin fadhigan. DIRE BET mar kale ka fur Telegram ama isku day mar kale.",
+  "retryTelegramAuth": "Mar kale isku day",
   "onlineDisconnected": "Xiriirkii wuu go’ay",
   "reconnect": "Dib u xir",
   "roomFull": "Qolkan hore ayuu u buuxsamay.",
