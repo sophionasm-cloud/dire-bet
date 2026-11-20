@@ -7,7 +7,6 @@ import {
   validateMarketplaceSettings,
   type MarketplaceSettings,
 } from './marketplace';
-import { addisWeekStart } from './agent-report';
 import { moneyActivationRecorded, moneyEligibilityError, type ActivationEnv } from './activation';
 
 type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
@@ -24,7 +23,7 @@ type MarketPlayer = { name: string; avatar: string; seat: number };
 type MarketRoom = {
   id: string; code: string; gameId: RoomGame; creatorName: string; creatorAvatar: string;
   players: MarketPlayer[]; playerCount: number; capacity: number; entryCredits: number;
-  poolCredits: number; feeCredits: number; payoutCredits: number; commissionBps: number;
+  poolCredits: number; payoutCredits: number;
   mode: string; options: Record<string, unknown>; status: PublicStatus; createdAt: number; expiresAt: number;
   matchId: string | null; winner: number | null; walletKind: 'demo' | 'real' | 'free'; viewerSeat?: number; viewerIsCreator?: boolean;
 };
@@ -145,21 +144,14 @@ export class Matchmaker {
   private settings(): MarketplaceSettings {
     const raw = this.state.storage.sql.exec<{ settings_json: string }>('SELECT settings_json FROM marketplace_settings WHERE singleton = 1').toArray()[0]?.settings_json;
     try {
-      const stored = JSON.parse(raw || '') as { startingCredits?: unknown };
-      const parsed = validateMarketplaceSettings(stored);
-      if (!parsed) return DEFAULT_MARKETPLACE_SETTINGS;
-      if (stored.startingCredits === 1000 && parsed.standardAmounts.join(',') === '10,20,50,100' && parsed.commissionBps === 1000 && parsed.waitingSeconds === 60) {
-        this.state.storage.sql.exec('UPDATE marketplace_settings SET settings_json = ?, updated_at = ? WHERE singleton = 1', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
-        return DEFAULT_MARKETPLACE_SETTINGS;
-      }
-      return parsed;
+      return validateMarketplaceSettings(JSON.parse(raw || '')) || DEFAULT_MARKETPLACE_SETTINGS;
     }
     catch { return DEFAULT_MARKETPLACE_SETTINGS; }
   }
 
   private marketConfig(): MarketplaceSettings {
     const settings = this.settings();
-    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, commissionBps: this.moneyActive ? settings.commissionBps : 0, realMoneyEnabled: this.moneyActive };
+    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, realMoneyEnabled: this.moneyActive };
   }
 
   private async balance(userId: number): Promise<Response> {
@@ -242,12 +234,11 @@ export class Matchmaker {
       let code = roomCode();
       for (let attempt = 0; attempt < 8 && this.roomRow(code); attempt++) code = roomCode();
       const walletKind = entryAmount > 0 ? 'real' : 'free';
-      const commissionBps = walletKind === 'real' ? settings.commissionBps : 0;
       const reservedSantim = entryAmount * 100;
       this.state.storage.sql.exec(`INSERT INTO public_rooms (id, code, game_id, creator_id, creator_name, status, capacity, player_count,
         entry_credits, options_json, created_at, expires_at, commission_bps, match_id, game_ready, wallet_kind)
-        VALUES (?, ?, ?, ?, ?, 'STARTING', 2, 1, ?, ?, ?, ?, ?, NULL, 0, ?)`,
-        code, code, input.gameId, userId, displayName, entryAmount, JSON.stringify(options), createdAt, expiresAt, commissionBps, walletKind);
+        VALUES (?, ?, ?, ?, ?, 'STARTING', 2, 1, ?, ?, ?, ?, 0, NULL, 0, ?)`,
+        code, code, input.gameId, userId, displayName, entryAmount, JSON.stringify(options), createdAt, expiresAt, walletKind);
       this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, 0, ?, ?)', code, userId, displayName, reservedSantim, createdAt);
       this.state.storage.sql.exec('INSERT INTO public_room_idempotency (user_id, request_key, room_id) VALUES (?, ?, ?)', userId, input.idempotencyKey, code);
       this.recordEvent(code, userId, 'ROOM_CREATED', { gameId: input.gameId, entryAmount, options });
@@ -277,7 +268,7 @@ export class Matchmaker {
       const initialized = await stub.fetch('https://room/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ code: room.code, gameId: room.game_id, userId, displayName, expiresAt,
-          publicRoomId: room.id, publicRoomOptions: options, entryCredits: entryAmount, commissionBps: room.commission_bps }),
+          publicRoomId: room.id, publicRoomOptions: options, entryCredits: entryAmount }),
       });
       if (!initialized.ok) {
         await this.cancelBySystem(room.id, 'ROOM_SETUP_FAILED');
@@ -424,7 +415,7 @@ export class Matchmaker {
     } catch { return reply({ error: 'The match result is invalid.' }, 409); }
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', row.id).toArray();
     if (players.length !== row.capacity) return reply({ error: 'The completed match has an incomplete room.' }, 409);
-    const calculated = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, players.length, row.commission_bps) : { poolTenths: 0, feeTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const calculated = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, players.length) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     const locked = this.state.storage.transactionSync(() => {
       const current = this.roomRow(row.id);
       if (!current || current.status === 'CANCELLED' || current.status === 'EXPIRED') return 'closed';
@@ -437,7 +428,6 @@ export class Matchmaker {
     });
     if (locked === 'closed') return reply({ error: 'Room was closed before settlement.' }, 409);
     if (locked === 'already') {
-      if (row.wallet_kind === 'real') await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
       return reply({ settled: false, alreadySettled: true, room: this.roomView(row.id) });
     }
 
@@ -463,49 +453,16 @@ export class Matchmaker {
       const current = this.roomRow(row.id);
       if (!current || current.status === 'COMPLETED') return false;
       if (current.status !== 'SETTLING') return false;
-      this.state.storage.sql.exec(`UPDATE public_rooms SET status = 'COMPLETED', pool_tenths = ?, fee_tenths = ?,
+      this.state.storage.sql.exec(`UPDATE public_rooms SET status = 'COMPLETED', pool_tenths = ?, fee_tenths = 0,
         payout_tenths = ?, winner = ?, settled_at = ? WHERE id = ? AND status = 'SETTLING'`,
-        calculated.poolTenths, calculated.feeTenths, calculated.payoutTenths, winner === 'draw' ? -1 : winner, Date.now(), row.id);
+        calculated.poolTenths, calculated.payoutTenths, winner === 'draw' ? -1 : winner, Date.now(), row.id);
       this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ?', row.id);
-      this.recordEvent(row.id, null, 'MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, feeTenths: calculated.feeTenths, payoutTenths: calculated.payoutTenths, commissionBps: row.commission_bps, walletKind: row.wallet_kind });
+      this.recordEvent(row.id, null, 'MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, payoutTenths: calculated.payoutTenths, walletKind: row.wallet_kind });
       return true;
     });
     if (!settled && this.roomRow(row.id)?.status !== 'COMPLETED') return reply({ error: 'Settlement is pending reconciliation.' }, 503);
-    if (row.wallet_kind === 'real') await this.recordAgentWeeklyActivity(row, players, winner, calculated, input.matchId);
     this.broadcast();
     return reply({ settled, alreadySettled: !settled, room: this.roomView(row.id) });
-  }
-
-  private async recordAgentWeeklyActivity(row: RoomRow, players: PlayerRow[], winner: number | 'draw', calculated: ReturnType<typeof calculateSettlement>, matchId: string): Promise<void> {
-    if (players.length !== row.capacity || players.length !== 2) return;
-    const [referrals, match] = await Promise.all([
-      this.env.DB.prepare(`SELECT r.agent_id, r.referred_user_id, r.created_at FROM referrals r
-        JOIN agents a ON a.id = r.agent_id WHERE r.referred_user_id IN (?, ?)`)
-        .bind(players[0].user_id, players[1].user_id).all<{ agent_id: string; referred_user_id: number; created_at: string }>(),
-      this.env.DB.prepare('SELECT ended_at FROM matches WHERE id = ?').bind(matchId).first<{ ended_at: string | null }>(),
-    ]);
-    if (!referrals.results.length) return;
-    const completedAt = match?.ended_at ? Date.parse(`${match.ended_at.replace(' ', 'T')}Z`) : Date.now();
-    if (!Number.isFinite(completedAt)) return;
-    const payoutTenths = new Map<number, number>();
-    if (winner === 'draw') {
-      for (const player of players) payoutTenths.set(player.user_id, Math.floor(calculated.payoutTenths / players.length) + (player.seat === 0 ? calculated.payoutTenths % players.length : 0));
-    } else {
-      const winningPlayer = players.find((player) => player.seat === winner);
-      if (winningPlayer) payoutTenths.set(winningPlayer.user_id, calculated.payoutTenths);
-    }
-    const weekStart = addisWeekStart(completedAt);
-    const statements = referrals.results.map((referral) => {
-      const player = players.find((seat) => seat.user_id === referral.referred_user_id);
-      if (!player || Date.parse(`${referral.created_at.replace(' ', 'T')}Z`) > completedAt) return null;
-      const entrySantim = row.entry_credits * 100;
-      const payoutSantim = (payoutTenths.get(player.user_id) || 0) * 10;
-      return this.env.DB.prepare(`INSERT OR IGNORE INTO agent_weekly_activity
-        (id, agent_id, referred_user_id, match_id, week_start, net_result_santim)
-        VALUES (?, ?, ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), referral.agent_id, referral.referred_user_id, matchId, weekStart, entrySantim - payoutSantim);
-    }).filter((statement): statement is D1PreparedStatement => statement !== null);
-    if (statements.length) await this.env.DB.batch(statements);
   }
 
   private async voidMatch(request: Request): Promise<Response> {
@@ -545,15 +502,6 @@ export class Matchmaker {
         if (data.settled) settled++;
       }
     }
-    const pendingAgentRows = await this.env.DB.prepare(`SELECT m.room_id AS id, m.id AS match_id FROM matches m
-      JOIN game_rooms g ON g.id = m.room_id AND g.is_public = 1 AND g.wallet_kind = 'real'
-      JOIN match_players p ON p.match_id = m.id
-      JOIN referrals r ON r.referred_user_id = p.user_id
-      WHERE m.status = 'completed' AND NOT EXISTS (SELECT 1 FROM agent_weekly_activity w WHERE w.match_id = m.id)
-      GROUP BY m.id ORDER BY m.ended_at DESC LIMIT 100`).all<{ id: string; match_id: string }>();
-    for (const row of pendingAgentRows.results) {
-      await this.settle(new Request('https://market/settle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: row.id, matchId: row.match_id }) }));
-    }
     const refunds = this.state.storage.sql.exec<{ id: string }>(`SELECT DISTINCT r.id FROM public_rooms r
       JOIN public_room_players p ON p.room_id = r.id WHERE r.status IN ('CANCELLED','EXPIRED') AND p.reserved_units > 0 LIMIT 100`).toArray();
     let refunded = 0;
@@ -566,11 +514,10 @@ export class Matchmaker {
     const filter = gameId ? 'WHERE game_id = ?' : '';
     const params = gameId ? [gameId] : [];
     const rows = this.state.storage.sql.exec<RoomRow>(`SELECT * FROM public_rooms ${filter} ORDER BY created_at DESC LIMIT 100`, ...params).toArray();
-    const stats = this.state.storage.sql.exec<{ status: PublicStatus; count: number; volume: number; fees: number; players: number }>(`SELECT status, COUNT(*) AS count,
+    const stats = this.state.storage.sql.exec<{ status: PublicStatus; count: number; volume: number; players: number }>(`SELECT status, COUNT(*) AS count,
       SUM(CASE WHEN status = 'COMPLETED' AND wallet_kind = 'real' THEN pool_tenths ELSE 0 END) AS volume,
-      SUM(CASE WHEN status = 'COMPLETED' AND wallet_kind = 'real' THEN fee_tenths ELSE 0 END) AS fees,
       SUM(player_count) AS players FROM public_rooms ${filter} GROUP BY status`, ...params).toArray();
-    const counts: Record<string, number> = { total: 0, active: 0, waiting: 0, full: 0, inProgress: 0, completed: 0, cancelled: 0, expired: 0, realVolumeEtb: 0, realCommissionEtb: 0, averagePlayers: 0 };
+    const counts: Record<string, number> = { total: 0, active: 0, waiting: 0, full: 0, inProgress: 0, completed: 0, cancelled: 0, expired: 0, realVolumeEtb: 0, averagePlayers: 0 };
     for (const stat of stats) {
       counts.total += stat.count;
       if (stat.status === 'WAITING') counts.waiting = stat.count;
@@ -581,7 +528,6 @@ export class Matchmaker {
       if (stat.status === 'EXPIRED') counts.expired = stat.count;
       if (['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING'].includes(stat.status)) counts.active += stat.count;
       counts.realVolumeEtb += credits(stat.volume || 0);
-      counts.realCommissionEtb += credits(stat.fees || 0);
     }
     const totalPlayers = stats.reduce((sum, item) => sum + item.players, 0);
     counts.averagePlayers = counts.total ? Math.round((totalPlayers / counts.total) * 100) / 100 : 0;
@@ -603,7 +549,7 @@ export class Matchmaker {
   private async updateSettings(request: Request): Promise<Response> {
     const input = await request.json().catch(() => null);
     const settings = validateMarketplaceSettings(input);
-    if (!settings) return reply({ error: 'Settings are invalid. Check amounts, waiting time, maximum and commission.' }, 400);
+    if (!settings) return reply({ error: 'Settings are invalid. Check entry amounts, waiting time and maximum.' }, 400);
     const adminId = Number(request.headers.get('X-Market-Admin'));
     if (!Number.isSafeInteger(adminId) || adminId <= 0) return reply({ error: 'Administrator identity is missing.' }, 401);
     this.state.storage.transactionSync(() => {
@@ -668,7 +614,7 @@ export class Matchmaker {
     const row = this.roomRow(id);
     if (!row) return null;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', id).toArray();
-    const expected = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, row.capacity, row.commission_bps) : { poolTenths: 0, feeTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const expected = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, row.capacity) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     let options: Record<string, unknown> = {};
     try { options = JSON.parse(row.options_json) as Record<string, unknown>; } catch { /* Keep malformed stored options out of the response. */ }
     return {
@@ -677,9 +623,8 @@ export class Matchmaker {
       players: players.map((player) => ({ name: player.display_name, avatar: (player.display_name.trim()[0] || 'P').toUpperCase(), seat: player.seat })),
       playerCount: row.player_count, capacity: row.capacity, entryCredits: row.wallet_kind === 'demo' ? 0 : row.entry_credits,
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
-      feeCredits: credits(row.status === 'COMPLETED' ? row.fee_tenths : expected.feeTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),
-      commissionBps: row.commission_bps, mode: row.game_id === 'ludo' ? `Classic · ${Number(options.crownTarget) || 4} ${Number(options.crownTarget) === 1 ? 'crown' : 'crowns'}` : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
+      mode: row.game_id === 'ludo' ? `Classic · ${Number(options.crownTarget) || 4} ${Number(options.crownTarget) === 1 ? 'crown' : 'crowns'}` : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',
       options, status: row.status, createdAt: row.created_at, expiresAt: row.expires_at,
       matchId: row.match_id, winner: row.winner === -1 ? null : row.winner, walletKind: row.wallet_kind,
     };

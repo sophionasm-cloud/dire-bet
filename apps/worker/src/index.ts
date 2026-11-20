@@ -6,7 +6,7 @@ import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type Po
 import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
 import { addisWeekStart } from './agent-report';
-import { moneyActivationRecorded, moneyEligibilityError } from './activation';
+import { ageEligibilityError, moneyActivationRecorded, moneyEligibilityError } from './activation';
 export { moneyActivationRecorded } from './activation';
 
 interface Env {
@@ -40,7 +40,7 @@ type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
 type RoomState = XOState | LudoState | CheckersState | PokerState;
 type RoomPlayer = { id: number; name: string; mark: Mark | null; online: boolean };
 type RoomTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' };
-type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; commissionBps?: number; terminal?: RoomTerminal; drawOfferBy?: number };
+type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; terminal?: RoomTerminal; drawOfferBy?: number };
 type RoomTicket = { userId: number; displayName: string; code: string; expiresAt: number };
 
 const securityHeaders = {
@@ -404,6 +404,8 @@ async function connectRoom(request: Request, env: Env, code: string): Promise<Re
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'WebSocket upgrade required.' }, 426);
   const ticket = await readRoomTicket(new URL(request.url).searchParams.get('ticket') || '', env.SESSION_SECRET);
   if (!ticket || ticket.code !== code) return json({ error: 'Room ticket is invalid or expired.' }, 401);
+  const ageError = await ageEligibilityError(env, ticket.userId);
+  if (ageError) return json({ error: ageError }, 403);
   const headers = new Headers(request.headers);
   headers.set('X-Game-User', String(ticket.userId));
   headers.set('X-Game-Name', ticket.displayName);
@@ -510,9 +512,9 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     '/games': gameList[lang],
     '/profile': 'Open DIRE BET to view your player profile.',
     '/account': 'Share your contact with this bot, then open Account in DIRE BET to set an optional web username and 8-digit PIN.',
-    '/wallet': 'TEST MODE · Demo credits are not ETB cash. Live deposits and withdrawals are disabled.',
+    '/wallet': 'Wallet payments are locked until required approvals are recorded. Do not send funds.',
     '/leaderboard': 'The public leaderboard is not available yet.',
-    '/help': 'DIRE BET free-play preview. Use /support for help.',
+    '/help': 'DIRE BET free play is available. Wallet payments remain locked pending required approvals. Use /support for help.',
     '/support': 'Support tickets are not available yet. Please check back later.',
     '/stop': 'Promotional messages are not sent in this preview.',
   };
@@ -532,11 +534,11 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   } : command === '/account' ? {
     inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${base}/?page=account` } }]],
   } : command === '/wallet' ? {
-    inline_keyboard: [[{ text: 'Open demo wallet', web_app: { url: `${base}/?page=wallet` } }]],
+    inline_keyboard: [[{ text: 'Open wallet', web_app: { url: `${base}/?page=wallet` } }]],
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
-    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} This link uses promo code ${agentCode}. Agent reports use demo match results only; there are no cash commissions or payments.` : responses[command] || 'Use /play to open free practice games, or /help for help.',
+    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} This link uses promo code ${agentCode} for referral tracking only.` : responses[command] || 'Use /play to open free games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
   if (command === '/start') {
@@ -547,10 +549,10 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
       om: 'Seensi weebii filannoo dha: quunnamtii kee qoodi, achiis Herrega baniitii maqaa fayyadamaa fi PIN lakkoofsa 8 filadhu. Quunnamtiin kee herrega kee walitti hidhuuf qofa fayyada. Kaffaltiin kallattiin hin jiru.',
     };
     const keyboardLabels: Record<string, { play: string; contact: string; wallet: string; more: string }> = {
-      en: { play: '🎮 Play', contact: 'Share contact', wallet: 'Demo wallet', more: 'More' },
-      am: { play: '🎮 መጫወት', contact: 'እውቂያ አጋራ', wallet: 'የማሳያ ዋሌት', more: 'ተጨማሪ' },
-      so: { play: '🎮 Ciyaar', contact: 'La wadaag xiriirka', wallet: 'Wallet tijaabo', more: 'Wax badan' },
-      om: { play: '🎮 Taphadhu', contact: 'Quunnamtii qoodi', wallet: 'Wallet shaakalaa', more: 'Dabalata' },
+      en: { play: '🎮 Play', contact: 'Share contact', wallet: 'Wallet', more: 'More' },
+      am: { play: '🎮 መጫወት', contact: 'እውቂያ አጋራ', wallet: 'ዋሌት', more: 'ተጨማሪ' },
+      so: { play: '🎮 Ciyaar', contact: 'La wadaag xiriirka', wallet: 'Wallet', more: 'Wax badan' },
+      om: { play: '🎮 Taphadhu', contact: 'Quunnamtii qoodi', wallet: 'Wallet', more: 'Dabalata' },
     };
     const labels = keyboardLabels[lang];
     await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
@@ -587,13 +589,13 @@ async function setupTelegram(request: Request, env: Env): Promise<Response> {
       { command: 'start', description: 'Open DIRE BET' }, { command: 'play', description: 'Play free games' },
       { command: 'games', description: 'See available games' }, { command: 'profile', description: 'View your profile' },
       { command: 'account', description: 'Set up optional web login' },
-      { command: 'wallet', description: 'View demo wallet status' }, { command: 'leaderboard', description: 'View rankings' },
+      { command: 'wallet', description: 'Open wallet and payment status' }, { command: 'leaderboard', description: 'View rankings' },
       { command: 'admin', description: 'Open the owner dashboard' },
       { command: 'help', description: 'Get help' }, { command: 'support', description: 'Contact support' },
       { command: 'stop', description: 'Turn off promotions' },
     ] });
     await call('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Play', web_app: { url: origin } } });
-    await call('setMyDescription', { description: 'DIRE BET · Friendly free-play games for the community.' });
+    await call('setMyDescription', { description: 'DIRE BET · Free-play games. Wallet payments are locked pending approvals.' });
     await env.DB.prepare("INSERT INTO application_settings (key, value, updated_at) VALUES ('telegram_setup_used', 'true', CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = CURRENT_TIMESTAMP").run();
     return json({ ok: true });
   } catch {
@@ -755,6 +757,19 @@ async function decryptContact(value: string, secret: string): Promise<string> {
   return new TextDecoder().decode(clear);
 }
 
+async function receiptCanBeReviewed(env: Env, requestId: string): Promise<boolean> {
+  const receipt = await env.DB.prepare('SELECT content_type, encrypted_blob FROM receipt_blobs WHERE deposit_request_id = ?').bind(requestId).first<{ content_type: 'image/png' | 'image/jpeg'; encrypted_blob: ArrayBuffer | Uint8Array }>();
+  if (!receipt) return false;
+  try {
+    const bytes = receipt.encrypted_blob instanceof Uint8Array ? receipt.encrypted_blob : new Uint8Array(receipt.encrypted_blob);
+    const encoded = await decryptContact(new TextDecoder().decode(bytes), env.SESSION_SECRET || '');
+    const image = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    const png = image.length >= 8 && image[0] === 0x89 && image[1] === 0x50 && image[2] === 0x4e && image[3] === 0x47 && image[4] === 0x0d && image[5] === 0x0a && image[6] === 0x1a && image[7] === 0x0a;
+    const jpeg = image.length >= 3 && image[0] === 0xff && image[1] === 0xd8 && image[2] === 0xff;
+    return receipt.content_type === 'image/png' ? png : jpeg;
+  } catch { return false; }
+}
+
 async function recordAdminAudit(env: Env, adminId: number, action: string, entityType: string, entityId: string, before: unknown, after: unknown): Promise<void> {
   await env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, before_json, after_json)
     VALUES (?, 'admin', ?, ?, ?, ?, ?, ?)`)
@@ -776,7 +791,7 @@ async function recordActivationEvidence(request: Request, env: Env, adminId: num
   const providers = input?.providerApprovals as { telebirr?: unknown; ebirr?: unknown } | undefined;
   const licenseReferences = input?.licenseReferences;
   if (!input || !validEvidenceReference(input.counselApproval) || !validEvidenceReference(input.licenseReview)
-    || !Array.isArray(licenseReferences) || licenseReferences.length > 20 || !licenseReferences.every(validEvidenceReference)
+    || !Array.isArray(licenseReferences) || licenseReferences.length < 1 || licenseReferences.length > 20 || !licenseReferences.every(validEvidenceReference)
     || !validEvidenceReference(providers?.telebirr) || !validEvidenceReference(providers?.ebirr)
     || !validEvidenceReference(input.telegramApproval) || !validEvidenceReference(input.nationalBankReview)
     || !validEvidenceReference(input.ageVerificationMethod) || !validEvidenceReference(input.responsiblePlayPolicy)
@@ -857,14 +872,19 @@ async function reviewAgeRequest(request: Request, env: Env, adminId: number, use
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
   const input = await request.json().catch(() => null) as { status?: unknown; verifiedAge?: unknown; reason?: unknown } | null;
   if (!input || (input.status !== 'verified' && input.status !== 'blocked')) return json({ error: 'Choose verified or blocked.' }, 400);
+  if (input.status === 'verified' && adminId === userId) return json({ error: 'An administrator cannot approve their own age check.' }, 403);
   const minimumAge = await env.DB.prepare('SELECT minimum_age FROM activation_records ORDER BY approved_at DESC, id DESC LIMIT 1').first<{ minimum_age: number }>();
   const requiredAge = Math.max(18, minimumAge?.minimum_age || 18);
-  if (input.status === 'verified' && (!Number.isInteger(input.verifiedAge) || (input.verifiedAge as number) < requiredAge)) return json({ error: `Verify an age of at least ${requiredAge} before approving this account.` }, 400);
+  if (input.status === 'verified' && (!Number.isInteger(input.verifiedAge) || (input.verifiedAge as number) < requiredAge || (input.verifiedAge as number) > 120)) return json({ error: `Verify an age of at least ${requiredAge} before approving this account.` }, 400);
   const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 240) : '';
   if (input.status === 'blocked' && reason.length < 3) return json({ error: 'Add a short reason for blocking this account.' }, 400);
   const row = await env.DB.prepare('SELECT age_eligibility FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_eligibility: string }>();
   if (!row) return json({ error: 'Age review request not found.' }, 404);
   if (row.age_eligibility !== 'unverified') return json({ error: 'This age request has already been reviewed.' }, 409);
+  const reference = await env.DB.prepare('SELECT age_review_reference FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_review_reference: string | null }>();
+  try {
+    if (!reference?.age_review_reference || (await decryptContact(reference.age_review_reference, env.SESSION_SECRET || '')).trim().length < 3) throw new Error();
+  } catch { return json({ error: 'The age-check reference is unavailable for review.' }, 409); }
   await env.DB.batch([
     env.DB.prepare(`UPDATE user_profiles SET age_eligibility = ?, updated_at = CURRENT_TIMESTAMP
       WHERE user_id = ? AND age_eligibility = 'unverified'`).bind(input.status, userId),
@@ -1017,12 +1037,14 @@ async function reviewWalletRequest(request: Request, env: Env, adminId: number, 
     ? { pending: ['needs_info', 'approved', 'rejected'], needs_info: ['needs_info', 'approved', 'rejected'] } as Record<string, string[]>
     : { pending: ['reviewing', 'approved', 'rejected'], reviewing: ['approved', 'rejected'], approved: ['paid', 'rejected'] } as Record<string, string[]>;
   if (!transitions[old.status]?.includes(input.status)) return json({ error: 'This request cannot move to that status.' }, 409);
-  if (kind === 'deposits' && input.status === 'approved') {
-    if (!(await moneyActivationRecorded(env))) return json({ error: 'Deposits are locked until the approval gate is active.' }, 403);
+  if (input.status === 'approved') {
+    if (!(await moneyActivationRecorded(env))) return json({ error: 'Approvals are locked until the approval gate is active.' }, 403);
     const eligibility = await moneyEligibilityError(env, old.user_id);
     if (eligibility) return json({ error: eligibility }, 409);
+    if (kind === 'deposits') {
+      if (!(await receiptCanBeReviewed(env, id))) return json({ error: 'A readable payment screenshot is required before approving this deposit.' }, 409);
+    }
   }
-  if (kind === 'withdrawals' && input.status === 'approved' && !(await moneyActivationRecorded(env))) return json({ error: 'New withdrawal approvals are locked until the approval gate is active.' }, 403);
   const paymentReference = typeof input.paymentReference === 'string' ? input.paymentReference.trim().slice(0, 100) : '';
   if (input.status === 'paid' && paymentReference.length < 3) return json({ error: 'Enter the payout transfer reference before marking it complete.' }, 400);
   let result: D1Result;
@@ -1081,7 +1103,7 @@ async function adminAgents(env: Env): Promise<Response> {
     (SELECT COUNT(*) FROM referrals r WHERE r.agent_id = a.id) AS referrals FROM agents a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.created_at DESC LIMIT 200`).all<{
       id: string; user_id: number | null; referral_code: string; status: string; created_at: string; telegram_id: number | null; first_name: string | null; username: string | null; web_username: string | null; referrals: number;
     }>();
-  return json({ agents: result.results.map((row) => ({ id: row.id, userId: row.user_id, telegramId: row.telegram_id, name: row.web_username || row.username || row.first_name || 'Unlinked account', code: row.referral_code, status: row.status, referrals: row.referrals, createdAt: row.created_at, commissionRate: 5, commissionBasis: 'weekly net demo-credit losses' })) });
+  return json({ agents: result.results.map((row) => ({ id: row.id, userId: row.user_id, telegramId: row.telegram_id, name: row.web_username || row.username || row.first_name || 'Unlinked account', code: row.referral_code, status: row.status, referrals: row.referrals, createdAt: row.created_at })) });
 }
 
 async function createAdminAgent(request: Request, env: Env, adminId: number): Promise<Response> {
@@ -1097,10 +1119,10 @@ async function createAdminAgent(request: Request, env: Env, adminId: number): Pr
   try {
     await env.DB.prepare(`INSERT INTO agents (id, user_id, referral_code, status, commission_rule_json, created_by)
       VALUES (?, ?, ?, 'active', ?, ?)`)
-      .bind(id, user.id, code, JSON.stringify({ rateBps: 500, basis: 'weekly_net_demo_loss', version: 'weekly-loss-demo-v1' }), String(adminId)).run();
+      .bind(id, user.id, code, JSON.stringify({ basis: 'referrals_only' }), String(adminId)).run();
   } catch { return json({ error: 'That user or promo code is already assigned.' }, 409); }
-  await recordAdminAudit(env, adminId, 'AGENT_CREATED', 'agent', id, null, { userId: user.id, code, status: 'active', commissionRateBps: 500, commissionBasis: 'weekly_net_demo_loss' });
-  return json({ agent: { id, userId: user.id, telegramId, code, status: 'active', commissionRate: 5 } }, 201);
+  await recordAdminAudit(env, adminId, 'AGENT_CREATED', 'agent', id, null, { userId: user.id, code, status: 'active', earnings: 'disabled' });
+  return json({ agent: { id, userId: user.id, telegramId, code, status: 'active' } }, 201);
 }
 
 async function changeAdminAgent(request: Request, env: Env, adminId: number, agentId: string): Promise<Response> {
@@ -1134,20 +1156,11 @@ async function claimAgentReferral(request: Request, env: Env, userId: number): P
 async function agentDashboard(env: Env, userId: number): Promise<Response> {
   const agent = await env.DB.prepare(`SELECT id, referral_code, status FROM agents WHERE user_id = ?`).bind(userId).first<{ id: string; referral_code: string; status: string }>();
   if (!agent || agent.status !== 'active') return json({ error: agent ? 'Agent access is suspended.' : 'This Telegram account is not an active agent.' }, 403);
-  const result = await env.DB.prepare(`SELECT week_start,
-    SUM(CASE WHEN net_loss_santim > 0 THEN CAST(net_loss_santim * 500 / 10000 AS INTEGER) ELSE 0 END) AS commission_santim,
-    SUM(CASE WHEN net_loss_santim > 0 THEN net_loss_santim ELSE 0 END) AS referred_net_loss_santim,
-    SUM(CASE WHEN net_loss_santim > 0 THEN 1 ELSE 0 END) AS referred_players FROM (
-      SELECT week_start, referred_user_id, SUM(net_result_santim) AS net_loss_santim
-      FROM agent_weekly_activity WHERE agent_id = ? GROUP BY week_start, referred_user_id
-    ) GROUP BY week_start HAVING referred_net_loss_santim > 0 ORDER BY week_start DESC LIMIT 12`).bind(agent.id).all<{ week_start: string; commission_santim: number; referred_net_loss_santim: number; referred_players: number }>();
-  const referrals = await env.DB.prepare(`SELECT u.first_name, u.username, u.web_username, r.created_at,
-    (SELECT COUNT(DISTINCT a.match_id) FROM agent_weekly_activity a WHERE a.agent_id = r.agent_id AND a.referred_user_id = r.referred_user_id) AS completed_matches
-    FROM referrals r JOIN users u ON u.id = r.referred_user_id WHERE r.agent_id = ? ORDER BY r.created_at DESC LIMIT 100`).bind(agent.id).all<{ first_name: string; username: string | null; web_username: string | null; created_at: string; completed_matches: number }>();
-  return json({ agent: { code: agent.referral_code, status: agent.status, commissionRate: 5, basis: '5% of each referred player’s positive net loss for the week, using completed demo-credit matches only' },
+  const referrals = await env.DB.prepare(`SELECT u.first_name, u.username, u.web_username, r.created_at
+    FROM referrals r JOIN users u ON u.id = r.referred_user_id WHERE r.agent_id = ? ORDER BY r.created_at DESC LIMIT 100`).bind(agent.id).all<{ first_name: string; username: string | null; web_username: string | null; created_at: string }>();
+  return json({ agent: { code: agent.referral_code, status: agent.status },
     shareLink: `https://t.me/${encodeURIComponent('Dire_Bet_bot')}?start=agent_${agent.referral_code}`,
-    weeks: result.results.map((row) => ({ weekStart: row.week_start, simulatedCommissionCredits: row.commission_santim / 100, referredNetLossCredits: row.referred_net_loss_santim / 100, referredPlayers: row.referred_players })),
-    referrals: referrals.results.map((row) => ({ name: row.web_username || (row.username ? `@${row.username}` : row.first_name), joinedAt: row.created_at, completedMatches: row.completed_matches })) });
+    referrals: referrals.results.map((row) => ({ name: row.web_username || (row.username ? `@${row.username}` : row.first_name), joinedAt: row.created_at })) });
 }
 
 async function handleWalletAndStaff(request: Request, env: Env): Promise<Response | null> {
@@ -1250,8 +1263,19 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     const id = await readSession(request, env.SESSION_SECRET);
     if (!id) return json({ error: 'Authentication required' }, 401);
     const user = await env.DB.prepare(`SELECT id, first_name, web_username, language,
-      EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
-    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
+      COALESCE((SELECT age_eligibility FROM user_profiles WHERE user_id = users.id), 'unverified') AS age_eligibility,
+      EXISTS(SELECT 1 FROM user_profiles WHERE user_id = users.id AND age_review_reference IS NOT NULL) AS age_review_pending,
+      EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; age_eligibility: string; age_review_pending: number; phone_shared: number }>();
+    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, ageEligibility: user.age_eligibility, ageReviewPending: user.age_review_pending === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
+  }
+  if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/')
+    && !url.pathname.startsWith('/api/admin/')
+    && !['/api/me', '/api/account/web-login', '/api/account/age-verification'].includes(url.pathname)) {
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (userId) {
+      const ageError = await ageEligibilityError(env, userId);
+      if (ageError) return json({ error: ageError }, 403);
+    }
   }
   const walletStaffResponse = await handleWalletAndStaff(request, env);
   if (walletStaffResponse) return walletStaffResponse;
@@ -1284,6 +1308,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (ticketValue) {
       const ticket = await readRoomTicket(ticketValue, env.SESSION_SECRET);
       if (!ticket || ticket.code !== 'MARKET') return json({ error: 'Room list connection ticket is invalid or expired.' }, 401);
+      const ageError = await ageEligibilityError(env, ticket.userId);
+      if (ageError) return json({ error: ageError }, 403);
       headers.set('X-Market-User', String(ticket.userId));
     }
     const marketRequest = new Request(`https://market/connect?gameId=${encodeURIComponent(gameId)}`, { method: 'GET', headers });
@@ -1317,15 +1343,14 @@ export class GameRoom {
     if (path === '/create' && request.method === 'POST') {
       const existing = await this.state.storage.get<StoredRoom>('room');
       if (existing) return json({ error: 'Room code is already in use.' }, 409);
-      let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown; publicRoomId?: unknown; publicRoomOptions?: unknown; entryCredits?: unknown; commissionBps?: unknown };
+      let input: { code?: unknown; gameId?: unknown; userId?: unknown; displayName?: unknown; expiresAt?: unknown; publicRoomId?: unknown; publicRoomOptions?: unknown; entryCredits?: unknown };
       try { input = await request.json() as typeof input; } catch { return json({ error: 'Invalid room request.' }, 400); }
       if (typeof input.code !== 'string' || (input.gameId !== 'xo' && input.gameId !== 'ludo' && input.gameId !== 'checkers' && input.gameId !== 'poker') || !Number.isSafeInteger(input.userId) || typeof input.displayName !== 'string' || !Number.isSafeInteger(input.expiresAt)) return json({ error: 'Invalid room request.' }, 400);
       const publicRoomOptions = input.publicRoomOptions && typeof input.publicRoomOptions === 'object' ? input.publicRoomOptions as Record<string, unknown> : undefined;
       const room: StoredRoom = { code: input.code, gameId: input.gameId, hostId: input.userId as number, status: 'waiting', players: [{ id: input.userId as number, name: input.displayName.slice(0, 32), mark: null, online: false }], game: createGame(input.gameId, publicRoomOptions), matchId: null, sequence: 0, expiresAt: input.expiresAt as number,
         ...(typeof input.publicRoomId === 'string' ? { publicRoomId: input.publicRoomId } : {}),
         ...(publicRoomOptions ? { publicRoomOptions } : {}),
-        ...(Number.isSafeInteger(input.entryCredits) ? { entryCredits: input.entryCredits as number } : {}),
-        ...(Number.isSafeInteger(input.commissionBps) ? { commissionBps: input.commissionBps as number } : {}) };
+        ...(Number.isSafeInteger(input.entryCredits) ? { entryCredits: input.entryCredits as number } : {}) };
       await this.state.storage.put('room', room);
       await this.state.storage.setAlarm(room.expiresAt);
       return json({ ok: true });
@@ -1355,6 +1380,8 @@ export class GameRoom {
     const userId = attachment?.userId;
     const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
     if (!userId || text.length > 512) return this.sendError(socket, 'Move could not be read.');
+    const ageError = await ageEligibilityError(this.env, userId);
+    if (ageError) { this.sendError(socket, ageError); socket.close(1008, 'Age check required'); return; }
     let input: { type?: unknown; index?: unknown; token?: unknown; action?: unknown; from?: unknown; to?: unknown };
     try { input = JSON.parse(text) as typeof input; } catch { return this.sendError(socket, 'Move could not be read.'); }
     if (typeof input.type !== 'string') return this.sendError(socket, 'Move is not allowed.');
@@ -1534,7 +1561,7 @@ export class GameRoom {
       let game: unknown = room.game;
       if (room.gameId === 'poker' && seat >= 0) game = viewPoker(room.game as PokerState, seat as 0 | 1);
       try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat, matchId: room.matchId, terminal: room.terminal || null, drawOfferBy: room.drawOfferBy ?? null,
-        ...(room.publicRoomId ? { publicRoom: { id: room.publicRoomId, entryCredits: room.entryCredits || 0, commissionBps: room.commissionBps || 0, options: room.publicRoomOptions || {} } } : {}) })); }
+        ...(room.publicRoomId ? { publicRoom: { id: room.publicRoomId, entryCredits: room.entryCredits || 0, options: room.publicRoomOptions || {} } } : {}) })); }
       catch { socket.close(1011, 'Unable to send room update'); }
     }
   }

@@ -35,16 +35,11 @@ describe('public room entry rules', () => {
   });
 
   it('calculates real money in ETB tenths and santim conversion units', () => {
-    expect(calculateSettlement(50, 2, 0)).toEqual({ poolTenths: 1000, feeTenths: 0, payoutTenths: 1000, perWinnerTenths: 500 });
-    expect(calculateSettlement(50, 2, 1000).payoutTenths * 10).toBe(9_000);
+    expect(calculateSettlement(50, 2)).toEqual({ poolTenths: 1000, payoutTenths: 1000, perWinnerTenths: 500 });
   });
 
-  it('calculates a commission only once from the complete pool', () => {
-    expect(calculateSettlement(20, 4, 1000)).toEqual({ poolTenths: 800, feeTenths: 80, payoutTenths: 720, perWinnerTenths: 180 });
-  });
-
-  it('rejects malformed administrator settings', () => {
-    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, commissionBps: 10001 })).toBeNull();
+  it('ignores historical commission settings', () => {
+    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, commissionBps: 100 })).toEqual(DEFAULT_MARKETPLACE_SETTINGS);
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, standardAmounts: [10, 10] })).toBeNull();
   });
 });

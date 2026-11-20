@@ -36,5 +36,5 @@ Write-Host 'Applying database migrations...'
 if ($LASTEXITCODE -ne 0) { throw 'Remote migrations failed. The D1 database ID remains saved in wrangler.jsonc.' }
 
 Write-Host ''
-Write-Host 'Database setup is complete. Deploy the demo first, then run ./scripts/connect-telegram.ps1.'
+Write-Host 'Database setup is complete. Deploy the free-play app, then run ./scripts/connect-telegram.ps1.'
 Write-Host 'The Telegram script asks for the bot token in a hidden prompt and keeps money features disabled.'

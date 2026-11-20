@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
-type Agent = { id: string; userId: number | null; telegramId: number | null; name: string; code: string; status: 'active' | 'suspended' | 'revoked' | string; referrals: number; createdAt: string; commissionRate: number; commissionBasis: string };
+type Agent = { id: string; userId: number | null; telegramId: number | null; name: string; code: string; status: 'active' | 'suspended' | 'revoked' | string; referrals: number; createdAt: string };
 type Props = { token: string | null };
 type ErrorBody = { error?: string };
 
@@ -55,13 +55,13 @@ export default function AgentManagement({ token }: Props) {
   };
 
   return <section className="agent-management">
-    <div className="agent-commission-explainer"><span className="staff-label">WEEKLY REFERRAL RULE · DEMO ONLY</span><strong>5% of each referred player’s positive net demo-credit loss for the week</strong><p>Net loss is calculated from completed public demo matches attributed to an agent code. This creates no cash commission and no payable balance.</p></div>
+    <div className="agent-commission-explainer"><span className="staff-label">REFERRAL TRACKING</span><strong>Promo codes track referrals only.</strong><p>No agent commission or cash payout is enabled.</p></div>
     {error && <p className="room-admin-error" role="alert">{error}</p>}{notice && <p className="room-admin-notice" role="status">{notice}</p>}
     <form className="agent-create-form" onSubmit={(event) => void create(event)}><div><span className="staff-label">ADD AGENT</span><h2>Assign an existing DIRE BET account</h2><p>The agent must open the app once first. Use their Telegram user ID from @userinfobot.</p></div><label>Telegram user ID<input value={telegramId} inputMode="numeric" maxLength={15} placeholder="Digits only" onChange={(event) => setTelegramId(event.target.value.replace(/\D/g, ''))}/></label><label>Promo code <small>optional</small><input value={code} maxLength={16} placeholder="Auto-generate if blank" onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}/></label><button className="primary-button" type="submit" disabled={busyId === 'new'}>{busyId === 'new' ? 'Adding…' : 'Create promo code'}</button></form>
     <div className="agent-list-heading"><div><span className="staff-label">AGENT ACCOUNTS</span><p>{agents.length} records · active, suspended and revoked</p></div><button className="staff-link-button" onClick={() => void load()}>Refresh</button></div>
     {loading ? <div className="room-admin-state">Loading agents…</div> : agents.length === 0 ? <div className="room-admin-state">No agents added yet.</div> : <div className="agent-admin-list">{agents.map((agent) => <article key={agent.id} className="agent-admin-card">
       <div className="agent-admin-main"><div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div><div><h3>{agent.name}</h3><p>Telegram ID: {agent.telegramId ?? 'not linked'} · {agent.referrals} referred accounts</p><code>{agent.code}</code></div><span className={`room-admin-status ${agent.status}`}>{agent.status}</span></div>
-      <div className="agent-admin-meta"><span>5% weekly share of referred players’ net demo-credit losses</span><a href={`https://t.me/Dire_Bet_bot?start=agent_${encodeURIComponent(agent.code)}`} target="_blank" rel="noreferrer">Open invite ↗</a></div>
+      <div className="agent-admin-meta"><span>Referral tracking only · no commission</span><a href={`https://t.me/Dire_Bet_bot?start=agent_${encodeURIComponent(agent.code)}`} target="_blank" rel="noreferrer">Open invite ↗</a></div>
       <div className="agent-admin-actions">{agent.status === 'active' && <button className="secondary-button" disabled={busyId === agent.id} onClick={() => void setStatus(agent, 'suspended')}>Suspend</button>}{agent.status === 'suspended' && <button className="secondary-button" disabled={busyId === agent.id} onClick={() => void setStatus(agent, 'active')}>Reactivate</button>}{agent.status !== 'revoked' && <button className="agent-revoke-button" disabled={busyId === agent.id} onClick={() => void setStatus(agent, 'revoked')}>Revoke access</button>}</div>
     </article>)}</div>}
   </section>;

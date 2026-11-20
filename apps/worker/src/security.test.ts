@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker, { moneyActivationRecorded, validateInitData } from './index';
+import { ageEligibilityError } from './activation';
 
 const token = 'test-bot-token';
 const encoder = new TextEncoder();
@@ -16,6 +17,7 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 function hex(bytes: Uint8Array): string { return [...bytes].map((byte) => byte.toString(16).padStart(2,'0')).join(''); }
+function base64url(bytes: Uint8Array): string { return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'); }
 
 async function initData(authDate: number): Promise<string> {
   const params = new URLSearchParams({
@@ -47,7 +49,7 @@ describe('Telegram initData verification', () => {
 });
 
 describe('real-money activation gate', () => {
-  const evidence = { counselApproval:'signed', providerApprovals:['merchant'], telegramApproval:'written', licenseReferences:['ref'], minimumAge:18, ownerSignedAt:'2026-11-15' };
+  const evidence = { counselApproval:'signed opinion', licenseReview:'reviewed', licenseReferences:['license ref'], providerApprovals:{ telebirr:'merchant approval', ebirr:'merchant approval' }, telegramApproval:'written approval', nationalBankReview:'written review', ageVerificationMethod:'verified method', responsiblePlayPolicy:'approved policy', privacyReview:'approved policy', minimumAge:18, ownerSignedAt:'2026-11-15' };
   function env(flags: { real:string; demo:string; record?:string; audit?:boolean }) {
     const db = { prepare: (sql:string) => ({ bind: () => ({ first: async () => flags.audit ? { id:'activation-audit' } : null }), first: async () => sql.includes('activation_records') && flags.record ? { id:'record-1', evidence_json:flags.record, minimum_age:18 } : null }) };
     return { REAL_MONEY_ENABLED:flags.real, DEMO_MODE:flags.demo, DB:db } as never;
@@ -57,6 +59,30 @@ describe('real-money activation gate', () => {
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:JSON.stringify(evidence)}))).toBe(false);
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:'{}',audit:true}))).toBe(false);
     expect(await moneyActivationRecorded(env({real:'true',demo:'false',record:JSON.stringify(evidence),audit:true}))).toBe(true);
+  });
+});
+
+describe('adult access gate', () => {
+  const env = (row: { status: string; age_eligibility: string | null } | null) => ({ DB: {
+    prepare: () => ({ bind: () => ({ first: async () => row }) }),
+  } } as never);
+  it('blocks missing, unverified and inactive accounts', async () => {
+    expect(await ageEligibilityError(env(null), 1)).toContain('not eligible');
+    expect(await ageEligibilityError(env({ status:'active', age_eligibility:'unverified' }), 1)).toContain('18+');
+    expect(await ageEligibilityError(env({ status:'suspended', age_eligibility:'verified' }), 1)).toContain('not eligible');
+  });
+  it('allows active accounts after admin age approval', async () => {
+    expect(await ageEligibilityError(env({ status:'active', age_eligibility:'verified' }), 1)).toBeNull();
+  });
+  it('blocks unverified signed-in players from protected API routes', async () => {
+    const secret = 'test-session-secret';
+    const body = `${base64url(encoder.encode(JSON.stringify({ alg:'HS256', typ:'JWT' })))}.${base64url(encoder.encode(JSON.stringify({ sub:'1', exp:Math.floor(Date.now()/1000)+60 })))}`;
+    const session = `${body}.${base64url(await sign(secret, body))}`;
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/rooms', {
+      method:'POST', headers:{ Authorization:`Bearer ${session}`, 'Content-Type':'application/json' }, body:'{}',
+    }), { SESSION_SECRET:secret, DB:{ prepare:() => ({ bind:() => ({ first:async() => ({ status:'active', age_eligibility:'unverified' }) }) }) } } as never);
+    expect(response.status).toBe(403);
+    expect((await response.json() as { error:string }).error).toContain('18+');
   });
 });
 

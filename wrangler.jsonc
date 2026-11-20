@@ -5,10 +5,10 @@
   "compatibility_date": "2026-11-14",
   "workers_dev": true,
   "vars": {
-    "ENVIRONMENT": "development",
+    "ENVIRONMENT": "production",
     "BOT_USERNAME": "Dire_Bet_bot",
     "REAL_MONEY_ENABLED": "false",
-    "DEMO_MODE": "true"
+    "DEMO_MODE": "false"
   },
   "assets": {
     "directory": "./apps/web/dist",

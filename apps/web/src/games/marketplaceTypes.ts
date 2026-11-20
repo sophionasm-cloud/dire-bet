@@ -12,9 +12,7 @@ export type MarketplaceRoom = {
   capacity: number;
   entryCredits: number;
   poolCredits: number;
-  feeCredits: number;
   payoutCredits: number;
-  commissionBps: number;
   mode: string;
   options: Record<string, unknown>;
   status: PublicRoomStatus;
@@ -31,7 +29,6 @@ export type MarketplaceSettings = {
   standardAmounts: number[];
   customEnabled: boolean;
   customMaximum: number;
-  commissionBps: number;
   waitingSeconds: number;
   realMoneyEnabled?: boolean;
 };

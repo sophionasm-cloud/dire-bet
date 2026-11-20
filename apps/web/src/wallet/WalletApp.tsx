@@ -33,10 +33,10 @@ function WalletIcon({ name }: { name: 'wallet' | 'deposit' | 'withdraw' | 'copy'
 function statusCopy(status: string): string {
   if (status === 'pending') return 'Pending verification';
   if (status === 'needs_info') return 'More information needed';
-  if (status === 'approved') return 'Approved · demo only';
+  if (status === 'approved') return 'Approved';
   if (status === 'rejected') return 'Not approved';
   if (status === 'reviewing') return 'Under review';
-  if (status === 'paid') return 'Marked paid';
+  if (status === 'paid') return 'Completed';
   return status;
 }
 
@@ -45,6 +45,11 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [requests, setRequests] = useState<RequestData>({ deposits: [], withdrawals: [] });
   const [balance, setBalance] = useState<number | null>(null);
+  const [moneyEnabled, setMoneyEnabled] = useState(false);
+  const [walletError, setWalletError] = useState('');
+  const [ageReference, setAgeReference] = useState('');
+  const [confirmsAdult, setConfirmsAdult] = useState(false);
+  const [ageSubmitted, setAgeSubmitted] = useState(false);
   const [provider, setProvider] = useState<ProviderId | null>(null);
   const [amount, setAmount] = useState(100);
   const [customAmount, setCustomAmount] = useState('');
@@ -67,28 +72,31 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const refresh = async () => {
     const settingResponse = await fetch('/api/wallet/settings').catch(() => null);
     if (settingResponse?.ok) {
-      const data = await settingResponse.json() as { providers?: Provider[] };
+      const data = await settingResponse.json() as { providers?: Provider[]; moneyEnabled?: boolean };
       setProviders(data.providers || []);
+      setMoneyEnabled(data.moneyEnabled === true);
     }
-    if (!token) { setRequests({ deposits: [], withdrawals: [] }); setBalance(null); return; }
+    if (!token) { setRequests({ deposits: [], withdrawals: [] }); setBalance(null); setWalletError('Sign in to use your wallet.'); return; }
     const [requestResponse, balanceResponse] = await Promise.all([
       fetch('/api/wallet/requests', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
-      fetch('/api/public-rooms/balance', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
+      fetch('/api/wallet/balance', { headers: { Authorization: `Bearer ${token}` } }).catch(() => null),
     ]);
     if (requestResponse?.ok) setRequests(await requestResponse.json() as RequestData);
-    if (balanceResponse?.ok) {
-      const data = await balanceResponse.json() as { balanceCredits?: number };
-      if (Number.isFinite(data.balanceCredits)) setBalance(data.balanceCredits as number);
-    }
+    const data = balanceResponse ? await balanceResponse.json().catch(() => ({})) as { balance?: number; enabled?: boolean; error?: string } : {};
+    setMoneyEnabled(data.enabled === true);
+    setWalletError(balanceResponse?.ok ? '' : data.error || 'Wallet status could not be loaded.');
+    setBalance(balanceResponse?.ok && Number.isFinite(data.balance) ? data.balance as number : null);
   };
 
   useEffect(() => { void refresh(); }, [token]);
 
   const openDeposit = () => {
+    if (!token || !moneyEnabled) { setMessage(walletError || 'Wallet deposits are not available.'); return; }
     setView('deposit'); setMessage(''); setProvider(null); setUseCustom(false); setCustomAmount('');
     setAmount(100);
   };
   const openWithdrawal = () => {
+    if (!token || !moneyEnabled) { setMessage(walletError || 'Wallet withdrawals are not available.'); return; }
     setView('withdraw'); setMessage(''); setProvider(null); setAmount(100); setUseCustom(false); setCustomAmount('');
   };
   const continueToInstructions = () => {
@@ -118,7 +126,7 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const submitDeposit = async (event: FormEvent) => {
     event.preventDefault(); setMessage('');
     if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
-    if (!provider || !Number.isSafeInteger(requestAmount) || !senderPhone.trim() || transactionReference.trim().length < 5) { setMessage('Fill in the sender number and transaction reference.'); return; }
+    if (!provider || !Number.isSafeInteger(requestAmount) || !senderPhone.trim() || transactionReference.trim().length < 5 || !receipt) { setMessage('Add the sender number, transaction reference and payment screenshot.'); return; }
     setBusy(true);
     try {
       const response = await fetch('/api/wallet/deposits', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
@@ -135,7 +143,7 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const submitWithdrawal = async (event: FormEvent) => {
     event.preventDefault(); setMessage('');
     if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
-    if (!provider || !Number.isSafeInteger(requestAmount) || !destinationPhone.trim() || accountHolderName.trim().length < 2) { setMessage('Fill in your amount, destination number and account name.'); return; }
+    if (!provider || !Number.isSafeInteger(requestAmount) || !destinationPhone.trim() || accountHolderName.trim().length < 2 || (balance !== null && requestAmount > balance)) { setMessage('Check your amount, available balance, destination number and account name.'); return; }
     setBusy(true);
     try {
       const response = await fetch('/api/wallet/withdrawals', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
@@ -146,6 +154,19 @@ export default function WalletApp({ t, token, onSupport }: Props) {
       idempotencyKey.current = crypto.randomUUID(); setRequestId(data.requestId); setSubmittedKind('withdrawal'); setView('submitted');
       setDestinationPhone(''); setAccountHolderName(''); await refresh();
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The request could not be sent.'); }
+    finally { setBusy(false); }
+  };
+
+  const submitAgeReview = async (event: FormEvent) => {
+    event.preventDefault(); setMessage('');
+    if (!token || !confirmsAdult || ageReference.trim().length < 3) { setMessage('Confirm you are at least 18 and enter your age-check reference.'); return; }
+    setBusy(true);
+    try {
+      const response = await fetch('/api/account/age-verification', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ confirmsAdult, verificationReference: ageReference.trim() }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || 'Age verification could not be submitted.');
+      setAgeSubmitted(true); setAgeReference(''); setMessage('Your age-check reference was sent for administrator review.');
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Age verification could not be submitted.'); }
     finally { setBusy(false); }
   };
 
@@ -173,13 +194,15 @@ export default function WalletApp({ t, token, onSupport }: Props) {
 
   const amountOptions = (label: string) => <fieldset className="wallet-amount-fieldset"><legend>{label}</legend><div className="wallet-amount-grid">{[50, 100, 200, 500].map((item) => <button key={item} type="button" className={`wallet-amount-button ${!useCustom && amount === item ? 'selected' : ''}`} aria-pressed={!useCustom && amount === item} onClick={() => { setAmount(item); setUseCustom(false); setMessage(''); }}><strong>{item}</strong><small>ETB</small></button>)}</div><button type="button" className={`wallet-custom-amount ${useCustom ? 'selected' : ''}`} aria-pressed={useCustom} onClick={() => { setUseCustom(true); setCustomAmount(''); }}><span>⌨</span>Other amount</button>{useCustom && <label className="wallet-field">Amount in whole birr<input type="number" inputMode="numeric" min={selectedProvider?.minimumAmount || 50} max={selectedProvider?.maximumAmount || 10000} step="1" placeholder="Enter amount (ETB)" value={customAmount} onChange={(event) => setCustomAmount(event.target.value)}/></label>}</fieldset>;
 
-  if (view === 'submitted') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-confirmation-mark">✓</div><span className="eyebrow">REQUEST RECEIVED</span><h1>{submittedKind === 'deposit' ? 'Deposit request sent' : 'Withdrawal request sent'}</h1><p className="wallet-flow-copy">An administrator will review this preview request. It will not change your balance or move cash.</p><div className="wallet-confirmation-card"><span>Request ID</span><strong>{requestId}</strong><span className="demo-request-status pending">PENDING {submittedKind === 'deposit' ? 'VERIFICATION' : 'REVIEW'}</span></div><button className="primary-button wide" onClick={backToMain}>Back to wallet<span>→</span></button></section>;
+  if (view === 'submitted') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-confirmation-mark">✓</div><span className="eyebrow">REQUEST RECEIVED</span><h1>{submittedKind === 'deposit' ? 'Deposit request sent' : 'Withdrawal request sent'}</h1><p className="wallet-flow-copy">{submittedKind === 'deposit' ? 'An administrator will verify your screenshot and transaction reference. Your wallet is credited only after approval.' : 'An administrator will review your request and send the payout manually. The request status will show when it is complete.'}</p><div className="wallet-confirmation-card"><span>Request ID</span><strong>{requestId}</strong><span className="demo-request-status pending">PENDING {submittedKind === 'deposit' ? 'VERIFICATION' : 'REVIEW'}</span></div><button className="primary-button wide" onClick={backToMain}>Back to wallet<span>→</span></button></section>;
 
   if (view === 'main') return <section className="screen wallet-screen wallet-redesign">
     <span className="eyebrow">WALLET</span><h1>Your Wallet</h1>
-    <div className="wallet-hero-card"><div className="wallet-card-top"><div><span>Demo credits</span><small>Practice only · no cash value</small></div><span className="wallet-hero-icon"><WalletIcon name="wallet"/></span></div><strong>{balance === null ? '—' : balance.toLocaleString()}</strong><span className="wallet-credit-unit">Demo Credits</span><span className="wallet-practice-badge">PRACTICE ONLY</span></div>
-    <div className="wallet-action-grid"><button className="wallet-action-card primary" onClick={openDeposit}><WalletIcon name="deposit"/><strong>Deposit</strong></button><button className="wallet-action-card" onClick={openWithdrawal}><WalletIcon name="withdraw"/><strong>Withdraw</strong></button></div>
-    <div className="wallet-preview-warning"><span>!</span><p><strong>Preview only.</strong> Live payments are disabled. Do not transfer money.</p></div>
+    <div className="wallet-hero-card"><div className="wallet-card-top"><div><span>Wallet balance</span><small>ETB · real wallet</small></div><span className="wallet-hero-icon"><WalletIcon name="wallet"/></span></div><strong>{balance === null ? 'Unavailable' : balance.toLocaleString()}</strong><span className="wallet-credit-unit">ETB</span><span className="wallet-practice-badge">{moneyEnabled ? 'AVAILABLE' : 'LOCKED'}</span></div>
+    <div className="wallet-action-grid"><button className="wallet-action-card primary" disabled={!token || !moneyEnabled} onClick={openDeposit}><WalletIcon name="deposit"/><strong>Deposit</strong></button><button className="wallet-action-card" disabled={!token || !moneyEnabled} onClick={openWithdrawal}><WalletIcon name="withdraw"/><strong>Withdraw</strong></button></div>
+    {!moneyEnabled && <div className="wallet-preview-warning"><span>!</span><p><strong>Money features are locked.</strong> They open only after required approvals are recorded. Do not send money unless active account details are shown here.</p></div>}
+    {walletError.includes('age check') && !ageSubmitted && <form className="wallet-request-form" onSubmit={(event) => void submitAgeReview(event)}><h2>Verify your age</h2><p>Wallet and paid rooms require an approved 18+ check.</p><label className="wallet-field">Age-check reference<input required minLength={3} maxLength={240} value={ageReference} onChange={(event) => setAgeReference(event.target.value)} placeholder="Reference from your age check"/></label><label><input type="checkbox" checked={confirmsAdult} onChange={(event) => setConfirmsAdult(event.target.checked)}/> I confirm I am at least 18 years old.</label>{message && <p className="wallet-form-message" role="status">{message}</p>}<button className="secondary-button" type="submit" disabled={busy || !confirmsAdult}>{busy ? 'Sending…' : 'Submit for age review'}</button></form>}
+    {ageSubmitted && <p className="wallet-form-message" role="status">Age verification request sent. Money features remain locked until an administrator approves it.</p>}
     <form className="wallet-promo-inline" onSubmit={(event) => void applyPromoCode(event)}><label htmlFor="wallet-promo-code">Have an agent promo code?</label><div><input id="wallet-promo-code" autoCapitalize="characters" maxLength={16} value={promoCode} onChange={(event) => setPromoCode(event.target.value.toUpperCase())} placeholder="Enter promo code"/><button type="submit" disabled={!promoCode.trim()}>Apply</button></div>{promoMessage && <small role="status">{promoMessage}</small>}</form>
     <div className="wallet-request-history"><div className="wallet-section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>Your requests</h2></div><button className="text-button" onClick={() => void refresh()}>Refresh ↻</button></div>
       {!token ? <p className="wallet-history-empty">Sign in to see your balance and payment request status.</p> : [...requests.deposits, ...requests.withdrawals].sort((a, b) => b.created_at.localeCompare(a.created_at)).length ? [...requests.deposits.map((item) => ({ ...item, kind: 'Deposit' })), ...requests.withdrawals.map((item) => ({ ...item, kind: 'Withdrawal' }))].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8).map((item) => <article className="wallet-history-row" key={item.id}><span className={`wallet-history-icon ${item.kind.toLowerCase()}`}><WalletIcon name={item.kind === 'Deposit' ? 'deposit' : 'withdraw'}/></span><div><strong>{item.kind} · {providerLabel[item.provider]}</strong><small>{item.id} · {new Date(item.created_at).toLocaleDateString()}</small>{item.review_reason && <small className="wallet-review-note">{item.review_reason}</small>}</div><div className="wallet-history-side"><strong>{item.amount} ETB</strong><span className={`demo-request-status ${item.status === 'approved' ? 'approved' : item.status === 'rejected' ? 'declined' : 'pending'}`}>{statusCopy(item.status)}</span></div></article>) : <p className="wallet-history-empty">No requests yet. Deposit and withdrawal requests will appear here.</p>}
@@ -187,19 +210,19 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   </section>;
 
   if (view === 'deposit') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={backToMain} aria-label="Back"><WalletIcon name="back"/></button><h1>Add funds</h1><span className="wallet-home-mark">⌂</span></div><p className="wallet-choice-title">Choose a payment method</p>{methodCards('deposit')}{amountOptions('Select amount')}
-    <div className="wallet-preview-warning compact"><span>!</span><p>Preview only. No payment is processed and demo credits are never added from requests.</p></div>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" disabled={!selectedProvider || !Number.isSafeInteger(requestAmount)} onClick={continueToInstructions}>Continue<span>→</span></button>
+    <div className="wallet-preview-warning compact"><span>i</span><p>Only send funds to the active Telebirr or eBirr account shown on the next screen. A screenshot and reference are required.</p></div>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" disabled={!moneyEnabled || !selectedProvider || !Number.isSafeInteger(requestAmount)} onClick={continueToInstructions}>Continue<span>→</span></button>
   </section>;
 
   if (view === 'instructions') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={() => setView('deposit')} aria-label="Back"><WalletIcon name="back"/></button><h1>Pay with {provider ? providerLabel[provider] : 'Telebirr'}</h1><span className="wallet-home-mark">⌂</span></div>
     {provider && <div className="wallet-provider-tabs">{(['telebirr', 'ebirr'] as ProviderId[]).map((id) => <button type="button" key={id} className={provider === id ? 'selected' : ''} disabled={!providers.find((entry) => entry.provider === id)?.enabled} onClick={() => { setProvider(id); setMessage(''); }}><ProviderMark provider={id}/><span>{providerLabel[id]}</span></button>)}</div>}
-    <div className="wallet-receiving-card"><span className="wallet-receiving-label">DIRE BET RECEIVING ACCOUNT</span><strong>{selectedProvider?.accountNumber || 'Not configured'}</strong><button type="button" className="wallet-copy-number" onClick={() => void navigator.clipboard.writeText(selectedProvider?.accountNumber || '').then(() => setMessage('Number copied. Do not transfer money in this preview.')).catch(() => setMessage('Select the number to copy it.'))} disabled={!selectedProvider?.accountNumber}><WalletIcon name="copy"/>Copy number</button>{selectedProvider?.accountLabel && <small>{selectedProvider.accountLabel}</small>}<div className="wallet-receiving-amount"><span>Request amount · example only</span><strong>{requestAmount} ETB</strong></div></div>
-    <div className="wallet-instructions"><strong>Preview instructions</strong><ol><li>Do not send money in this test version.</li><li>Use the form below to submit a sample request.</li><li>An administrator can review the request.</li><li>Reviewing it will not change a balance.</li></ol></div>
-    <form className="wallet-request-form" onSubmit={(event) => void submitDeposit(event)}><label className="wallet-field">Sender phone number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={senderPhone} onChange={(event) => setSenderPhone(event.target.value)}/></label><label className="wallet-field">Transaction reference<input autoComplete="off" minLength={5} maxLength={80} placeholder="Enter transaction reference" required value={transactionReference} onChange={(event) => setTransactionReference(event.target.value)}/></label><label className="wallet-receipt-upload"><input type="file" accept="image/png,image/jpeg" onChange={(event) => void pickReceipt(event)}/><WalletIcon name="upload"/><span>{receipt ? receipt.file.name : 'Upload receipt (optional)'}</span><small>PNG or JPG · max 2 MB</small></label>{receipt && <div className="wallet-receipt-preview"><img src={receipt.data} alt="Receipt preview"/><div><strong>{receipt.file.name}</strong><small>{(receipt.file.size / 1024).toFixed(0)} KB</small></div><button type="button" onClick={() => setReceipt(null)}>Remove</button></div>}
-      <p className="wallet-pin-warning">♢ Never share your PIN or OTP.</p>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider}>{busy ? 'Sending request…' : 'Submit for review'}<span>→</span></button><small className="wallet-demo-footnote">Preview request only. No cash is accepted or added to your account.</small>
+    <div className="wallet-receiving-card"><span className="wallet-receiving-label">DIRE BET RECEIVING ACCOUNT</span><strong>{selectedProvider?.accountNumber || 'Not configured'}</strong><button type="button" className="wallet-copy-number" onClick={() => void navigator.clipboard.writeText(selectedProvider?.accountNumber || '').then(() => setMessage('Number copied.')).catch(() => setMessage('Select the number to copy it.'))} disabled={!selectedProvider?.accountNumber}><WalletIcon name="copy"/>Copy number</button>{selectedProvider?.accountLabel && <small>{selectedProvider.accountLabel}</small>}<div className="wallet-receiving-amount"><span>Send exactly</span><strong>{requestAmount} ETB</strong></div></div>
+    <div className="wallet-instructions"><strong>Deposit steps</strong><ol><li>Send the exact amount to this account.</li><li>Enter your sender number and transaction reference.</li><li>Upload the payment screenshot and submit.</li><li>An administrator verifies the payment before crediting your wallet.</li></ol></div>
+    <form className="wallet-request-form" onSubmit={(event) => void submitDeposit(event)}><label className="wallet-field">Sender phone number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={senderPhone} onChange={(event) => setSenderPhone(event.target.value)}/></label><label className="wallet-field">Transaction reference<input autoComplete="off" minLength={5} maxLength={80} placeholder="Enter transaction reference" required value={transactionReference} onChange={(event) => setTransactionReference(event.target.value)}/></label><label className="wallet-receipt-upload"><input type="file" accept="image/png,image/jpeg" required onChange={(event) => void pickReceipt(event)}/><WalletIcon name="upload"/><span>{receipt ? receipt.file.name : 'Upload payment screenshot (required)'}</span><small>PNG or JPG · max 2 MB</small></label>{receipt && <div className="wallet-receipt-preview"><img src={receipt.data} alt="Payment screenshot preview"/><div><strong>{receipt.file.name}</strong><small>{(receipt.file.size / 1024).toFixed(0)} KB</small></div><button type="button" onClick={() => setReceipt(null)}>Remove</button></div>}
+      <p className="wallet-pin-warning">♢ Never share your PIN or OTP.</p>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider || !receipt}>{busy ? 'Sending request…' : 'Submit for verification'}<span>→</span></button>
     </form>
   </section>;
 
   return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={backToMain} aria-label="Back"><WalletIcon name="back"/></button><h1>Withdraw funds</h1><span className="wallet-home-mark">⌂</span></div><p className="wallet-choice-title">Choose a destination method</p>{methodCards('withdrawal')}
-    <form className="wallet-request-form" onSubmit={(event) => void submitWithdrawal(event)}>{amountOptions('Amount in ETB')}<label className="wallet-field">Your Telebirr/eBirr number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={destinationPhone} onChange={(event) => setDestinationPhone(event.target.value)}/></label><label className="wallet-field">Account holder name<input autoComplete="name" maxLength={100} placeholder="Enter account name" required value={accountHolderName} onChange={(event) => setAccountHolderName(event.target.value)}/></label>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider}>{busy ? 'Sending request…' : 'Submit withdrawal request'}<span>→</span></button><div className="wallet-preview-warning compact"><span>i</span><p>Your request will be reviewed by Dire Bet. This demo does not send a payout.</p></div></form>
+    <form className="wallet-request-form" onSubmit={(event) => void submitWithdrawal(event)}>{amountOptions('Amount in ETB')}<label className="wallet-field">Your Telebirr/eBirr number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={destinationPhone} onChange={(event) => setDestinationPhone(event.target.value)}/></label><label className="wallet-field">Account holder name<input autoComplete="name" maxLength={100} placeholder="Enter account name" required value={accountHolderName} onChange={(event) => setAccountHolderName(event.target.value)}/></label>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider || (balance !== null && requestAmount > balance)}>{busy ? 'Sending request…' : 'Submit withdrawal request'}<span>→</span></button><div className="wallet-preview-warning compact"><span>i</span><p>Your amount is reserved while an administrator reviews the request. Funds return to your wallet if the request is rejected. An approved payout is sent manually and marked complete here.</p></div></form>
   </section>;
 }

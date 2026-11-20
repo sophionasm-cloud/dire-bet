@@ -13,6 +13,6 @@ describe('translations', () => {
     expect(languageFromTelegram('so')).toBe('so');
     expect(languageFromTelegram('om')).toBe('om');
     expect(languageFromTelegram('fr')).toBe('en');
-    expect(translate('en','testMode')).toBe('TEST MODE');
+    expect(translate('en','testMode')).toBe('PAYMENTS LOCKED');
   });
 });

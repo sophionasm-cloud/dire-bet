@@ -3,7 +3,7 @@
 Created: 2026-11-15
 Status: **NOT APPROVED — live funds must remain disabled**
 
-This is an evidence tracker, not legal advice. No approval or counsel opinion has been supplied or verified for this product. The code defaults to demo mode and refuses live-money routes.
+This is an evidence tracker, not legal advice. No approval or counsel opinion has been supplied or verified for this product. The production config serves free play and refuses live-money routes.
 
 ## Official starting sources checked 2026-11-15
 
@@ -30,4 +30,4 @@ This is an evidence tracker, not legal advice. No approval or counsel opinion ha
 
 ## Activation rule
 
-Do not enable `REAL_MONEY_ENABLED=true` or set `DEMO_MODE=false` until all evidence is recorded, the product is implemented, and focused security, ledger, RBAC, age-gate and provider reconciliation checks pass. Activation must be a Super Admin action that creates an immutable audit record. A configuration flag by itself is insufficient. If any approval is missing or refuses the product, leave live deposits, withdrawals, stakes, prizes and cash commissions disabled.
+Keep `REAL_MONEY_ENABLED=false` until all evidence is recorded, the product is implemented, and focused security, ledger, RBAC, age-gate and provider reconciliation checks pass. The production config uses `DEMO_MODE=false`; changing that value does not activate money features. Activation must be a Super Admin action that creates an immutable audit record, and the real-money flag must also be enabled. A configuration flag by itself is insufficient. If any approval is missing or refuses the product, leave live deposits, withdrawals, stakes, prizes and cash commissions disabled.

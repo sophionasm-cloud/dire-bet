@@ -16,7 +16,7 @@ type Props = {
 type MarketState = { type: 'market'; rooms: MarketplaceRoom[]; ownRoom: MarketplaceRoom | null; serverTime: number };
 type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balance?: number; settings?: MarketplaceSettings };
 
-const defaultSettings: MarketplaceSettings = { standardAmounts: [], customEnabled: false, customMaximum: 1000, commissionBps: 0, waitingSeconds: 30, realMoneyEnabled: false };
+const defaultSettings: MarketplaceSettings = { standardAmounts: [], customEnabled: false, customMaximum: 1000, waitingSeconds: 30, realMoneyEnabled: false };
 
 export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom, onPractice, onExit }: Props) {
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
@@ -116,7 +116,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   }, []);
 
   useEffect(() => {
-    if (!token || !activeRoom || !['IN_PROGRESS', 'COMPLETED'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
+    if (!token || !activeRoom || !['IN_PROGRESS', 'SETTLING', 'COMPLETED'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
     launching.current = activeRoom.id;
     let live = true;
     fetch(`/api/public-rooms/${activeRoom.code}/session`, { headers })
@@ -174,13 +174,12 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   };
 
   const fullPool = amount * 2;
-  const fee = Math.floor(fullPool * settings.commissionBps / 10000);
-  const payout = fullPool - fee;
+  const payout = fullPool;
 
   return <section className="screen public-lobby-screen">
     <header className="public-lobby-header"><button className="back-button" onClick={onExit}>← {t('home')}</button><div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
     <p className="public-lobby-intro">{t('marketLobbyIntro')}</p>
-    {token && balance !== null && <div className="demo-credit-balance"><span>{t('marketDemoBalance')}</span><strong>{formatCredits(balance)}</strong><small>{t('marketCreditOnly')}</small></div>}
+    {token && balance !== null && <div className="demo-credit-balance"><span>{t('marketDemoBalance')}</span><strong>{formatCredits(balance)} ETB</strong><small>{t('marketCreditOnly')}</small></div>}
     {!token && <div className="market-signin-hint" role="status">{t('marketTelegramRequired')}</div>}
     {!activeRoom ? <>
       <div className="market-room-browser">
@@ -197,7 +196,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
         {entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
         {gameId === 'ludo' && <fieldset className="market-color-field"><legend>{t('marketColor')}</legend><button type="button" aria-pressed={player0Color === 'yellow'} className={player0Color === 'yellow' ? 'selected' : ''} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><span>{t('marketYellow')}</span><b>VS</b><i className="color-token red-token"/><span>{t('marketRed')}</span></button><button type="button" aria-pressed={player0Color === 'green'} className={player0Color === 'green' ? 'selected' : ''} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><span>{t('marketGreen')}</span><b>VS</b><i className="color-token blue-token"/><span>{t('marketBlue')}</span></button></fieldset>}
         <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>
-        <div className="market-preview"><span>{t('marketPerPlayer')} <strong>{entry === 'free' ? t('marketFree') : `${amount} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketPlayersRequired')} <strong>2</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(fullPool)} {t('marketDemoCredits')}</strong></span><span>{t('marketSimulatedFee')} <strong>{formatCredits(fee)} {t('marketDemoCredits')}</strong></span><span>{t('marketEstimatedPayout')} <strong>{formatCredits(payout)} {t('marketDemoCredits')}</strong></span><small>{t('marketSimulationNote')}</small></div>
+        <div className="market-preview"><span>{t('marketPerPlayer')} <strong>{entry === 'free' ? t('marketFree') : `${amount} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketPlayersRequired')} <strong>2</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(fullPool)} {t('marketDemoCredits')}</strong></span><span>{t('marketEstimatedPayout')} <strong>{formatCredits(payout)} {t('marketDemoCredits')}</strong></span><small>{t('marketSimulationNote')}</small></div>
         {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
         {message && <p className="market-message" role="alert">{message}</p>}
         <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient} onClick={() => void create()}>{busy ? t('marketCreating') : t('marketCreateAction')}<span>↗</span></button>
@@ -226,7 +225,7 @@ function WaitingRoom({ room, countdown, busy, onCancel, onBack, t }: { room: Mar
       const player = room.players.find((seat) => seat.seat === index);
       return <div className={`market-wait-seat ${player ? 'occupied' : ''}`} key={index}>{player ? <><span className="market-avatar">{player.avatar}</span><span><strong>{player.name}</strong><small>{room.viewerSeat === index ? t('marketYou') : t('marketPlayer')}</small></span><i>●</i></> : <><span className="market-seat-empty">＋</span><span><strong>{t('marketOpenSeat')}</strong><small>{t('marketWaiting')}</small></span></>}</div>;
     })}</div>
-    <div className="market-waiting-entry"><span>{t('marketPerPlayer')} <strong>{room.entryCredits === 0 ? t('marketFree') : `${room.entryCredits} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(room.poolCredits)} {t('marketDemoCredits')}</strong></span><span>{t('marketSimulatedFee')} <strong>{formatCredits(room.feeCredits)} {t('marketDemoCredits')}</strong></span></div>
+    <div className="market-waiting-entry"><span>{t('marketPerPlayer')} <strong>{room.entryCredits === 0 ? t('marketFree') : `${room.entryCredits} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(room.poolCredits)} {t('marketDemoCredits')}</strong></span></div>
     {room.viewerIsCreator && room.status === 'WAITING' && <button className="secondary-button wide market-cancel-button" disabled={busy} onClick={onCancel}>{t('marketCancelRoom')}</button>}
     {!room.viewerIsCreator && <p className="market-wait-note">{t('marketWaitingCopy')}</p>}
     {room.status === 'CANCELLED' || room.status === 'EXPIRED' ? <div className="market-expired-state"><p>{room.status === 'EXPIRED' ? t('marketRoomExpired') : t('marketRoomCancelled')}</p><button className="secondary-button" onClick={onBack}>{t('marketBackToRooms')}</button></div> : null}

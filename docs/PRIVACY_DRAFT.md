@@ -1,23 +1,25 @@
 # DIRE BET privacy notice — draft for legal review
 
-**DRAFT — NOT APPROVED FOR PUBLICATION.** Prepared 2026-11-15. The owner and qualified counsel must confirm that this notice matches actual data handling and applicable law.
+**DRAFT — NOT APPROVED FOR PUBLICATION.** Prepared 2026-11-20. The owner and qualified counsel must confirm that this notice matches actual data handling and applicable law.
 
-## Current preview data
+## Data handled by the application
 
-If a user opens the app in Telegram, it can submit Telegram’s raw `initData` to the Worker for signature and freshness validation. The Worker uses only the verified Telegram user details to create or update a D1 user record and issues a short-lived session token held in page memory. A normal browser guest can browse and play local XO practice; guest practice does not create a server match record.
+Telegram sign-in sends Telegram `initData` to the Worker for signature and freshness checks. The app stores verified Telegram account details, display name, username, language, and any contact a user shares with the bot. Web sign-in is available to a linked account; its password is stored as a hash. Signed session tokens are kept in browser session storage.
 
-The database schema also defines future tables for rooms, matches, wallets and support, but those services are not enabled. The schema itself does not mean those data flows currently operate. No payment details, bank credentials, PINs, voice recordings or receipts are requested by the preview.
+Every player must sign in and pass an administrator-reviewed 18+ age check before playing. The app stores the user's age-check reference encrypted in D1, the review result, the stated age, and review audit data. The owner must select and document a suitable age-check method before launch; the app does not perform an identity-document or biometric check itself.
 
-## Purposes and sharing
+While live-money features are locked, payment account details remain disabled. If the required legal and provider approvals are recorded and an administrator activates the system, users can submit Telebirr or eBirr deposit requests with an amount, transaction reference, sender phone number, and payment screenshot. Withdrawal requests include an amount, provider, destination phone, and account name. Contact fields and receipt images are encrypted before storage. Request status, manual review actions, transfer references, and wallet ledger entries are retained in D1. Paid-room holds, results, refunds, and payouts are also recorded in the ledger.
 
-Verified Telegram profile fields are used for basic account identification and language selection. Cloudflare would host Worker, D1 and static app data if the owner deploys this code. Telegram handles its own platform data under its policies. No analytics or advertising vendor has been configured in this preview.
+## Purposes, access and service providers
+
+Account information supports sign-in, age review and gameplay. Payment information supports manual deposit verification, withdrawal processing and financial reconciliation. Super Admins can review submitted age references, payment screenshots and withdrawal details; those values are decrypted only for the relevant review screens. Cloudflare hosts the Worker, D1 and static app when deployed. Telegram handles its platform data under its own policies.
 
 ## Retention, deletion and user requests
 
-The owner has not yet approved a retention schedule, deletion process, privacy contact or data-subject request process. Those items must be set before public launch. The final service should collect only the information needed, delete it when no longer needed subject to law, and document legal exceptions.
+Deposit receipt rows currently receive a 365-day `retention_until` value, but automatic deletion at that date is not implemented. The owner and counsel must approve retention periods and complete a deletion process before money activation. Age-reference retention, ledger retention, deletion requests, privacy contact and data-subject request handling also need an approved policy. The final service should delete personal information when no longer needed, subject to legal recordkeeping requirements.
 
 ## Security and changes
 
-The preview uses HTTPS when deployed by Cloudflare, Telegram init-data verification and short-lived signed sessions. Security review is incomplete; no production deployment has been verified. Contact details for privacy questions are not configured.
+The app uses Telegram init-data verification, signed sessions, origin checks, rate limits, encrypted age/payment contact fields, and an append-only wallet ledger. This notice is still a draft; no production deployment or external security review was verified in this task. Privacy contact details are not configured.
 
-Before launch, counsel must provide the effective date, controller identity, legal basis, data categories, age information, retention periods, user rights, transfer locations, contact details, complaint route and any consent language required by applicable law and Telegram terms.
+Before launch, counsel must provide the effective date, controller identity, legal basis, data categories, age-check method, retention periods, user rights, transfer locations, contact details, complaint route and any consent language required by applicable law and Telegram terms.

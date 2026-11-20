@@ -4,8 +4,8 @@ $ErrorActionPreference = 'Stop'
 $workerOrigin = 'https://dire-bet.sophionasm.workers.dev'
 
 $health = Invoke-RestMethod -Uri "$workerOrigin/api/health"
-if (-not $health.ok -or $health.mode -ne 'demo' -or $health.realMoneyAvailable) {
-  throw 'The DIRE BET Worker is not responding in safe demo mode. Stop and check the deployed Worker.'
+if (-not $health.ok -or $health.mode -ne 'free-play' -or $health.realMoneyAvailable) {
+  throw 'The DIRE BET Worker is not responding in safe free-play mode. Stop and check the deployed Worker.'
 }
 
 function Set-WranglerSecretFromInput([string] $Name, [string] $Value) {

@@ -1,5 +1,15 @@
 export type ActivationEnv = { DB: D1Database; REAL_MONEY_ENABLED: string; DEMO_MODE: string };
 
+export async function ageEligibilityError(env: Pick<ActivationEnv, 'DB'>, userId: number): Promise<string | null> {
+  const row = await env.DB.prepare(`SELECT u.status, p.age_eligibility FROM users u
+    LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id = ?`).bind(userId).first<{
+      status: string; age_eligibility: string | null;
+    }>();
+  if (!row || row.status !== 'active') return 'Your account is not eligible to use DIRE BET.';
+  if (row.age_eligibility !== 'verified') return 'Complete an approved 18+ age check before playing.';
+  return null;
+}
+
 export async function moneyActivationRecorded(env: ActivationEnv): Promise<boolean> {
   if (env.REAL_MONEY_ENABLED !== 'true' || env.DEMO_MODE !== 'false') return false;
   try {
@@ -12,7 +22,7 @@ export async function moneyActivationRecorded(env: ActivationEnv): Promise<boole
       evidence.ageVerificationMethod, evidence.responsiblePlayPolicy, evidence.privacyReview];
     const providers = evidence.providerApprovals as Record<string, unknown> | null;
     return references.every((value) => typeof value === 'string' && value.trim().length >= 3)
-      && Array.isArray(evidence.licenseReferences) && evidence.licenseReferences.every((value) => typeof value === 'string' && value.trim().length >= 3)
+      && Array.isArray(evidence.licenseReferences) && evidence.licenseReferences.length > 0 && evidence.licenseReferences.every((value) => typeof value === 'string' && value.trim().length >= 3)
       && typeof providers?.telebirr === 'string' && providers.telebirr.trim().length >= 3
       && typeof providers?.ebirr === 'string' && providers.ebirr.trim().length >= 3
       && Number.isInteger(evidence.minimumAge) && (evidence.minimumAge as number) >= 18 && evidence.minimumAge === record.minimum_age

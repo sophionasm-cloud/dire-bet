@@ -2,6 +2,7 @@ UPDATE payment_settings
 SET account_label = NULL, account_number = NULL, enabled = 0;
 
 ALTER TABLE withdrawal_requests ADD COLUMN payment_reference TEXT;
+CREATE UNIQUE INDEX withdrawal_payment_reference_once ON withdrawal_requests(provider, payment_reference) WHERE payment_reference IS NOT NULL;
 
 CREATE TRIGGER real_withdrawal_balance_check
 BEFORE INSERT ON withdrawal_requests

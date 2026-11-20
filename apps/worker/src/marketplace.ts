@@ -4,14 +4,12 @@ export type MarketplaceSettings = {
   standardAmounts: number[];
   customEnabled: boolean;
   customMaximum: number;
-  commissionBps: number;
   waitingSeconds: number;
   realMoneyEnabled: boolean;
 };
 
 export type Settlement = {
   poolTenths: number;
-  feeTenths: number;
   payoutTenths: number;
   perWinnerTenths: number;
 };
@@ -20,7 +18,6 @@ export const DEFAULT_MARKETPLACE_SETTINGS: MarketplaceSettings = {
   standardAmounts: [10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000],
   customEnabled: true,
   customMaximum: 1000,
-  commissionBps: 0,
   waitingSeconds: 30,
   realMoneyEnabled: false,
 };
@@ -47,14 +44,11 @@ export function parseLudoRoomOptions(input: unknown): LudoRoomOptions | null {
   return { player0Color, crownTarget };
 }
 
-export function calculateSettlement(entryAmount: number, playerCount: number, commissionBps: number): Settlement {
+export function calculateSettlement(entryAmount: number, playerCount: number): Settlement {
   if (!Number.isSafeInteger(entryAmount) || entryAmount < 0) throw new Error('Entry amount must be a non-negative whole number.');
   if (!Number.isSafeInteger(playerCount) || playerCount < 2 || playerCount > 9) throw new Error('Player count must be between two and nine.');
-  if (!Number.isSafeInteger(commissionBps) || commissionBps < 0 || commissionBps > 5000) throw new Error('Commission rate is outside the allowed range.');
   const poolTenths = entryAmount * playerCount * 10;
-  const feeTenths = Math.floor((poolTenths * commissionBps) / 10_000);
-  const payoutTenths = poolTenths - feeTenths;
-  return { poolTenths, feeTenths, payoutTenths, perWinnerTenths: Math.floor(payoutTenths / playerCount) };
+  return { poolTenths, payoutTenths: poolTenths, perWinnerTenths: Math.floor(poolTenths / playerCount) };
 }
 
 export function validateMarketplaceSettings(input: unknown): MarketplaceSettings | null {
@@ -64,13 +58,11 @@ export function validateMarketplaceSettings(input: unknown): MarketplaceSettings
   if (!Array.isArray(amounts) || amounts.length < 1 || amounts.length > 20 || amounts.some((item) => !Number.isSafeInteger(item) || item <= 0 || item > 10_000)) return null;
   if (new Set(amounts).size !== amounts.length) return null;
   if (typeof value.customEnabled !== 'boolean' || !Number.isSafeInteger(value.customMaximum) || (value.customMaximum as number) < 101 || (value.customMaximum as number) > 100_000) return null;
-  if (!Number.isSafeInteger(value.commissionBps) || (value.commissionBps as number) < 0 || (value.commissionBps as number) > 5000) return null;
   if (!Number.isSafeInteger(value.waitingSeconds) || (value.waitingSeconds as number) < 15 || (value.waitingSeconds as number) > 180) return null;
   return {
     standardAmounts: [...amounts].sort((a, b) => a - b),
     customEnabled: value.customEnabled,
     customMaximum: value.customMaximum as number,
-    commissionBps: value.commissionBps as number,
     waitingSeconds: value.waitingSeconds as number,
     realMoneyEnabled: false,
   };

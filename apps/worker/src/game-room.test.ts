@@ -14,7 +14,7 @@ function createFixture() {
   };
   const state = { storage, acceptWebSocket: () => undefined, getWebSockets: () => [] } as unknown as DurableObjectState;
   const db = {
-    prepare: (sql: string) => ({ bind: (...values: unknown[]) => { const statement = { sql, values }; boundStatements.push(statement); return statement; } }),
+    prepare: (sql: string) => ({ bind: (...values: unknown[]) => { const statement = { sql, values, first: async () => ({ status: 'active', age_eligibility: 'verified' }) }; boundStatements.push(statement); return statement; } }),
     batch: async (statements: { sql: string }[]) => { batches.push(statements.map((statement) => statement.sql)); return []; },
   };
   const room = new GameRoom(state, { DB: db } as never);

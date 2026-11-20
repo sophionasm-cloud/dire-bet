@@ -3,7 +3,7 @@ import type { GameId } from '@dire-bet/shared';
 import type { MarketplaceRoom, MarketplaceSettings, PublicRoomStatus } from '../games/marketplaceTypes';
 
 type Props = { token: string | null };
-type Stats = { total: number; active: number; waiting: number; full: number; inProgress: number; completed: number; cancelled: number; expired: number; simulatedVolumeCredits: number; simulatedCommissionCredits: number; averagePlayers: number };
+type Stats = { total: number; active: number; waiting: number; full: number; inProgress: number; completed: number; cancelled: number; expired: number; realVolumeEtb: number; averagePlayers: number };
 type Audit = { adminId: number; action: string; entityId: string | null; detail: Record<string, unknown>; createdAt: number };
 type RoomEvent = { type: string; actorId: number | null; detail: Record<string, unknown>; createdAt: number };
 type AdminData = { stats: Stats; settings: MarketplaceSettings; rooms: MarketplaceRoom[]; audit: Audit[] };
@@ -21,7 +21,6 @@ export default function RoomManagement({ token }: Props) {
   const [selectedId, setSelectedId] = useState('');
   const [standardText, setStandardText] = useState('10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000');
   const [maximumText, setMaximumText] = useState('1000');
-  const [commissionText, setCommissionText] = useState('10');
   const [waitingText, setWaitingText] = useState('30');
   const [customEnabled, setCustomEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -40,7 +39,6 @@ export default function RoomManagement({ token }: Props) {
       setData(result);
       setStandardText(result.settings.standardAmounts.join(', '));
       setMaximumText(String(result.settings.customMaximum));
-      setCommissionText(String(result.settings.commissionBps / 100));
       setWaitingText(String(result.settings.waitingSeconds));
       setCustomEnabled(result.settings.customEnabled);
       setNotice('');
@@ -67,33 +65,32 @@ export default function RoomManagement({ token }: Props) {
     if (!token) return;
     const standardAmounts = standardText.split(',').map((value) => Number(value.trim()));
     const customMaximum = Number(maximumText);
-    const commissionBps = Math.round(Number(commissionText) * 100);
     const waitingSeconds = Number(waitingText);
-    if (standardAmounts.some((value) => !Number.isSafeInteger(value)) || !Number.isSafeInteger(customMaximum) || !Number.isFinite(commissionBps) || !Number.isSafeInteger(waitingSeconds)) {
+    if (standardAmounts.some((value) => !Number.isSafeInteger(value)) || !Number.isSafeInteger(customMaximum) || !Number.isSafeInteger(waitingSeconds)) {
       setError('Use whole numbers for entry amounts, the maximum and waiting time.'); return;
     }
     setSaving(true); setError(''); setNotice('');
     try {
       const response = await fetch('/api/admin/public-rooms/settings', {
         method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ standardAmounts, customEnabled, customMaximum, commissionBps, waitingSeconds, startingCredits: data?.settings.startingCredits || 1000 }),
+        body: JSON.stringify({ standardAmounts, customEnabled, customMaximum, waitingSeconds }),
       });
       const result = await response.json() as { settings?: MarketplaceSettings } & ErrorBody;
       if (!response.ok || !result.settings) throw new Error(result.error || 'Settings could not be saved.');
-      setNotice('Room settings saved. New rooms use this commission rate; existing rooms keep their saved rate.');
+      setNotice('Room settings saved. New rooms have no platform commission.');
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Settings could not be saved.'); }
     finally { setSaving(false); }
   };
 
   const cancel = async (room: MarketplaceRoom) => {
-    if (!token || !window.confirm(`Cancel room ${room.code}? Its reserved demo credits will be returned. The game result will not be changed.`)) return;
+    if (!token || !window.confirm(`Cancel room ${room.code}? Any held wallet funds will be returned. The game result will not be changed.`)) return;
     setError(''); setNotice('');
     try {
       const response = await fetch(`/api/admin/public-rooms/${room.code}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
       const result = await response.json() as ErrorBody;
       if (!response.ok) throw new Error(result.error || 'Room could not be cancelled.');
-      setNotice(`Room ${room.code} cancelled; reserved demo credits were returned.`);
+      setNotice(`Room ${room.code} cancelled; held wallet funds were returned.`);
       setSelectedId(''); setDetail(null); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Room could not be cancelled.'); }
   };
@@ -106,20 +103,20 @@ export default function RoomManagement({ token }: Props) {
   return <div className="room-management">
     {error && <p className="room-admin-error" role="alert">{error}</p>}
     {notice && <p className="room-admin-notice" role="status">{notice}</p>}
-    <div className="room-management-heading"><div><h2>ROOMS &amp; COMMISSIONS</h2><p>Demo-credit activity only. Commission figures below are simulated, not income.</p></div><label>Game filter<select value={filter} onChange={(event) => setFilter(event.target.value as GameId | '')}>{games.map((game) => <option key={game.id || 'all'} value={game.id}>{game.name}</option>)}</select></label></div>
+    <div className="room-management-heading"><div><h2>ROOM MANAGEMENT</h2><p>ETB totals include completed real-money rooms only. Free and legacy preview rooms are excluded.</p></div><label>Game filter<select value={filter} onChange={(event) => setFilter(event.target.value as GameId | '')}>{games.map((game) => <option key={game.id || 'all'} value={game.id}>{game.name}</option>)}</select></label></div>
 
     <div className="room-admin-metrics">
       <Metric label="Active rooms" value={data.stats.active}/><Metric label="Waiting" value={data.stats.waiting}/><Metric label="Full" value={data.stats.full}/><Metric label="Games running" value={data.stats.inProgress}/><Metric label="Completed" value={data.stats.completed}/><Metric label="Expired / cancelled" value={`${data.stats.expired} / ${data.stats.cancelled}`}/>
     </div>
-    <div className="room-simulated-summary"><span>SIMULATED DEMO-CREDIT VOLUME <strong>{formatCredits(data.stats.simulatedVolumeCredits)}</strong></span><span>SIMULATED COMMISSION <strong>{formatCredits(data.stats.simulatedCommissionCredits)}</strong></span><span>AVERAGE PLAYERS PER ROOM <strong>{data.stats.averagePlayers}</strong></span></div>
+    <div className="room-simulated-summary"><span>REAL ROOM VOLUME <strong>{formatCredits(data.stats.realVolumeEtb)} ETB</strong></span><span>COMPLETED ROOMS <strong>{data.stats.completed}</strong></span><span>AVERAGE PLAYERS PER ROOM <strong>{data.stats.averagePlayers}</strong></span></div>
 
     <section className="room-admin-section"><div className="room-admin-section-head"><div><span className="staff-label">MARKETPLACE</span><h3>Room activity</h3></div><button className="staff-link-button" onClick={() => void load()} disabled={loading}>Refresh ↻</button></div>
-      <div className="room-admin-table-wrap"><table className="room-admin-table"><thead><tr><th>Room</th><th>Game</th><th>Creator</th><th>Players</th><th>Entry each</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>{activeRooms.length ? activeRooms.map((room) => <tr key={room.id}><td><strong>{room.code}</strong></td><td>{gameTitle(room.gameId)}</td><td>{room.creatorName}</td><td>{room.playerCount}/{room.capacity}</td><td>{room.entryCredits ? `${room.entryCredits} demo` : 'FREE'}</td><td><span className={`room-admin-status ${room.status.toLowerCase()}`}>{room.status}</span></td><td>{new Date(room.createdAt).toLocaleString()}</td><td><button className="room-admin-view" onClick={() => setSelectedId(room.id)}>Details</button></td></tr>) : <tr><td colSpan={8}>No rooms match this filter.</td></tr>}</tbody></table></div>
+      <div className="room-admin-table-wrap"><table className="room-admin-table"><thead><tr><th>Room</th><th>Game</th><th>Creator</th><th>Players</th><th>Entry each</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>{activeRooms.length ? activeRooms.map((room) => <tr key={room.id}><td><strong>{room.code}</strong></td><td>{gameTitle(room.gameId)}</td><td>{room.creatorName}</td><td>{room.playerCount}/{room.capacity}</td><td>{room.walletKind === 'real' && room.entryCredits ? `${room.entryCredits} ETB` : 'FREE'}</td><td><span className={`room-admin-status ${room.status.toLowerCase()}`}>{room.status}</span></td><td>{new Date(room.createdAt).toLocaleString()}</td><td><button className="room-admin-view" onClick={() => setSelectedId(room.id)}>Details</button></td></tr>) : <tr><td colSpan={8}>No rooms match this filter.</td></tr>}</tbody></table></div>
     </section>
 
     <section className="room-admin-section room-settings-section"><div className="room-admin-section-head"><div><span className="staff-label">SUPER ADMIN ONLY</span><h3>Room settings</h3></div><span className="room-admin-status waiting">NEW ROOMS ONLY</span></div>
-      <div className="room-setting-grid"><label>Standard demo-credit entries<input value={standardText} onChange={(event) => setStandardText(event.target.value)} placeholder="10, 20, 50, 100"/><small>Comma-separated whole numbers.</small></label><label>Custom maximum<input inputMode="numeric" value={maximumText} onChange={(event) => setMaximumText(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>Custom entries must be above 100.</small></label><label>Simulated commission (%)<input type="number" min="0" max="50" step="0.1" value={commissionText} onChange={(event) => setCommissionText(event.target.value)}/><small>Saved on each new room.</small></label><label>Waiting time (seconds)<input type="number" min="15" max="180" step="1" value={waitingText} onChange={(event) => setWaitingText(event.target.value)}/><small>Default is 60 seconds.</small></label></div>
-      <label className="room-custom-toggle"><input type="checkbox" checked={customEnabled} onChange={(event) => setCustomEnabled(event.target.checked)}/>Allow custom demo-credit entries</label>
+      <div className="room-setting-grid"><label>Standard ETB entries<input value={standardText} onChange={(event) => setStandardText(event.target.value)} placeholder="10, 20, 50, 100"/><small>Comma-separated whole-birr amounts.</small></label><label>Custom maximum<input inputMode="numeric" value={maximumText} onChange={(event) => setMaximumText(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>Custom entries must be above 100 ETB.</small></label><label>Waiting time (seconds)<input type="number" min="15" max="180" step="1" value={waitingText} onChange={(event) => setWaitingText(event.target.value)}/><small>Default is 30 seconds.</small></label></div>
+      <label className="room-custom-toggle"><input type="checkbox" checked={customEnabled} onChange={(event) => setCustomEnabled(event.target.checked)}/>Allow custom ETB entries</label>
       <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? 'Saving…' : 'Save room settings'}<span>→</span></button>
     </section>
 
@@ -127,7 +124,7 @@ export default function RoomManagement({ token }: Props) {
       {data.audit.length ? <div className="room-audit-list">{data.audit.slice(0, 12).map((event, index) => <article key={`${event.createdAt}-${index}`}><div><strong>{event.action.replaceAll('_', ' ')}</strong><small>{event.entityId || 'Marketplace settings'} · admin {event.adminId}</small></div><time>{new Date(event.createdAt).toLocaleString()}</time></article>)}</div> : <p className="room-admin-muted">No room setting or cancellation actions yet.</p>}
     </section>
 
-    {detail && <div className="room-detail-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && (setDetail(null), setSelectedId(''))}><section className="room-detail-panel" role="dialog" aria-modal="true" aria-labelledby="room-detail-title"><header><div><span className="staff-label">ROOM DETAILS</span><h3 id="room-detail-title">#{detail.room.code}</h3></div><button className="staff-link-button" onClick={() => { setDetail(null); setSelectedId(''); }} aria-label="Close room details">Close</button></header><p>{gameTitle(detail.room.gameId)} · {detail.room.creatorName} · {detail.room.playerCount}/{detail.room.capacity} · {statusLabel(detail.room.status)}</p><div className="room-admin-settlement"><span>Entry per player <strong>{detail.room.entryCredits ? `${detail.room.entryCredits} demo credits` : 'FREE'}</strong></span><span>Pool <strong>{formatCredits(detail.room.poolCredits)} demo credits</strong></span><span>Simulated commission ({detail.room.commissionBps / 100}%) <strong>{formatCredits(detail.room.feeCredits)} demo credits</strong></span><span>Simulated player payout <strong>{formatCredits(detail.room.payoutCredits)} demo credits</strong></span></div><h4>Participants</h4><div className="room-detail-players">{detail.room.players.map((player) => <div key={player.seat}><span>{player.avatar}</span><strong>{player.name}</strong><small>Seat {player.seat + 1}</small></div>)}</div><h4>Room history</h4>{detail.events.length ? <ol className="room-event-list">{detail.events.map((event, index) => <li key={`${event.type}-${index}`}><strong>{event.type.replaceAll('_', ' ')}</strong><small>{new Date(event.createdAt).toLocaleString()}</small><code>{JSON.stringify(event.detail)}</code></li>)}</ol> : <p className="room-admin-muted">No events recorded.</p>}{!['COMPLETED','CANCELLED','EXPIRED'].includes(detail.room.status) && <button className="room-danger-button" onClick={() => void cancel(detail.room)}>Cancel room and return demo credits</button>}</section></div>}
+    {detail && <div className="room-detail-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && (setDetail(null), setSelectedId(''))}><section className="room-detail-panel" role="dialog" aria-modal="true" aria-labelledby="room-detail-title"><header><div><span className="staff-label">ROOM DETAILS</span><h3 id="room-detail-title">#{detail.room.code}</h3></div><button className="staff-link-button" onClick={() => { setDetail(null); setSelectedId(''); }} aria-label="Close room details">Close</button></header><p>{gameTitle(detail.room.gameId)} · {detail.room.creatorName} · {detail.room.playerCount}/{detail.room.capacity} · {statusLabel(detail.room.status)}</p><div className="room-admin-settlement"><span>Entry per player <strong>{detail.room.walletKind === 'real' ? `${detail.room.entryCredits} ETB` : 'FREE'}</strong></span><span>Pool <strong>{detail.room.walletKind === 'real' ? `${formatCredits(detail.room.poolCredits)} ETB` : 'Not applicable'}</strong></span><span>Winner payout <strong>{detail.room.walletKind === 'real' ? `${formatCredits(detail.room.payoutCredits)} ETB` : 'Not applicable'}</strong></span></div><h4>Participants</h4><div className="room-detail-players">{detail.room.players.map((player) => <div key={player.seat}><span>{player.avatar}</span><strong>{player.name}</strong><small>Seat {player.seat + 1}</small></div>)}</div><h4>Room history</h4>{detail.events.length ? <ol className="room-event-list">{detail.events.map((event, index) => <li key={`${event.type}-${index}`}><strong>{event.type.replaceAll('_', ' ')}</strong><small>{new Date(event.createdAt).toLocaleString()}</small><code>{JSON.stringify(event.detail)}</code></li>)}</ol> : <p className="room-admin-muted">No events recorded.</p>}{!['COMPLETED','CANCELLED','EXPIRED','STARTING','SETTLING'].includes(detail.room.status) && <button className="room-danger-button" onClick={() => void cancel(detail.room)}>Cancel room and return held funds</button>}</section></div>}
   </div>;
 }
 

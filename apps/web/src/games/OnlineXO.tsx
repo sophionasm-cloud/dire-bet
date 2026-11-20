@@ -17,7 +17,7 @@ type Props = { t: Translator; token: string | null };
 type RoomPlayer = { id: number; name: string; mark: 'X' | 'O' | null; online: boolean };
 type PokerPublic = ReturnType<typeof viewPoker>;
 type RoomGame = XOState | LudoState | CheckersState | PokerPublic;
-type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' } | null; drawOfferBy?: number | null; publicRoom?: { id: string; entryCredits: number; commissionBps: number; options: Record<string, unknown> } };
+type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' } | null; drawOfferBy?: number | null; publicRoom?: { id: string; entryCredits: number; options: Record<string, unknown> } };
 type ApiResult = { code?: string; ticket?: string; gameId?: GameId; error?: string };
 
 export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: RoomConfig) => void }) {
@@ -119,8 +119,6 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     const playerZeroColor = roomLudoColor(roomMeta.options.player0Color);
     const colorAt = (seat: number): LudoBoardColor => seat === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
     const notice = state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.winner !== null ? result : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
-    const fee = Math.floor(roomMeta.entryCredits * 2 * roomMeta.commissionBps / 10_000);
-    const payout = roomMeta.entryCredits * 2 - fee;
     const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
     return <section className="online-room-screen public-ludo-shell ludo-room-layout">
       <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
