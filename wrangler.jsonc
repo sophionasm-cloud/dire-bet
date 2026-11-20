@@ -8,7 +8,8 @@
     "ENVIRONMENT": "production",
     "BOT_USERNAME": "Dire_Bet_bot",
     "REAL_MONEY_ENABLED": "false",
-    "DEMO_MODE": "false"
+    "DEMO_MODE": "false",
+    "SIMULATED_WALLET_ENABLED": "true"
   },
   "assets": {
     "directory": "./apps/web/dist",

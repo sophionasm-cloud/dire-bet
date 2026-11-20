@@ -139,7 +139,7 @@ describe('wallet proof and agent signup credit', () => {
   const secret = 'wallet-flow-test-secret';
   const evidence = { counselApproval:'signed opinion', licenseReview:'reviewed', licenseReferences:['license ref'], providerApprovals:{ telebirr:'merchant approval', ebirr:'merchant approval' }, telegramApproval:'written approval', nationalBankReview:'written review', ageVerificationMethod:'verified method', responsiblePlayPolicy:'approved policy', privacyReview:'approved policy', minimumAge:18, ownerSignedAt:'2026-11-15' };
 
-  function walletEnv(captured: { sql: string; values: unknown[] }[], options: { activated?: boolean; referredAge?: string | null } = {}) {
+  function walletEnv(captured: { sql: string; values: unknown[] }[], options: { activated?: boolean; simulated?: boolean; admin?: boolean; referredAge?: string | null } = {}) {
     const db = {
       prepare(sql: string) {
         const statement = {
@@ -150,6 +150,8 @@ describe('wallet proof and agent signup credit', () => {
             if (sql.includes('FROM activation_records')) return options.activated ? { id:'activation-1', evidence_json:JSON.stringify(evidence), minimum_age:18 } : null;
             if (sql.includes("action = 'REAL_MONEY_ACTIVATION_RECORDED'")) return options.activated ? { id:'audit-1' } : null;
             if (sql.includes('SELECT u.status, p.age_eligibility')) return { status:'active', age_eligibility:'verified' };
+            if (sql.includes('SELECT telegram_id FROM users')) return options.admin ? { telegram_id:7788 } : null;
+            if (sql.includes('SELECT status, wallet_kind, simulation_only, user_id FROM')) return { status:'pending', wallet_kind:options.simulated ? 'demo' : 'real', simulation_only:options.simulated ? 1 : 0, user_id:71 };
             if (sql.includes('FROM payment_settings')) return { account_number:'0911111111', enabled:1, minimum_santim:5000, maximum_santim:1_000_000 };
             if (sql.includes('FROM agents WHERE referral_code')) return { id:'agent-1', user_id:2 };
             if (sql.includes('SELECT source_code FROM referrals')) return null;
@@ -157,14 +159,14 @@ describe('wallet proof and agent signup credit', () => {
             return null;
           },
           all: async () => ({ results:[] }),
-          run: async () => ({ success:true, meta:{ changes:1 } }),
+          run: async () => { captured.push(statement); return { success:true, meta:{ changes:1 } }; },
         };
         return statement;
       },
       batch: async (statements: { sql: string; values: unknown[] }[]) => { captured.push(...statements); return []; },
     };
     const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed:true }), { status:200 }) }) };
-    return { DB:db, SESSION_SECRET:secret, REAL_MONEY_ENABLED:options.activated ? 'true' : 'false', DEMO_MODE:'false', RATE_LIMITER:rateLimiter } as never;
+    return { DB:db, SESSION_SECRET:secret, SUPER_ADMIN_TELEGRAM_ID:options.admin ? '7788' : undefined, REAL_MONEY_ENABLED:options.activated ? 'true' : 'false', DEMO_MODE:'false', SIMULATED_WALLET_ENABLED:options.simulated ? 'true' : 'false', RATE_LIMITER:rateLimiter } as never;
   }
 
   async function deposit(body: Record<string, unknown>, captured: { sql: string; values: unknown[] }[]) {
@@ -198,6 +200,54 @@ describe('wallet proof and agent signup credit', () => {
     expect(await response.json()).toMatchObject({ bonusBirr:10, bonusStatus:'pending_age', walletEnabled:false });
     expect(statements.some((statement) => statement.sql.includes('agent-signup-bonus:'))).toBe(true);
     expect(statements.some((statement) => statement.sql.includes('age_eligibility = \'verified\'') && statement.sql.includes('1000'))).toBe(true);
+  });
+
+  describe('simulated wallet requests', () => {
+  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dZ8AAAAASUVORK5CYII=';
+
+  it('keeps simulation balance and deposits out of the real wallet', async () => {
+    const statements: { sql: string; values: unknown[] }[] = [];
+    const authorization = `Bearer ${await signedSession(secret, 71)}`;
+    const balance = await worker.fetch(new Request('https://dire-bet.test/api/wallet/balance', { headers:{ Authorization:authorization } }), walletEnv(statements, { simulated:true }));
+    expect(await balance.json()).toMatchObject({ enabled:true, simulated:true, balance:0 });
+
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/wallet/deposits', {
+      method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' },
+      body:JSON.stringify({ provider:'telebirr', amount:100, senderPhone:'0912345678', transactionReference:'SIM12345', proofMethod:'receipt', receiptData:image, idempotencyKey:'simulation-deposit-test-01' }),
+    }), walletEnv(statements, { simulated:true }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ status:'pending', simulationOnly:true });
+    expect(statements.some((statement) => statement.sql.includes('INSERT INTO deposit_requests') && statement.values.includes('demo') && statement.values.includes(1))).toBe(true);
+    expect(statements.some((statement) => statement.sql.includes('INSERT INTO wallet_transactions'))).toBe(false);
+  });
+
+  it('submits simulated withdrawals and records admin approval without enabling live money', async () => {
+    const statements: { sql: string; values: unknown[] }[] = [];
+    const authorization = `Bearer ${await signedSession(secret, 71)}`;
+    const withdrawal = await worker.fetch(new Request('https://dire-bet.test/api/wallet/withdrawals', {
+      method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' },
+      body:JSON.stringify({ provider:'ebirr', amount:50, destinationPhone:'0912345678', accountHolderName:'Test Player', idempotencyKey:'simulation-withdrawal-test-01' }),
+    }), walletEnv(statements, { simulated:true }));
+    expect(withdrawal.status).toBe(201);
+    expect(await withdrawal.json()).toMatchObject({ status:'pending', simulationOnly:true });
+    expect(statements.some((statement) => statement.sql.includes('INSERT INTO withdrawal_requests') && statement.values.includes('demo') && statement.values.includes(1))).toBe(true);
+
+    const adminAuthorization = `Bearer ${await signedSession(secret, 77)}`;
+    const review = await worker.fetch(new Request('https://dire-bet.test/api/admin/wallet/withdrawals/WD-simulation-test', {
+      method:'PATCH', headers:{ Authorization:adminAuthorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' }, body:JSON.stringify({ status:'approved' }),
+    }), walletEnv(statements, { simulated:true, admin:true }));
+    expect(review.status).toBe(200);
+    expect(await review.json()).toMatchObject({ ok:true, status:'approved', simulationOnly:true });
+    expect(statements.some((statement) => statement.sql.includes('UPDATE withdrawal_requests') && statement.values.includes('77'))).toBe(true);
+  });
+
+  it('keeps simulated requests closed when the simulation flag is off', async () => {
+    const authorization = `Bearer ${await signedSession(secret, 71)}`;
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/wallet/deposits', {
+      method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' }, body:'{}',
+    }), walletEnv([], {}));
+    expect(response.status).toBe(403);
+  });
   });
 });
 

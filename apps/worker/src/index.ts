@@ -20,6 +20,7 @@ interface Env {
   BOT_USERNAME: string;
   REAL_MONEY_ENABLED: string;
   DEMO_MODE: string;
+  SIMULATED_WALLET_ENABLED: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   SESSION_SECRET?: string;
@@ -789,7 +790,7 @@ async function recordAdminAudit(env: Env, adminId: number, action: string, entit
 
 async function adminActivationStatus(env: Env): Promise<Response> {
   const row = await env.DB.prepare('SELECT minimum_age, approved_at FROM activation_records ORDER BY approved_at DESC, id DESC LIMIT 1').first<{ minimum_age: number; approved_at: string }>();
-  return json({ active: await moneyActivationRecorded(env), configured: env.REAL_MONEY_ENABLED === 'true' && env.DEMO_MODE === 'false', record: row || null });
+  return json({ active: await moneyActivationRecorded(env), simulationEnabled: env.SIMULATED_WALLET_ENABLED === 'true', configured: env.REAL_MONEY_ENABLED === 'true' && env.DEMO_MODE === 'false', record: row || null });
 }
 
 async function recordActivationEvidence(request: Request, env: Env, adminId: number): Promise<Response> {
@@ -830,25 +831,34 @@ async function recordActivationEvidence(request: Request, env: Env, adminId: num
   return json({ recorded: true, active: await moneyActivationRecorded(env), configured: env.REAL_MONEY_ENABLED === 'true' && env.DEMO_MODE === 'false', id }, 201);
 }
 
+async function walletMode(env: Env): Promise<'real' | 'simulation' | null> {
+  if (await moneyActivationRecorded(env)) return 'real';
+  return env.SIMULATED_WALLET_ENABLED === 'true' ? 'simulation' : null;
+}
+
 async function publicPaymentSettings(env: Env): Promise<Response> {
-  const moneyEnabled = await moneyActivationRecorded(env);
+  const mode = await walletMode(env);
   const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim
     FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
       provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null;
     }>();
-  return json({ moneyEnabled, providers: result.results.map((row) => ({
-    provider: row.provider, accountLabel: moneyEnabled && row.enabled === 1 ? row.account_label || '' : '',
-    accountNumber: moneyEnabled && row.enabled === 1 ? row.account_number || '' : '',
-    enabled: moneyEnabled && row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+  return json({ moneyEnabled: mode === 'real', simulationOnly: mode === 'simulation', providers: result.results.map((row) => ({
+    provider: row.provider, accountLabel: mode && row.enabled === 1 ? row.account_label || '' : '',
+    accountNumber: mode && row.enabled === 1 ? row.account_number || '' : '',
+    enabled: mode !== null && row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
   })) });
 }
 
 async function playerWalletBalance(env: Env, userId: number): Promise<Response> {
-  if (!(await moneyActivationRecorded(env))) return json({ enabled: false, balance: null, error: 'Wallet services are unavailable until required approvals are recorded.' }, 403);
-  const eligibility = await moneyEligibilityError(env, userId);
-  if (eligibility) return json({ enabled: true, balance: null, error: eligibility }, 403);
-  const row = await env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>();
-  return json({ enabled: true, balanceSantim: row?.balance_santim || 0, balance: (row?.balance_santim || 0) / 100 });
+  const mode = await walletMode(env);
+  if (!mode) return json({ enabled: false, balance: null, simulated: false, error: 'Wallet services are unavailable until required approvals are recorded.' }, 403);
+  if (mode === 'real') {
+    const eligibility = await moneyEligibilityError(env, userId);
+    if (eligibility) return json({ enabled: true, balance: null, simulated: false, error: eligibility }, 403);
+  }
+  const kind = mode === 'real' ? 'real' : 'demo';
+  const row = await env.DB.prepare('SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = ?').bind(userId, kind).first<{ balance_santim: number }>();
+  return json({ enabled: true, simulated: mode === 'simulation', balanceSantim: row?.balance_santim || 0, balance: (row?.balance_santim || 0) / 100 });
 }
 
 async function submitAgeVerification(request: Request, env: Env, userId: number): Promise<Response> {
@@ -910,24 +920,31 @@ async function reviewAgeRequest(request: Request, env: Env, adminId: number, use
 }
 
 async function playerWalletRequests(env: Env, userId: number): Promise<Response> {
+  const mode = await walletMode(env);
+  if (!mode) return json({ deposits: [], withdrawals: [] });
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
   const [deposits, withdrawals] = await Promise.all([
     env.DB.prepare(`SELECT id, provider, amount_santim, provider_reference, status, review_reason, created_at, reviewed_at
-      FROM deposit_requests WHERE user_id = ? AND wallet_kind = 'real' ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+      FROM deposit_requests WHERE user_id = ? AND wallet_kind = ? AND simulation_only = ? ORDER BY created_at DESC LIMIT 30`).bind(userId, walletKind, simulationOnly).all<{
         id: string; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       }>(),
     env.DB.prepare(`SELECT id, provider, amount_santim, status, review_reason, created_at, reviewed_at
-      FROM withdrawal_requests WHERE user_id = ? AND wallet_kind = 'real' ORDER BY created_at DESC LIMIT 30`).bind(userId).all<{
+      FROM withdrawal_requests WHERE user_id = ? AND wallet_kind = ? AND simulation_only = ? ORDER BY created_at DESC LIMIT 30`).bind(userId, walletKind, simulationOnly).all<{
         id: string; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       }>(),
   ]);
-  return json({ deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })), withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })) });
+  return json({ simulationOnly: mode === 'simulation', deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })), withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })) });
 }
 
 async function createRealDeposit(request: Request, env: Env, userId: number): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-  if (!(await moneyActivationRecorded(env))) return json({ error: 'Deposits are unavailable until required approvals are recorded.' }, 403);
-  const eligibility = await moneyEligibilityError(env, userId);
-  if (eligibility) return json({ error: eligibility }, 403);
+  const mode = await walletMode(env);
+  if (!mode) return json({ error: 'Deposits are unavailable until required approvals are recorded.' }, 403);
+  if (mode === 'real') {
+    const eligibility = await moneyEligibilityError(env, userId);
+    if (eligibility) return json({ error: eligibility }, 403);
+  }
   if (request.headers.get('content-length') && Number(request.headers.get('content-length')) > 3_200_000) return json({ error: 'Receipt must be 2 MB or smaller.' }, 413);
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'deposit-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; proofMethod?: unknown; confirmationSms?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
@@ -948,6 +965,7 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
   if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
   let receiptType: 'image/png' | 'image/jpeg' | null = null;
   let receiptBase64: string | null = null;
+  let receiptSha256: string | null = null;
   if (input.receiptData !== undefined && input.receiptData !== null && input.receiptData !== '') {
     if (typeof input.receiptData !== 'string' || input.receiptData.length > 2_850_000) return json({ error: 'Receipt must be a PNG or JPG no larger than 2 MB.' }, 413);
     const match = input.receiptData.match(/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
@@ -958,17 +976,21 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
     if (bytes.byteLength > 2 * 1024 * 1024 || !(png || jpeg)) return json({ error: 'Choose a valid PNG or JPG up to 2 MB.' }, 400);
     receiptType = png ? 'image/png' : 'image/jpeg';
     receiptBase64 = match[2];
+    receiptSha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
   }
   if (proofMethod === 'receipt' ? !receiptBase64 || !receiptType : Boolean(receiptBase64 || receiptType)) return json({ error: 'Choose exactly one proof option: a receipt photo or the payment confirmation SMS.' }, 400);
+  if (receiptSha256 && await env.DB.prepare('SELECT id FROM deposit_requests WHERE receipt_sha256 = ?').bind(receiptSha256).first()) return json({ error: 'That receipt was already submitted.' }, 409);
   const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
   if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
   const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
   const smsCiphertext = proofMethod === 'sms' ? await encryptContact(confirmationSms, env.SESSION_SECRET || '') : null;
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
   const statements = [env.DB.prepare(`INSERT INTO deposit_requests
-    (id, user_id, wallet_kind, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext)
-    VALUES (?, ?, 'real', ?, ?, ?, 'pending', ?, ?, ?, ?)`)
-    .bind(id, userId, provider, amount * 100, reference, idempotencyKey, senderCiphertext, proofMethod, smsCiphertext)];
+    (id, user_id, wallet_kind, simulation_only, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext, receipt_sha256)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`)
+    .bind(id, userId, walletKind, simulationOnly, provider, amount * 100, reference, idempotencyKey, senderCiphertext, proofMethod, smsCiphertext, receiptSha256)];
   if (receiptBase64 && receiptType) {
     const encryptedReceipt = await encryptContact(receiptBase64, env.SESSION_SECRET || '');
     statements.push(env.DB.prepare(`INSERT INTO receipt_blobs (id, deposit_request_id, content_type, encrypted_blob, retention_until)
@@ -976,15 +998,18 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
       .bind(crypto.randomUUID(), id, receiptType, enc.encode(encryptedReceipt), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()));
   }
   try { await env.DB.batch(statements); }
-  catch { return json({ error: 'That request could not be saved. Check whether its reference was already used.' }, 409); }
-  return json({ requestId: id, status: 'pending' }, 201);
+  catch { return json({ error: 'That request could not be saved. Check whether its receipt or transaction reference was already used.' }, 409); }
+  return json({ requestId: id, status: 'pending', simulationOnly: mode === 'simulation' }, 201);
 }
 
 async function createRealWithdrawal(request: Request, env: Env, userId: number): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-  if (!(await moneyActivationRecorded(env))) return json({ error: 'Withdrawals are unavailable until required approvals are recorded.' }, 403);
-  const eligibility = await moneyEligibilityError(env, userId);
-  if (eligibility) return json({ error: eligibility }, 403);
+  const mode = await walletMode(env);
+  if (!mode) return json({ error: 'Withdrawals are unavailable until required approvals are recorded.' }, 403);
+  if (mode === 'real') {
+    const eligibility = await moneyEligibilityError(env, userId);
+    if (eligibility) return json({ error: eligibility }, 403);
+  }
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'withdrawal-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; destinationPhone?: unknown; accountHolderName?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
@@ -1001,35 +1026,45 @@ async function createRealWithdrawal(request: Request, env: Env, userId: number):
   const id = `WD-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const phoneCiphertext = await encryptContact(destination, env.SESSION_SECRET || '');
   const nameCiphertext = await encryptContact(accountHolder, env.SESSION_SECRET || '');
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
   try {
     await env.DB.prepare(`INSERT INTO withdrawal_requests
-      (id, user_id, wallet_kind, amount_santim, provider, status, idempotency_key, destination_phone_ciphertext, account_holder_ciphertext)
-      VALUES (?, ?, 'real', ?, ?, 'pending', ?, ?, ?)`)
-      .bind(id, userId, amount * 100, provider, idempotencyKey, phoneCiphertext, nameCiphertext).run();
-  } catch { return json({ error: 'The request could not be saved. Check the available balance and try again.' }, 409); }
-  return json({ requestId: id, status: 'pending' }, 201);
+      (id, user_id, wallet_kind, simulation_only, amount_santim, provider, status, idempotency_key, destination_phone_ciphertext, account_holder_ciphertext)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
+      .bind(id, userId, walletKind, simulationOnly, amount * 100, provider, idempotencyKey, phoneCiphertext, nameCiphertext).run();
+  } catch { return json({ error: 'The request could not be saved. Check the available wallet balance and try again.' }, 409); }
+  return json({ requestId: id, status: 'pending', simulationOnly: mode === 'simulation' }, 201);
 }
 
 async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'withdrawals'): Promise<Response> {
+  const mode = await walletMode(env);
+  if (!mode) return json({ requests: [], count: 0, simulationOnly: false });
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
   if (kind === 'deposits') {
     const rows = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-      u.first_name, u.username, u.web_username, d.proof_method, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt,
+      d.simulation_only, u.first_name, u.username, u.web_username, d.proof_method, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt,
       CASE WHEN d.confirmation_sms_ciphertext IS NOT NULL THEN 1 ELSE 0 END AS has_sms
-      FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.wallet_kind = 'real' ORDER BY d.created_at DESC LIMIT 100`).all<{
+      FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.wallet_kind = ? AND d.simulation_only = ? ORDER BY d.created_at DESC LIMIT 100`).bind(walletKind, simulationOnly).all<{
         id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-        first_name: string; username: string | null; web_username: string | null; proof_method: 'receipt' | 'sms'; has_receipt: number; has_sms: number;
+        simulation_only: number; first_name: string; username: string | null; web_username: string | null; proof_method: 'receipt' | 'sms'; has_receipt: number; has_sms: number;
       }>();
     const details = await Promise.all(rows.results.map(async (row) => {
       const phone = await env.DB.prepare('SELECT sender_phone_ciphertext FROM deposit_requests WHERE id = ?').bind(row.id).first<{ sender_phone_ciphertext: string | null }>();
       let senderPhone = '';
       try { if (phone?.sender_phone_ciphertext) senderPhone = await decryptContact(phone.sender_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
-      return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone };
+      return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, simulationOnly: row.simulation_only === 1 };
     }));
-    return json({ requests: details, count: details.length });
+    return json({ requests: details, count: details.length, simulationOnly: mode === 'simulation' });
   }
   const rows = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
-    u.first_name, u.username, u.web_username FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.wallet_kind = 'real' ORDER BY w.created_at DESC LIMIT 100`).all<{
+    w.simulation_only, COALESCE(wallet.balance_santim, 0) AS balance_santim, u.first_name, u.username, u.web_username
+    FROM withdrawal_requests w JOIN users u ON u.id = w.user_id
+    LEFT JOIN wallets wallet ON wallet.user_id = w.user_id AND wallet.wallet_kind = w.wallet_kind
+    WHERE w.wallet_kind = ? AND w.simulation_only = ? ORDER BY w.created_at DESC LIMIT 100`).bind(walletKind, simulationOnly).all<{
       id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
+      simulation_only: number; balance_santim: number;
       first_name: string; username: string | null; web_username: string | null;
     }>();
   const details = await Promise.all(rows.results.map(async (row) => {
@@ -1037,9 +1072,28 @@ async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'wi
     let destinationPhone = ''; let accountHolderName = '';
     try { if (protectedFields?.destination_phone_ciphertext) destinationPhone = await decryptContact(protectedFields.destination_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
     try { if (protectedFields?.account_holder_ciphertext) accountHolderName = await decryptContact(protectedFields.account_holder_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
-    return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, destinationPhone, accountHolderName };
+    return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, balance: row.balance_santim / 100, destinationPhone, accountHolderName, simulationOnly: row.simulation_only === 1 };
   }));
-  return json({ requests: details, count: details.length });
+  return json({ requests: details, count: details.length, simulationOnly: mode === 'simulation' });
+}
+
+async function adminWalletSummary(env: Env): Promise<Response> {
+  const mode = await walletMode(env);
+  if (!mode) return json({ simulationOnly: false, pendingDeposits: 0, pendingWithdrawals: 0, approvedWithdrawals: 0, completedWithdrawals: 0, totalWithdrawalAmount: 0 });
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
+  const [deposits, withdrawals] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM deposit_requests WHERE wallet_kind = ? AND simulation_only = ? AND status IN ('pending','needs_info')`).bind(walletKind, simulationOnly).first<{ count: number }>(),
+    env.DB.prepare(`SELECT
+      SUM(CASE WHEN status IN ('pending','reviewing') THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved,
+      SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN status != 'rejected' THEN amount_santim ELSE 0 END) AS total_santim
+      FROM withdrawal_requests WHERE wallet_kind = ? AND simulation_only = ?`).bind(walletKind, simulationOnly).first<{ pending: number | null; approved: number | null; completed: number | null; total_santim: number | null }>(),
+  ]);
+  return json({ simulationOnly: mode === 'simulation', pendingDeposits: deposits?.count || 0,
+    pendingWithdrawals: withdrawals?.pending || 0, approvedWithdrawals: withdrawals?.approved || 0,
+    completedWithdrawals: withdrawals?.completed || 0, totalWithdrawalAmount: (withdrawals?.total_santim || 0) / 100 });
 }
 
 async function reviewWalletRequest(request: Request, env: Env, adminId: number, kind: 'deposits' | 'withdrawals', id: string): Promise<Response> {
@@ -1048,16 +1102,19 @@ async function reviewWalletRequest(request: Request, env: Env, adminId: number, 
   if (!input || typeof input.status !== 'string') return json({ error: 'Choose a valid review action.' }, 400);
   const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 500) : '';
   if ((input.status === 'needs_info' || input.status === 'rejected') && reason.length < 3) return json({ error: 'Add a short note for this request.' }, 400);
+  const mode = await walletMode(env);
+  if (!mode) return json({ error: 'Wallet requests are unavailable until required approvals are recorded.' }, 403);
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
   const table = kind === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
-  const old = await env.DB.prepare(`SELECT status, wallet_kind, user_id FROM ${table} WHERE id = ?`).bind(id).first<{ status: string; wallet_kind: string; user_id: number }>();
+  const old = await env.DB.prepare(`SELECT status, wallet_kind, simulation_only, user_id FROM ${table} WHERE id = ?`).bind(id).first<{ status: string; wallet_kind: string; simulation_only: number; user_id: number }>();
   if (!old) return json({ error: 'Request not found.' }, 404);
-  if (old.wallet_kind !== 'real') return json({ error: 'This is a legacy preview request and cannot move real funds.' }, 409);
+  if (old.wallet_kind !== walletKind || old.simulation_only !== simulationOnly) return json({ error: 'This request belongs to a different wallet mode.' }, 409);
   const transitions = kind === 'deposits'
     ? { pending: ['needs_info', 'approved', 'rejected'], needs_info: ['needs_info', 'approved', 'rejected'] } as Record<string, string[]>
     : { pending: ['reviewing', 'approved', 'rejected'], reviewing: ['approved', 'rejected'], approved: ['paid', 'rejected'] } as Record<string, string[]>;
   if (!transitions[old.status]?.includes(input.status)) return json({ error: 'This request cannot move to that status.' }, 409);
-  if (input.status === 'approved') {
-    if (!(await moneyActivationRecorded(env))) return json({ error: 'Approvals are locked until the approval gate is active.' }, 403);
+  if (input.status === 'approved' && mode === 'real') {
     const eligibility = await moneyEligibilityError(env, old.user_id);
     if (eligibility) return json({ error: eligibility }, 409);
     if (kind === 'deposits') {
@@ -1070,18 +1127,18 @@ async function reviewWalletRequest(request: Request, env: Env, adminId: number, 
   try {
     result = kind === 'deposits'
       ? await env.DB.prepare(`UPDATE deposit_requests SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
-          WHERE id = ? AND wallet_kind = 'real' AND status = ?`)
-        .bind(input.status, reason || null, String(adminId), id, old.status).run()
+          WHERE id = ? AND wallet_kind = ? AND simulation_only = ? AND status = ?`)
+        .bind(input.status, reason || null, String(adminId), id, walletKind, simulationOnly, old.status).run()
       : await env.DB.prepare(`UPDATE withdrawal_requests SET status = ?, review_reason = ?, reviewed_by = ?,
           approved_by = CASE WHEN ? = 'approved' THEN ? ELSE approved_by END,
           paid_at = CASE WHEN ? = 'paid' THEN CURRENT_TIMESTAMP ELSE paid_at END,
           payment_reference = CASE WHEN ? = 'paid' THEN ? ELSE payment_reference END,
           reviewed_at = CURRENT_TIMESTAMP
-          WHERE id = ? AND wallet_kind = 'real' AND status = ?`)
-        .bind(input.status, reason || null, String(adminId), input.status, String(adminId), input.status, input.status, paymentReference || null, id, old.status).run();
+          WHERE id = ? AND wallet_kind = ? AND simulation_only = ? AND status = ?`)
+        .bind(input.status, reason || null, String(adminId), input.status, String(adminId), input.status, input.status, paymentReference || null, id, walletKind, simulationOnly, old.status).run();
   } catch { return json({ error: 'The review could not be saved. No status or balance was changed.' }, 409); }
   if (!result.meta.changes) return json({ error: 'This request has already been reviewed.' }, 409);
-  return json({ ok: true, status: input.status, balanceChanged: (kind === 'deposits' && input.status === 'approved') || (kind === 'withdrawals' && input.status === 'rejected') });
+  return json({ ok: true, status: input.status, simulationOnly: mode === 'simulation', balanceChanged: (kind === 'deposits' && input.status === 'approved') || (kind === 'withdrawals' && input.status === 'rejected') });
 }
 
 async function adminPaymentSettings(env: Env): Promise<Response> {
@@ -1089,7 +1146,7 @@ async function adminPaymentSettings(env: Env): Promise<Response> {
     FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
       provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null; updated_at: string;
     }>();
-  return json({ providers: result.results.map((row) => ({ provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.account_number || '', enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100), updatedAt: row.updated_at })) });
+  return json({ simulationEnabled: env.SIMULATED_WALLET_ENABLED === 'true', providers: result.results.map((row) => ({ provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.account_number || '', enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100), updatedAt: row.updated_at })) });
 }
 
 async function updateAdminPaymentSettings(request: Request, env: Env, adminId: number): Promise<Response> {
@@ -1107,7 +1164,7 @@ async function updateAdminPaymentSettings(request: Request, env: Env, adminId: n
     return { provider, label, number, enabled: row.enabled };
   });
   if (parsed.some((item) => item === null) || new Set(parsed.map((item) => item?.provider)).size !== 2) return json({ error: 'Check both account names, numbers and enabled switches.' }, 400);
-  if (parsed.some((row) => row?.enabled) && !(await moneyActivationRecorded(env))) return json({ error: 'Payment methods cannot be shown until the legal and provider approval gate is active.' }, 403);
+  if (parsed.some((row) => row?.enabled) && !(await moneyActivationRecorded(env)) && env.SIMULATED_WALLET_ENABLED !== 'true') return json({ error: 'Payment methods cannot be shown until the legal and provider approval gate is active.' }, 403);
   const before = await adminPaymentSettings(env);
   const beforeData = await before.json() as { providers: unknown[] };
   const statements = parsed.map((row) => env.DB.prepare(`UPDATE payment_settings SET account_label = ?, account_number = ?, enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE provider = ?`)
@@ -1244,16 +1301,21 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
     if (url.pathname === '/api/admin/activation' && request.method === 'POST') return recordActivationEvidence(request, env, adminId);
     if (url.pathname === '/api/admin/wallet/settings' && request.method === 'GET') return adminPaymentSettings(env);
     if (url.pathname === '/api/admin/wallet/settings' && request.method === 'PUT') return updateAdminPaymentSettings(request, env, adminId);
+    if (url.pathname === '/api/admin/wallet/summary' && request.method === 'GET') return adminWalletSummary(env);
     if (url.pathname === '/api/admin/wallet/deposits' && request.method === 'GET') return adminWalletList(env, adminId, 'deposits');
     if (url.pathname === '/api/admin/wallet/withdrawals' && request.method === 'GET') return adminWalletList(env, adminId, 'withdrawals');
     const detail = url.pathname.match(/^\/api\/admin\/wallet\/(deposits|withdrawals)\/([A-Za-z0-9-]+)$/);
     if (detail && request.method === 'GET') {
-      const table = detail[1] === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
+      const mode = await walletMode(env);
+      if (!mode) return json({ error: 'Wallet requests are unavailable until required approvals are recorded.' }, 403);
+      const walletKind = mode === 'real' ? 'real' : 'demo';
+      const simulationOnly = mode === 'simulation' ? 1 : 0;
       if (detail[1] === 'deposits') {
-        const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext, d.proof_method, d.confirmation_sms_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ? AND d.wallet_kind = 'real'`).bind(detail[2]).first<{
+        const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.wallet_kind, d.simulation_only, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
+          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext, d.proof_method, d.confirmation_sms_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id
+          WHERE d.id = ? AND d.wallet_kind = ? AND d.simulation_only = ?`).bind(detail[2], walletKind, simulationOnly).first<{
             id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-            first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null; proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null;
+            wallet_kind: string; simulation_only: number; first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null; proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null;
           }>();
         if (!row) return json({ error: 'Request not found.' }, 404);
         const { sender_phone_ciphertext: senderPhoneCiphertext, confirmation_sms_ciphertext: confirmationSmsCiphertext, ...safeRow } = row;
@@ -1268,20 +1330,22 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
             receiptData = `data:${blob.content_type};base64,${await decryptContact(encrypted, env.SESSION_SECRET || '')}`;
           }
         } catch { /* Leave the receipt unavailable rather than exposing encrypted bytes. */ }
-        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData, confirmationSms } });
+        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData, confirmationSms, simulationOnly: row.simulation_only === 1 } });
       }
-      const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
-        w.destination_phone_ciphertext, w.account_holder_ciphertext, u.first_name, u.username, u.web_username
-        FROM withdrawal_requests w JOIN users u ON u.id = w.user_id WHERE w.id = ? AND w.wallet_kind = 'real'`).bind(detail[2]).first<{
+      const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.simulation_only, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
+        w.destination_phone_ciphertext, w.account_holder_ciphertext, COALESCE(wallet.balance_santim, 0) AS balance_santim,
+        u.first_name, u.username, u.web_username FROM withdrawal_requests w JOIN users u ON u.id = w.user_id
+        LEFT JOIN wallets wallet ON wallet.user_id = w.user_id AND wallet.wallet_kind = w.wallet_kind
+        WHERE w.id = ? AND w.wallet_kind = ? AND w.simulation_only = ?`).bind(detail[2], walletKind, simulationOnly).first<{
           id: string; user_id: number; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-          destination_phone_ciphertext: string | null; account_holder_ciphertext: string | null; first_name: string; username: string | null; web_username: string | null;
+          simulation_only: number; balance_santim: number; destination_phone_ciphertext: string | null; account_holder_ciphertext: string | null; first_name: string; username: string | null; web_username: string | null;
         }>();
       if (!row) return json({ error: 'Request not found.' }, 404);
       const { destination_phone_ciphertext: destinationPhoneCiphertext, account_holder_ciphertext: accountHolderCiphertext, ...safeRow } = row;
       let destinationPhone = ''; let accountHolderName = '';
       try { if (destinationPhoneCiphertext) destinationPhone = await decryptContact(destinationPhoneCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
       try { if (accountHolderCiphertext) accountHolderName = await decryptContact(accountHolderCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
-      return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, destinationPhone, accountHolderName } });
+      return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, balance: row.balance_santim / 100, destinationPhone, accountHolderName, simulationOnly: row.simulation_only === 1 } });
     }
     const review = url.pathname.match(/^\/api\/admin\/wallet\/(deposits|withdrawals)\/([A-Za-z0-9-]+)$/);
     if (review && request.method === 'PATCH') return reviewWalletRequest(request, env, adminId, review[1] as 'deposits' | 'withdrawals', review[2]);

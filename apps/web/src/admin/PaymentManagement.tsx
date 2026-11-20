@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 type ProviderId = 'telebirr' | 'ebirr';
 type PaymentProvider = { provider: ProviderId; accountLabel: string; accountNumber: string; enabled: boolean; minimumAmount: number; maximumAmount: number };
-type PaymentRequest = { id: string; player: string; provider: ProviderId; amount: number; status: string; created_at: string; review_reason: string | null; provider_reference?: string | null; proof_method?: 'receipt' | 'sms'; confirmationSms?: string; senderPhone?: string; destinationPhone?: string; accountHolderName?: string; has_receipt?: number; has_sms?: number; receiptData?: string };
+type PaymentRequest = { id: string; user_id: number; player: string; provider: ProviderId; amount: number; balance?: number; status: string; created_at: string; review_reason: string | null; simulationOnly?: boolean; provider_reference?: string | null; proof_method?: 'receipt' | 'sms'; confirmationSms?: string; senderPhone?: string; destinationPhone?: string; accountHolderName?: string; has_receipt?: number; has_sms?: number; receiptData?: string };
 type AgeRequest = { userId: number; player: string; verificationReference: string; submittedAt: string };
-type ActivationStatus = { active: boolean; configured: boolean; record: { minimum_age: number; approved_at: string } | null };
+type ActivationStatus = { active: boolean; simulationEnabled?: boolean; configured: boolean; record: { minimum_age: number; approved_at: string } | null };
+type WalletSummary = { pendingDeposits: number; pendingWithdrawals: number; approvedWithdrawals: number; completedWithdrawals: number; totalWithdrawalAmount: number; simulationOnly?: boolean };
 type Props = { token: string | null };
 type ErrorBody = { error?: string };
 
@@ -16,6 +17,14 @@ function stateLabel(status: string): string {
   return status.replaceAll('_', ' ');
 }
 
+function playNotificationTone() {
+  try {
+    const audio = new AudioContext(); const oscillator = audio.createOscillator(); const gain = audio.createGain();
+    oscillator.frequency.value = 880; gain.gain.value = 0.035; oscillator.connect(gain); gain.connect(audio.destination);
+    oscillator.start(); oscillator.stop(audio.currentTime + 0.12); oscillator.onended = () => void audio.close();
+  } catch { /* Browser audio can be unavailable until the admin enables it. */ }
+}
+
 export default function PaymentManagement({ token }: Props) {
   const [section, setSection] = useState<'deposits' | 'withdrawals' | 'age' | 'settings'>('deposits');
   const [deposits, setDeposits] = useState<PaymentRequest[]>([]);
@@ -23,39 +32,50 @@ export default function PaymentManagement({ token }: Props) {
   const [providers, setProviders] = useState<PaymentProvider[]>([]);
   const [ageRequests, setAgeRequests] = useState<AgeRequest[]>([]);
   const [activation, setActivation] = useState<ActivationStatus>({ active: false, configured: false, record: null });
+  const [summary, setSummary] = useState<WalletSummary>({ pendingDeposits: 0, pendingWithdrawals: 0, approvedWithdrawals: 0, completedWithdrawals: 0, totalWithdrawalAmount: 0 });
+  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('dire-wallet-notification-sound') === 'true');
   const [detail, setDetail] = useState<PaymentRequest | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const seenPending = useRef<Set<string> | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!token) { setError('Sign in with the Super Admin Telegram account.'); setLoading(false); return; }
-    setLoading(true); setError('');
+    if (!silent) setLoading(true); setError('');
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [depositResponse, withdrawalResponse, settingsResponse, activationResponse, ageResponse] = await Promise.all([
+      const [depositResponse, withdrawalResponse, settingsResponse, activationResponse, ageResponse, summaryResponse] = await Promise.all([
         fetch('/api/admin/wallet/deposits', { headers }),
         fetch('/api/admin/wallet/withdrawals', { headers }),
         fetch('/api/admin/wallet/settings', { headers }),
         fetch('/api/admin/activation', { headers }),
         fetch('/api/admin/identity/age-requests', { headers }),
+        fetch('/api/admin/wallet/summary', { headers }),
       ]);
-      const [depositData, withdrawalData, settingsData, activationData, ageData] = await Promise.all([
+      const [depositData, withdrawalData, settingsData, activationData, ageData, summaryData] = await Promise.all([
         readJson<{ requests: PaymentRequest[] }>(depositResponse),
         readJson<{ requests: PaymentRequest[] }>(withdrawalResponse),
-        readJson<{ providers: PaymentProvider[] }>(settingsResponse),
+        readJson<{ providers: PaymentProvider[]; simulationEnabled?: boolean }>(settingsResponse),
         readJson<ActivationStatus>(activationResponse),
         readJson<{ requests: AgeRequest[] }>(ageResponse),
+        readJson<WalletSummary>(summaryResponse),
       ]);
-      if (!depositResponse.ok || !withdrawalResponse.ok || !settingsResponse.ok || !activationResponse.ok || !ageResponse.ok) throw new Error(depositData.error || withdrawalData.error || settingsData.error || activationData.error || ageData.error || 'Payment records could not be loaded.');
+      if (!depositResponse.ok || !withdrawalResponse.ok || !settingsResponse.ok || !activationResponse.ok || !ageResponse.ok || !summaryResponse.ok) throw new Error(depositData.error || withdrawalData.error || settingsData.error || activationData.error || ageData.error || summaryData.error || 'Payment records could not be loaded.');
       setDeposits(depositData.requests || []); setWithdrawals(withdrawalData.requests || []); setProviders(settingsData.providers || []);
-      setActivation(activationData); setAgeRequests(ageData.requests || []);
+      const nextPending = new Set([...(depositData.requests || []).filter((row) => ['pending', 'needs_info'].includes(row.status)).map((row) => `deposit:${row.id}`), ...(withdrawalData.requests || []).filter((row) => ['pending', 'reviewing'].includes(row.status)).map((row) => `withdrawal:${row.id}`)]);
+      if (seenPending.current && [...nextPending].some((id) => !seenPending.current!.has(id))) {
+        setNotice('New wallet request received.'); if (soundEnabled) playNotificationTone();
+      }
+      seenPending.current = nextPending;
+      setActivation({ ...activationData, simulationEnabled: settingsData.simulationEnabled ?? activationData.simulationEnabled }); setAgeRequests(ageData.requests || []); setSummary(summaryData);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Payment records could not be loaded.'); }
-    finally { setLoading(false); }
-  }, [token]);
+    finally { if (!silent) setLoading(false); }
+  }, [token, soundEnabled]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { const timer = window.setInterval(() => void load(true), 15000); return () => window.clearInterval(timer); }, [load]);
 
   const openDetail = async (row: PaymentRequest, kind: 'deposits' | 'withdrawals') => {
     if (!token) return;
@@ -70,7 +90,7 @@ export default function PaymentManagement({ token }: Props) {
 
   const review = async (kind: 'deposits' | 'withdrawals', row: PaymentRequest, status: string) => {
     if (!token) return;
-    const paymentReference = status === 'paid' ? window.prompt('Telebirr/eBirr payout transfer reference')?.trim() || '' : '';
+    const paymentReference = status === 'paid' ? window.prompt(row.simulationOnly ? 'Simulation completion reference (no transfer will be sent)' : 'Telebirr/eBirr payout transfer reference')?.trim() || '' : '';
     if (status === 'paid' && paymentReference.length < 3) return;
     const reason = status === 'rejected' || status === 'needs_info'
       ? window.prompt(status === 'rejected' ? 'Reason for rejection' : 'What information is needed?')?.trim() || ''
@@ -82,9 +102,11 @@ export default function PaymentManagement({ token }: Props) {
         method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ status, reason, paymentReference }),
       });
-      const result = await readJson<{ ok?: boolean; balanceChanged?: boolean }>(response);
+      const result = await readJson<{ ok?: boolean; balanceChanged?: boolean; simulationOnly?: boolean }>(response);
       if (!response.ok) throw new Error(result.error || 'The request could not be reviewed.');
-      setNotice(kind === 'deposits' && status === 'approved' ? 'Deposit verified and approved; the Birr wallet was credited.' : kind === 'withdrawals' && status === 'rejected' ? 'Withdrawal rejected; the reserved Birr was returned to the wallet.' : kind === 'withdrawals' && status === 'paid' ? 'Withdrawal marked complete with its transfer reference.' : kind === 'withdrawals' && status === 'approved' ? 'Withdrawal approved. Send the transfer, then mark it complete with its reference.' : `${kind === 'deposits' ? 'Deposit' : 'Withdrawal'} marked ${stateLabel(status)}.`);
+      setNotice(result.simulationOnly
+        ? kind === 'deposits' && status === 'approved' ? 'Simulated deposit approved; the separate test balance was credited.' : kind === 'withdrawals' && status === 'rejected' ? 'Simulated withdrawal rejected; the test balance was restored.' : kind === 'withdrawals' && status === 'paid' ? 'Simulated completion recorded. No transfer was sent.' : kind === 'withdrawals' && status === 'approved' ? 'Simulated payout approved. No transfer was sent; use the completion action to test the final step.' : `${kind === 'deposits' ? 'Simulated deposit' : 'Simulated withdrawal'} marked ${stateLabel(status)}.`
+        : kind === 'deposits' && status === 'approved' ? 'Deposit verified and approved; the Birr wallet was credited.' : kind === 'withdrawals' && status === 'rejected' ? 'Withdrawal rejected; the reserved Birr was returned to the wallet.' : kind === 'withdrawals' && status === 'paid' ? 'Withdrawal marked complete with its transfer reference.' : kind === 'withdrawals' && status === 'approved' ? 'Withdrawal approved. Send the transfer, then mark it complete with its reference.' : `${kind === 'deposits' ? 'Deposit' : 'Withdrawal'} marked ${stateLabel(status)}.`);
       setDetail(null); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'The request could not be reviewed.'); }
     finally { setBusy(false); }
@@ -101,7 +123,7 @@ export default function PaymentManagement({ token }: Props) {
       });
       const result = await readJson<{ providers: PaymentProvider[] }>(response);
       if (!response.ok || !result.providers) throw new Error(result.error || 'Payment settings could not be saved.');
-      setProviders(result.providers); setNotice('Payment accounts saved. They remain hidden until the approval gate is active.');
+      setProviders(result.providers); setNotice(activation.active ? 'Payment accounts saved.' : 'Payment accounts saved for the simulation. No payment will be processed until the authorization gate is active.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Payment settings could not be saved.'); }
     finally { setBusy(false); }
   };
@@ -147,7 +169,8 @@ export default function PaymentManagement({ token }: Props) {
   };
 
   const rows = section === 'deposits' ? deposits : withdrawals;
-  const counts = { deposits: deposits.filter((item) => ['pending', 'needs_info'].includes(item.status)).length, withdrawals: withdrawals.filter((item) => ['pending', 'reviewing', 'approved'].includes(item.status)).length };
+  const counts = { deposits: deposits.filter((item) => ['pending', 'needs_info'].includes(item.status)).length, withdrawals: withdrawals.filter((item) => ['pending', 'reviewing'].includes(item.status)).length };
+  const toggleSound = () => setSoundEnabled((enabled) => { localStorage.setItem('dire-wallet-notification-sound', String(!enabled)); return !enabled; });
 
   return <section className="payment-management">
     <div className="payment-tab-row" role="tablist" aria-label="Payment administration">
@@ -155,7 +178,9 @@ export default function PaymentManagement({ token }: Props) {
         {item === 'deposits' ? 'Deposit requests' : item === 'withdrawals' ? 'Withdrawal requests' : item === 'age' ? 'Age review' : 'Payment settings'}{item === 'deposits' && counts.deposits > 0 && <b>{counts.deposits}</b>}{item === 'withdrawals' && counts.withdrawals > 0 && <b>{counts.withdrawals}</b>}{item === 'age' && ageRequests.length > 0 && <b>{ageRequests.length}</b>}
       </button>)}
     </div>
-    <div className="payment-safety-note"><strong>{activation.active ? 'Wallet gate active' : 'Wallet gate locked'}</strong><span>{activation.active ? 'Verified deposits credit the Birr wallet. Approved withdrawals are sent manually and then marked complete.' : 'Deposits, withdrawals and paid rooms remain unavailable until required legal and provider approvals are recorded and production settings are enabled.'}</span></div>
+    <div className="payment-safety-note"><strong>{activation.active ? 'Live wallet active' : activation.simulationEnabled ? 'Simulation workflow active' : 'Wallet gate locked'}</strong><span>{activation.active ? 'Verified deposits credit the Birr wallet. Approved withdrawals are sent manually and then marked complete.' : activation.simulationEnabled ? 'Test requests use a separate simulated wallet ledger. Approvals and payout actions move no real money; live crediting and withdrawals remain authorization-gated.' : 'Deposits, withdrawals and paid rooms remain unavailable until required legal and provider approvals are recorded and production settings are enabled.'}</span></div>
+    {section !== 'settings' && section !== 'age' && <div className="payment-summary-grid" aria-label="Wallet request totals"><article><span>Pending Deposits</span><strong>{summary.pendingDeposits}</strong></article><article><span>Pending Withdrawals</span><strong>{summary.pendingWithdrawals}</strong></article><article><span>Approved Withdrawals</span><strong>{summary.approvedWithdrawals}</strong></article><article><span>Completed Withdrawals</span><strong>{summary.completedWithdrawals}</strong></article><article><span>Total Withdrawal Amount</span><strong>{summary.totalWithdrawalAmount.toLocaleString()} Birr</strong></article></div>}
+    {section !== 'settings' && <div className="payment-notification-control"><span>New requests refresh automatically every 15 seconds.</span><button type="button" className="staff-link-button" aria-pressed={soundEnabled} onClick={toggleSound}>Sound {soundEnabled ? 'on' : 'off'}</button></div>}
     {error && <p className="room-admin-error" role="alert">{error}</p>}{notice && <p className="room-admin-notice" role="status">{notice}</p>}
     {loading ? <div className="room-admin-state">Loading payment records…</div> : section === 'settings' ? <>
       <form className="payment-settings-grid" onSubmit={(event) => void saveSettings(event)}>
@@ -165,13 +190,13 @@ export default function PaymentManagement({ token }: Props) {
         return <fieldset key={id} className="payment-provider-setting"><legend>{id === 'telebirr' ? 'Telebirr' : 'eBirr'}</legend>
           <label>Receiving account label<input maxLength={100} value={item.accountLabel} onChange={(event) => setProviders((list) => list.map((entry) => entry.provider === id ? { ...entry, accountLabel: event.target.value } : entry))} placeholder="Leave blank until confirmed"/></label>
           <label>Receiving phone number<input type="tel" inputMode="tel" value={item.accountNumber} onChange={(event) => setProviders((list) => list.map((entry) => entry.provider === id ? { ...entry, accountNumber: event.target.value } : entry))}/></label>
-          <label className="payment-enabled-toggle"><input type="checkbox" checked={item.enabled} disabled={!activation.active} onChange={(event) => setProviders((list) => list.map((entry) => entry.provider === id ? { ...entry, enabled: event.target.checked } : entry))}/> Make this method available to users</label>
+          <label className="payment-enabled-toggle"><input type="checkbox" checked={item.enabled} disabled={!activation.active && !activation.simulationEnabled} onChange={(event) => setProviders((list) => list.map((entry) => entry.provider === id ? { ...entry, enabled: event.target.checked } : entry))}/> Make this method available to users</label>
           <small>Minimum request: {item.minimumAmount} Birr · Maximum request: {item.maximumAmount} Birr</small>
         </fieldset>;
       })}
       <button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save payment settings'}</button>
       </form>
-      <div className="payment-safety-note"><strong>Production status</strong><span>{activation.configured ? 'Production settings are configured.' : 'Runtime flags still keep real money disabled.'} {activation.record ? `Recorded minimum age: ${activation.record.minimum_age}+.` : 'No approval evidence record is on file.'}</span></div>
+      <div className="payment-safety-note"><strong>{activation.active ? 'Production status' : 'Simulation settings'}</strong><span>{activation.active ? 'Live payment settings are active.' : activation.simulationEnabled ? 'You can configure display details for simulation; users are warned not to send funds and the test ledger never moves real money.' : 'Runtime flags still keep real money disabled.'} {activation.configured ? 'Production flags are configured.' : 'Live money remains disabled.'} {activation.record ? `Recorded minimum age: ${activation.record.minimum_age}+.` : 'No approval evidence record is on file.'}</span></div>
       <form className="payment-settings-grid" onSubmit={(event) => void saveActivationEvidence(event)}><fieldset className="payment-provider-setting"><legend>Required approval evidence</legend>
         <label>Legal counsel approval reference<input name="counselApproval" required minLength={3}/></label>
         <label>License review reference<input name="licenseReview" required minLength={3}/></label>
@@ -192,20 +217,21 @@ export default function PaymentManagement({ token }: Props) {
     </> : <>
       <div className="payment-list-heading"><div><span className="staff-label">{section === 'deposits' ? 'DEPOSIT REQUESTS' : 'WITHDRAWAL REQUESTS'}</span><p>{rows.length} requests · newest first</p></div><button className="staff-link-button" onClick={() => void load()}>Refresh</button></div>
       {rows.length === 0 ? <div className="room-admin-state">No {section === 'deposits' ? 'deposit' : 'withdrawal'} requests yet.</div> : <div className="payment-request-list">{rows.map((row) => <article key={row.id} className="payment-request-card">
-        <div className="payment-request-main"><div><small>{row.id} · {row.created_at}</small><h3>{row.amount.toLocaleString()} Birr</h3><span>{row.player} · {row.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</span></div><span className={`room-admin-status ${row.status}`}>{stateLabel(row.status)}</span></div>
-        <div className="payment-request-meta"><span>{section === 'deposits' ? 'Sender' : 'Destination'}: {section === 'deposits' ? row.senderPhone || 'Open details' : row.destinationPhone || 'Open details'}</span>{row.provider_reference && <span>Reference: {row.provider_reference}</span>}</div>
+        <div className="payment-request-main"><div><small>{row.id} · {row.created_at}</small><h3>{row.amount.toLocaleString()} Birr</h3><span>{row.player} · User ID {row.user_id} · {row.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</span></div><span className={`room-admin-status ${row.status}`}>{stateLabel(row.status)}{row.simulationOnly ? ' · Simulation' : ''}</span></div>
+        <div className="payment-request-meta"><span>{section === 'deposits' ? 'Sender' : 'Recipient'}: {section === 'deposits' ? row.senderPhone || 'Open details' : row.destinationPhone || 'Open details'}</span>{section === 'withdrawals' && <span>Current balance: {(row.balance || 0).toLocaleString()} Birr</span>}{row.provider_reference && <span>Reference: {row.provider_reference}</span>}</div>
         <button className="room-admin-view" onClick={() => void openDetail(row, section)}>View request</button>
       </article>)}</div>}
     </>}
     {detail && <div className="room-detail-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(null); }}><aside className="room-detail-panel payment-detail-panel" role="dialog" aria-modal="true" aria-label="Payment request details">
       <header><div><span className="staff-label">REQUEST DETAILS</span><h3>{detail.id}</h3></div><button className="staff-link-button" onClick={() => setDetail(null)}>Close</button></header>
-      <dl className="payment-detail-grid"><div><dt>Player</dt><dd>{detail.player}</dd></div><div><dt>Method</dt><dd>{detail.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</dd></div><div><dt>Amount</dt><dd>{detail.amount} Birr</dd></div><div><dt>Status</dt><dd>{stateLabel(detail.status)}</dd></div><div><dt>{detail.senderPhone !== undefined ? 'Sender phone' : 'Destination phone'}</dt><dd>{detail.senderPhone ?? detail.destinationPhone ?? 'Not available'}</dd></div>{detail.accountHolderName && <div><dt>Account holder</dt><dd>{detail.accountHolderName}</dd></div>}{detail.provider_reference && <div><dt>Transaction reference</dt><dd>{detail.provider_reference}</dd></div>}<div><dt>Submitted</dt><dd>{detail.created_at}</dd></div></dl>
+      <dl className="payment-detail-grid"><div><dt>Player</dt><dd>{detail.player}</dd></div><div><dt>User ID</dt><dd>{detail.user_id}</dd></div><div><dt>Method</dt><dd>{detail.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</dd></div><div><dt>Amount</dt><dd>{detail.amount} Birr</dd></div>{detail.balance !== undefined && <div><dt>Current wallet balance</dt><dd>{detail.balance} Birr</dd></div>}<div><dt>Status</dt><dd>{stateLabel(detail.status)}{detail.simulationOnly ? ' · Simulation' : ''}</dd></div><div><dt>{detail.senderPhone !== undefined ? 'Sender phone' : 'Recipient account'}</dt><dd>{detail.senderPhone ?? detail.destinationPhone ?? 'Not available'}</dd></div>{detail.accountHolderName && <div><dt>Account holder</dt><dd>{detail.accountHolderName}</dd></div>}{detail.provider_reference && <div><dt>Transaction reference</dt><dd>{detail.provider_reference}</dd></div>}<div><dt>Submitted</dt><dd>{detail.created_at}</dd></div></dl>
+      {detail.simulationOnly && <p className="wallet-simulation-note"><strong>Simulation only</strong><span>This request and its wallet effects are test data. No money is sent or received.</span></p>}
       {detail.receiptData && <figure className="payment-receipt"><img src={detail.receiptData} alt="Uploaded payment receipt"/><figcaption>Payment receipt for manual verification</figcaption></figure>}
       {detail.confirmationSms && <p className="payment-safety-note"><strong>Payment confirmation SMS</strong><span>{detail.confirmationSms}</span></p>}
       {detail.review_reason && <p className="payment-safety-note"><strong>Review note</strong><span>{detail.review_reason}</span></p>}
-      {section === 'withdrawals' && detail.status === 'approved' ? <div className="payment-review-actions"><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'paid')}>Mark payout complete</button></div> : detail.status === 'pending' || detail.status === 'needs_info' || detail.status === 'reviewing' ? <div className="payment-review-actions">
-        {section === 'deposits' ? <><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'needs_info')}>Request more info</button><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'rejected')}>Reject</button><button className="primary-button" disabled={busy || (detail.proof_method === 'sms' ? !detail.confirmationSms : !detail.receiptData) || !detail.provider_reference} onClick={() => void review('deposits', detail, 'approved')}>Verify &amp; approve</button></> : <><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'reviewing')}>Mark reviewing</button><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'rejected')}>Reject and return funds</button><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'approved')}>Approve payout</button></>}
-      </div> : <p className="payment-safety-note"><strong>{detail.status === 'paid' ? 'Completed' : 'Already reviewed'}</strong><span>{detail.status === 'paid' ? 'The administrator recorded the manual payout transfer reference.' : detail.status === 'approved' && section === 'withdrawals' ? 'The payout is approved and awaiting the manual transfer.' : detail.status === 'approved' ? 'The payment was verified and the wallet credited.' : 'Review actions are locked after this final decision.'}</span></p>}
+      {section === 'withdrawals' && detail.status === 'approved' ? <div className="payment-review-actions"><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'paid')}>{detail.simulationOnly ? 'Mark simulation complete' : 'Mark payout complete'}</button></div> : detail.status === 'pending' || detail.status === 'needs_info' || detail.status === 'reviewing' ? <div className="payment-review-actions">
+        {section === 'deposits' ? <><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'needs_info')}>Request more info</button><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'rejected')}>Reject</button><button className="primary-button" disabled={busy || (detail.proof_method === 'sms' ? !detail.confirmationSms : !detail.receiptData) || !detail.provider_reference} onClick={() => void review('deposits', detail, 'approved')}>{detail.simulationOnly ? 'Approve simulation' : 'Verify & approve'}</button></> : <><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'reviewing')}>Mark reviewing</button><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'rejected')}>{detail.simulationOnly ? 'Reject and restore test balance' : 'Reject and return funds'}</button><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'approved')}>{detail.simulationOnly ? 'Approve simulated payout' : 'Approve payout'}</button></>}
+      </div> : <p className="payment-safety-note"><strong>{detail.status === 'paid' ? detail.simulationOnly ? 'Simulation complete' : 'Completed' : 'Already reviewed'}</strong><span>{detail.simulationOnly ? 'All recorded balance changes are confined to the test wallet; no real funds moved.' : detail.status === 'paid' ? 'The administrator recorded the manual payout transfer reference.' : detail.status === 'approved' && section === 'withdrawals' ? 'The payout is approved and awaiting the manual transfer.' : detail.status === 'approved' ? 'The payment was verified and the wallet credited.' : 'Review actions are locked after this final decision.'}</span></p>}
     </aside></div>}
   </section>;
 }
