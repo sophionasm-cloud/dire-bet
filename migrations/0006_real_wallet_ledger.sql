@@ -1,5 +1,6 @@
 UPDATE payment_settings
-SET account_label = NULL, account_number = NULL, enabled = 0;
+SET account_label = NULL, account_number = NULL, enabled = 0
+WHERE account_number = '0956870660' AND COALESCE(account_label, '') = '' AND updated_by IS NULL;
 
 ALTER TABLE withdrawal_requests ADD COLUMN payment_reference TEXT;
 CREATE UNIQUE INDEX withdrawal_payment_reference_once ON withdrawal_requests(provider, payment_reference) WHERE payment_reference IS NOT NULL;

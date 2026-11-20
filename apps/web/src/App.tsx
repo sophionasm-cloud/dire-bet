@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
 import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
-import { languageFromTelegram, languageNames, translate, type Language, type TranslationKey } from './i18n';
+import { languageNames, translate, type Language, type TranslationKey } from './i18n';
 import { xoRules } from './i18n/rules';
 import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
@@ -62,7 +62,7 @@ function App() {
   const telegramMiniApp = Boolean(telegramInitData);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = localStorage.getItem('direbet.language') as Language | null;
-    return saved && ['en','am','so','om'].includes(saved) ? saved : languageFromTelegram(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code);
+    return saved && ['en','am','so','om'].includes(saved) ? saved : 'am';
   });
   const [page, setPage] = useState<Page>(() => !telegramMiniApp && (requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu') ? requestedPage : 'home');
   const [overlay, setOverlay] = useState<Overlay>(null);
@@ -344,7 +344,6 @@ function App() {
       </section>
 
       <section className="leader-preview"><div className="leader-icon">♛</div><div><strong>{t('rankTitle')}</strong><span>{t('rankEmpty')}</span></div><button className="icon-button" aria-label={t('rank')} onClick={() => nav('rank')}><Icon name="chevron"/></button></section>
-      <div className="age-note"><span>i</span>{t('ageReview')}</div>
     </section>}
 
     {page === 'xo' && <section className="screen game-screen">
@@ -366,7 +365,7 @@ function App() {
     {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
-    {page === 'wallet' && <WalletApp t={t} token={sessionToken} onSupport={() => setOverlay('support')} />}
+    {page === 'wallet' && <WalletApp t={t} token={sessionToken} ageReviewPending={account?.ageReviewPending ?? false} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}
     {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
     {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}

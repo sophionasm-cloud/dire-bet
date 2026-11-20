@@ -148,7 +148,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
 
   const join = async (room: MarketplaceRoom) => {
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
-    const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ETB`;
+    const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('etb')}`;
     if (!window.confirm(t('marketJoinConfirm').replace('{game}', gameTitle(room.gameId)).replace('{amount}', entryLabel))) return;
     setBusy(true); setMessage('');
     try {
@@ -179,7 +179,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   return <section className="screen public-lobby-screen">
     <header className="public-lobby-header"><button className="back-button" onClick={onExit}>← {t('home')}</button><div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
     <p className="public-lobby-intro">{t('marketLobbyIntro')}</p>
-    {token && balance !== null && <div className="demo-credit-balance"><span>{t('marketDemoBalance')}</span><strong>{formatCredits(balance)} ETB</strong><small>{t('marketCreditOnly')}</small></div>}
+    {token && balance !== null && <div className="demo-credit-balance"><span>{t('marketDemoBalance')}</span><strong>{formatCredits(balance)} {t('etb')}</strong><small>{t('marketCreditOnly')}</small></div>}
     {!token && <div className="market-signin-hint" role="status">{t('marketTelegramRequired')}</div>}
     {!activeRoom ? <>
       <div className="market-room-browser">

@@ -495,8 +495,11 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
       ON CONFLICT(telegram_id) DO UPDATE SET username = COALESCE(excluded.username, users.username), first_name = excluded.first_name, updated_at = CURRENT_TIMESTAMP
       RETURNING id`).bind(telegramId, username, firstName, language).first<{ id: number }>();
     if (user && user.id !== agent.user_id) {
-      await env.DB.prepare(`INSERT OR IGNORE INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), user.id, agent.id, agentCode).run();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT OR IGNORE INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
+          .bind(crypto.randomUUID(), user.id, agent.id, agentCode),
+        ...agentSignupBonusStatements(env, user.id),
+      ]);
     }
   }
   const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
@@ -540,7 +543,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
-    text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} This link uses promo code ${agentCode} for referral tracking only.` : responses[command] || 'Use /play to open free games, or /help for help.',
+      text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} Promo code ${agentCode} includes a one-time 10 Birr welcome bonus after your age check is approved.` : responses[command] || 'Use /play to open free games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
   if (command === '/start') {
@@ -759,7 +762,13 @@ async function decryptContact(value: string, secret: string): Promise<string> {
   return new TextDecoder().decode(clear);
 }
 
-async function receiptCanBeReviewed(env: Env, requestId: string): Promise<boolean> {
+async function depositProofCanBeReviewed(env: Env, requestId: string): Promise<boolean> {
+  const request = await env.DB.prepare('SELECT proof_method, confirmation_sms_ciphertext FROM deposit_requests WHERE id = ?').bind(requestId).first<{ proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null }>();
+  if (!request) return false;
+  if (request.proof_method === 'sms') {
+    try { return Boolean(request.confirmation_sms_ciphertext && (await decryptContact(request.confirmation_sms_ciphertext, env.SESSION_SECRET || '')).trim().length >= 8); }
+    catch { return false; }
+  }
   const receipt = await env.DB.prepare('SELECT content_type, encrypted_blob FROM receipt_blobs WHERE deposit_request_id = ?').bind(requestId).first<{ content_type: 'image/png' | 'image/jpeg'; encrypted_blob: ArrayBuffer | Uint8Array }>();
   if (!receipt) return false;
   try {
@@ -887,14 +896,16 @@ async function reviewAgeRequest(request: Request, env: Env, adminId: number, use
   try {
     if (!reference?.age_review_reference || (await decryptContact(reference.age_review_reference, env.SESSION_SECRET || '')).trim().length < 3) throw new Error();
   } catch { return json({ error: 'The age-check reference is unavailable for review.' }, 409); }
-  await env.DB.batch([
+  const statements = [
     env.DB.prepare(`UPDATE user_profiles SET age_eligibility = ?, updated_at = CURRENT_TIMESTAMP
       WHERE user_id = ? AND age_eligibility = 'unverified'`).bind(input.status, userId),
     env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, before_json, after_json)
       SELECT ?, 'admin', ?, ?, 'user_profile', ?, json_object('ageEligibility', 'unverified'), json_object('ageEligibility', ?, 'verifiedAge', ?, 'reason', ?)
       WHERE changes() = 1`)
       .bind(crypto.randomUUID(), String(adminId), input.status === 'verified' ? 'AGE_VERIFIED' : 'AGE_BLOCKED', String(userId), input.status, input.verifiedAge || null, reason || null),
-  ]);
+  ];
+  if (input.status === 'verified') statements.push(...agentSignupBonusStatements(env, userId));
+  await env.DB.batch(statements);
   return json({ ok: true, status: input.status });
 }
 
@@ -919,13 +930,17 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
   if (eligibility) return json({ error: eligibility }, 403);
   if (request.headers.get('content-length') && Number(request.headers.get('content-length')) > 3_200_000) return json({ error: 'Receipt must be 2 MB or smaller.' }, 413);
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'deposit-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
-  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
+  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; proofMethod?: unknown; confirmationSms?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
   const amount = validRequestAmount(input?.amount);
   const senderPhone = validPaymentPhone(input?.senderPhone);
   const reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
+  const proofMethod = input?.proofMethod;
+  const confirmationSms = typeof input?.confirmationSms === 'string' ? input.confirmationSms.trim() : '';
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
-  if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
+  if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !['receipt', 'sms'].includes(String(proofMethod)) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
+  if (confirmationSms.length > 1000) return json({ error: 'The confirmation SMS must be 1,000 characters or fewer.' }, 400);
+  if (proofMethod === 'receipt' ? confirmationSms.length > 0 : confirmationSms.length < 8) return json({ error: 'Choose exactly one proof option: a receipt photo or the payment confirmation SMS.' }, 400);
   const settings = await env.DB.prepare('SELECT account_number, enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
   if (!settings || settings.enabled !== 1 || !settings.account_number) return json({ error: 'That payment method is not available.' }, 409);
   if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
@@ -944,15 +959,16 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
     receiptType = png ? 'image/png' : 'image/jpeg';
     receiptBase64 = match[2];
   }
-  if (!receiptBase64 || !receiptType) return json({ error: 'Upload the payment confirmation screenshot before submitting.' }, 400);
+  if (proofMethod === 'receipt' ? !receiptBase64 || !receiptType : Boolean(receiptBase64 || receiptType)) return json({ error: 'Choose exactly one proof option: a receipt photo or the payment confirmation SMS.' }, 400);
   const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
   if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
   const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
+  const smsCiphertext = proofMethod === 'sms' ? await encryptContact(confirmationSms, env.SESSION_SECRET || '') : null;
   const statements = [env.DB.prepare(`INSERT INTO deposit_requests
-    (id, user_id, wallet_kind, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext)
-    VALUES (?, ?, 'real', ?, ?, ?, 'pending', ?, ?)`)
-    .bind(id, userId, provider, amount * 100, reference, idempotencyKey, senderCiphertext)];
+    (id, user_id, wallet_kind, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext)
+    VALUES (?, ?, 'real', ?, ?, ?, 'pending', ?, ?, ?, ?)`)
+    .bind(id, userId, provider, amount * 100, reference, idempotencyKey, senderCiphertext, proofMethod, smsCiphertext)];
   if (receiptBase64 && receiptType) {
     const encryptedReceipt = await encryptContact(receiptBase64, env.SESSION_SECRET || '');
     statements.push(env.DB.prepare(`INSERT INTO receipt_blobs (id, deposit_request_id, content_type, encrypted_blob, retention_until)
@@ -997,10 +1013,11 @@ async function createRealWithdrawal(request: Request, env: Env, userId: number):
 async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'withdrawals'): Promise<Response> {
   if (kind === 'deposits') {
     const rows = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-      u.first_name, u.username, u.web_username, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt
+      u.first_name, u.username, u.web_username, d.proof_method, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt,
+      CASE WHEN d.confirmation_sms_ciphertext IS NOT NULL THEN 1 ELSE 0 END AS has_sms
       FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.wallet_kind = 'real' ORDER BY d.created_at DESC LIMIT 100`).all<{
         id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-        first_name: string; username: string | null; web_username: string | null; has_receipt: number;
+        first_name: string; username: string | null; web_username: string | null; proof_method: 'receipt' | 'sms'; has_receipt: number; has_sms: number;
       }>();
     const details = await Promise.all(rows.results.map(async (row) => {
       const phone = await env.DB.prepare('SELECT sender_phone_ciphertext FROM deposit_requests WHERE id = ?').bind(row.id).first<{ sender_phone_ciphertext: string | null }>();
@@ -1044,7 +1061,7 @@ async function reviewWalletRequest(request: Request, env: Env, adminId: number, 
     const eligibility = await moneyEligibilityError(env, old.user_id);
     if (eligibility) return json({ error: eligibility }, 409);
     if (kind === 'deposits') {
-      if (!(await receiptCanBeReviewed(env, id))) return json({ error: 'A readable payment screenshot is required before approving this deposit.' }, 409);
+      if (!(await depositProofCanBeReviewed(env, id))) return json({ error: 'A readable receipt photo or payment SMS is required before approving this deposit.' }, 409);
     }
   }
   const paymentReference = typeof input.paymentReference === 'string' ? input.paymentReference.trim().slice(0, 100) : '';
@@ -1138,6 +1155,25 @@ async function changeAdminAgent(request: Request, env: Env, adminId: number, age
   return json({ ok: true, status: input.status });
 }
 
+function agentSignupBonusStatements(env: Env, userId: number) {
+  return [
+    env.DB.prepare(`INSERT OR IGNORE INTO wallets (id, user_id, wallet_kind, balance_santim)
+      SELECT 'real-' || ?, ?, 'real', 0
+      WHERE EXISTS (SELECT 1 FROM referrals WHERE referred_user_id = ? AND agent_id IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM user_profiles WHERE user_id = ? AND age_eligibility = 'verified')`)
+      .bind(userId, userId, userId, userId),
+    env.DB.prepare(`INSERT OR IGNORE INTO wallet_transactions
+      (id, wallet_id, wallet_kind, category, amount_santim, balance_after_santim, idempotency_key, actor_type, reference)
+      SELECT lower(hex(randomblob(16))), w.id, 'real', 'promo_credit', 1000, w.balance_santim + 1000,
+        'agent-signup-bonus:' || r.referred_user_id, 'system', r.source_code
+      FROM referrals r JOIN user_profiles p ON p.user_id = r.referred_user_id
+        JOIN wallets w ON w.user_id = r.referred_user_id AND w.wallet_kind = 'real'
+      WHERE r.referred_user_id = ? AND r.agent_id IS NOT NULL AND p.age_eligibility = 'verified'
+        AND NOT EXISTS (SELECT 1 FROM wallet_transactions WHERE idempotency_key = 'agent-signup-bonus:' || r.referred_user_id)`)
+      .bind(userId),
+  ];
+}
+
 async function claimAgentReferral(request: Request, env: Env, userId: number): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
   const input = await request.json().catch(() => null) as { code?: unknown } | null;
@@ -1147,12 +1183,21 @@ async function claimAgentReferral(request: Request, env: Env, userId: number): P
   if (!agent) return json({ error: 'That promo code is unavailable.' }, 404);
   if (agent.user_id === userId) return json({ error: 'You cannot use your own promo code.' }, 409);
   const existing = await env.DB.prepare('SELECT source_code FROM referrals WHERE referred_user_id = ?').bind(userId).first<{ source_code: string }>();
-  if (existing) return existing.source_code.toUpperCase() === code ? json({ ok: true, alreadyApplied: true }) : json({ error: 'A promo code is already linked to this account.' }, 409);
+  if (existing && existing.source_code.toUpperCase() !== code) return json({ error: 'A promo code is already linked to this account.' }, 409);
   try {
-    await env.DB.prepare(`INSERT INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
-      .bind(crypto.randomUUID(), userId, agent.id, code).run();
+    await env.DB.batch([
+      ...(existing ? [] : [env.DB.prepare(`INSERT INTO referrals (id, referred_user_id, agent_id, source_code) VALUES (?, ?, ?, ?)`)
+        .bind(crypto.randomUUID(), userId, agent.id, code)]),
+      ...agentSignupBonusStatements(env, userId),
+    ]);
   } catch { return json({ error: 'That promo code could not be applied.' }, 409); }
-  return json({ ok: true });
+  const bonus = await env.DB.prepare(`SELECT p.age_eligibility,
+      EXISTS(SELECT 1 FROM wallet_transactions WHERE idempotency_key = 'agent-signup-bonus:' || r.referred_user_id) AS credited
+    FROM referrals r LEFT JOIN user_profiles p ON p.user_id = r.referred_user_id WHERE r.referred_user_id = ?`).bind(userId)
+    .first<{ age_eligibility: string | null; credited: number }>();
+  return json({ ok: true, alreadyApplied: Boolean(existing), bonusBirr: 10,
+    bonusStatus: bonus?.credited ? 'credited' : bonus?.age_eligibility === 'blocked' ? 'withheld' : 'pending_age',
+    walletEnabled: await moneyActivationRecorded(env) });
 }
 
 async function agentDashboard(env: Env, userId: number): Promise<Response> {
@@ -1206,15 +1251,16 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
       const table = detail[1] === 'deposits' ? 'deposit_requests' : 'withdrawal_requests';
       if (detail[1] === 'deposits') {
         const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ? AND d.wallet_kind = 'real'`).bind(detail[2]).first<{
+          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext, d.proof_method, d.confirmation_sms_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.id = ? AND d.wallet_kind = 'real'`).bind(detail[2]).first<{
             id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-            first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null;
+            first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null; proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null;
           }>();
         if (!row) return json({ error: 'Request not found.' }, 404);
-        const { sender_phone_ciphertext: senderPhoneCiphertext, ...safeRow } = row;
+        const { sender_phone_ciphertext: senderPhoneCiphertext, confirmation_sms_ciphertext: confirmationSmsCiphertext, ...safeRow } = row;
         const blob = await env.DB.prepare('SELECT content_type, encrypted_blob FROM receipt_blobs WHERE deposit_request_id = ?').bind(row.id).first<{ content_type: 'image/png' | 'image/jpeg'; encrypted_blob: ArrayBuffer }>();
-        let senderPhone = ''; let receiptData = '';
+        let senderPhone = ''; let receiptData = ''; let confirmationSms = '';
         try { if (senderPhoneCiphertext) senderPhone = await decryptContact(senderPhoneCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
+        try { if (confirmationSmsCiphertext) confirmationSms = await decryptContact(confirmationSmsCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
         try {
           if (blob) {
             const bytes = blob.encrypted_blob instanceof Uint8Array ? blob.encrypted_blob : new Uint8Array(blob.encrypted_blob);
@@ -1222,7 +1268,7 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
             receiptData = `data:${blob.content_type};base64,${await decryptContact(encrypted, env.SESSION_SECRET || '')}`;
           }
         } catch { /* Leave the receipt unavailable rather than exposing encrypted bytes. */ }
-        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData } });
+        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData, confirmationSms } });
       }
       const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
         w.destination_phone_ciphertext, w.account_holder_ciphertext, u.first_name, u.username, u.web_username

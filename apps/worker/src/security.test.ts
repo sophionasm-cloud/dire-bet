@@ -135,6 +135,72 @@ describe('real-money activation gate', () => {
   });
 });
 
+describe('wallet proof and agent signup credit', () => {
+  const secret = 'wallet-flow-test-secret';
+  const evidence = { counselApproval:'signed opinion', licenseReview:'reviewed', licenseReferences:['license ref'], providerApprovals:{ telebirr:'merchant approval', ebirr:'merchant approval' }, telegramApproval:'written approval', nationalBankReview:'written review', ageVerificationMethod:'verified method', responsiblePlayPolicy:'approved policy', privacyReview:'approved policy', minimumAge:18, ownerSignedAt:'2026-11-15' };
+
+  function walletEnv(captured: { sql: string; values: unknown[] }[], options: { activated?: boolean; referredAge?: string | null } = {}) {
+    const db = {
+      prepare(sql: string) {
+        const statement = {
+          sql,
+          values: [] as unknown[],
+          bind(...values: unknown[]) { this.values = values; return this; },
+          first: async () => {
+            if (sql.includes('FROM activation_records')) return options.activated ? { id:'activation-1', evidence_json:JSON.stringify(evidence), minimum_age:18 } : null;
+            if (sql.includes("action = 'REAL_MONEY_ACTIVATION_RECORDED'")) return options.activated ? { id:'audit-1' } : null;
+            if (sql.includes('SELECT u.status, p.age_eligibility')) return { status:'active', age_eligibility:'verified' };
+            if (sql.includes('FROM payment_settings')) return { account_number:'0911111111', enabled:1, minimum_santim:5000, maximum_santim:1_000_000 };
+            if (sql.includes('FROM agents WHERE referral_code')) return { id:'agent-1', user_id:2 };
+            if (sql.includes('SELECT source_code FROM referrals')) return null;
+            if (sql.includes('SELECT p.age_eligibility')) return { age_eligibility:options.referredAge || 'unverified', credited:0 };
+            return null;
+          },
+          all: async () => ({ results:[] }),
+          run: async () => ({ success:true, meta:{ changes:1 } }),
+        };
+        return statement;
+      },
+      batch: async (statements: { sql: string; values: unknown[] }[]) => { captured.push(...statements); return []; },
+    };
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed:true }), { status:200 }) }) };
+    return { DB:db, SESSION_SECRET:secret, REAL_MONEY_ENABLED:options.activated ? 'true' : 'false', DEMO_MODE:'false', RATE_LIMITER:rateLimiter } as never;
+  }
+
+  async function deposit(body: Record<string, unknown>, captured: { sql: string; values: unknown[] }[]) {
+    const authorization = `Bearer ${await signedSession(secret, 71)}`;
+    return worker.fetch(new Request('https://dire-bet.test/api/wallet/deposits', {
+      method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' }, body:JSON.stringify(body),
+    }), walletEnv(captured, { activated:true }));
+  }
+
+  it('saves an SMS-only deposit proof and rejects a submission with both proof types', async () => {
+    const input = { provider:'telebirr', amount:100, senderPhone:'0912345678', transactionReference:'PAY12345', proofMethod:'sms', confirmationSms:'Payment received successfully', idempotencyKey:'deposit-sms-test-0001' };
+    const stored: { sql: string; values: unknown[] }[] = [];
+    const accepted = await deposit(input, stored);
+    expect(accepted.status).toBe(201);
+    expect(stored.some((statement) => statement.sql.includes('confirmation_sms_ciphertext'))).toBe(true);
+    expect(stored.some((statement) => statement.sql.includes('INSERT INTO receipt_blobs'))).toBe(false);
+
+    const rejectedStatements: { sql: string; values: unknown[] }[] = [];
+    const both = await deposit({ ...input, receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dZ8AAAAASUVORK5CYII=' }, rejectedStatements);
+    expect(both.status).toBe(400);
+    expect(rejectedStatements).toHaveLength(0);
+  });
+
+  it('links a referral and leaves its 10 Birr credit pending until age approval', async () => {
+    const statements: { sql: string; values: unknown[] }[] = [];
+    const authorization = `Bearer ${await signedSession(secret, 71)}`;
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/referrals/claim', {
+      method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' }, body:JSON.stringify({ code:'AGENT1' }),
+    }), walletEnv(statements));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ bonusBirr:10, bonusStatus:'pending_age', walletEnabled:false });
+    expect(statements.some((statement) => statement.sql.includes('agent-signup-bonus:'))).toBe(true);
+    expect(statements.some((statement) => statement.sql.includes('age_eligibility = \'verified\'') && statement.sql.includes('1000'))).toBe(true);
+  });
+});
+
 describe('adult access gate', () => {
   const env = (row: { status: string; age_eligibility: string | null } | null) => ({ DB: {
     prepare: () => ({ bind: () => ({ first: async () => row }) }),
