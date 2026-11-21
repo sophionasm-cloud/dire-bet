@@ -69,8 +69,16 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
         if (configResult.status === 'fulfilled') setSettings(configResult.value);
         if (balanceResult.status === 'fulfilled' && balanceResult.value) setBalance(balanceResult.value.balance);
         if (ownResult.status === 'fulfilled' && ownResult.value.room) {
-          setActiveRoom(ownResult.value.room);
-          setRooms((current) => current.filter((room) => room.id !== ownResult.value.room?.id));
+          const own = ownResult.value.room;
+          const exitedCode = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(`direbet.exited_${gameId}`) : null;
+          if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(own.status) || own.code === exitedCode) {
+            setActiveRoom(null);
+          } else if (['WAITING', 'FULL', 'STARTING'].includes(own.status)) {
+            setActiveRoom(own);
+            setRooms((current) => current.filter((room) => room.id !== own.id));
+          } else if (own.status === 'IN_PROGRESS' || own.status === 'SETTLING') {
+            setActiveRoom(own);
+          }
         }
       } else {
         const response = await fetch('/api/public-rooms/config').catch(() => null);
@@ -91,7 +99,14 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
           const snapshot = JSON.parse(String(event.data)) as MarketState;
           if (snapshot.type !== 'market' || !live) return;
           setRooms((snapshot.rooms || []).filter((room) => room.id !== snapshot.ownRoom?.id));
-          if (snapshot.ownRoom) setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
+          if (snapshot.ownRoom) {
+            const exitedCode = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(`direbet.exited_${gameId}`) : null;
+            if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(snapshot.ownRoom.status) || snapshot.ownRoom.code === exitedCode) {
+              setActiveRoom(null);
+            } else {
+              setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
+            }
+          }
           setConnection('connected');
         } catch { setConnection('offline'); }
       };
@@ -125,7 +140,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   }, [activeRoom]);
 
   useEffect(() => {
-    if (!token || !activeRoom || !['IN_PROGRESS', 'SETTLING', 'COMPLETED'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
+    if (!token || !activeRoom || !['IN_PROGRESS', 'SETTLING'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
+    const exitedCode = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(`direbet.exited_${gameId}`) : null;
+    if (activeRoom.code === exitedCode) return;
     launching.current = activeRoom.id;
     let live = true;
     fetch(`/api/public-rooms/${activeRoom.code}/session`, { headers })
@@ -139,6 +156,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   }, [activeRoom, headers, onRoom, t, token]);
 
   const create = async () => {
+    try { sessionStorage.removeItem(`direbet.exited_${gameId}`); } catch {}
+    launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
     if (entry !== 'free' && (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum)))) { setMessage(t('marketAmountInvalid')); return; }
     setBusy(true); setMessage('');
@@ -157,6 +176,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   };
 
   const join = async (room: MarketplaceRoom) => {
+    try { sessionStorage.removeItem(`direbet.exited_${gameId}`); } catch {}
+    launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
     const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('etb')}`;
     if (!window.confirm(t('marketJoinConfirm').replace('{game}', gameTitle(room.gameId)).replace('{amount}', entryLabel))) return;
@@ -179,7 +200,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const response = await fetch(`/api/public-rooms/${activeRoom.code}/cancel`, { method: 'POST', headers });
       const result = await response.json() as ResponseBody;
       if (!response.ok) throw new Error(result.error || t('onlineDisconnected'));
-      setActiveRoom(result.room || null); setRooms((items) => items.filter((item) => item.id !== activeRoom.id));
+      try { if (activeRoom?.code) sessionStorage.setItem(`direbet.exited_${gameId}`, activeRoom.code); } catch {}
+      setActiveRoom(null); setRooms((items) => items.filter((item) => item.id !== activeRoom.id));
       window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
     finally { setBusy(false); }

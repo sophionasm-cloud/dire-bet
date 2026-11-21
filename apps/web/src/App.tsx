@@ -276,6 +276,13 @@ function App() {
   };
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
   const enterOnlineRoom = useCallback((room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
+  const exitOnlineRoom = useCallback(() => {
+    if (roomConfig?.code && roomConfig.gameId) {
+      try { sessionStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); } catch {}
+    }
+    setRoomConfig(null);
+    nav('home');
+  }, [roomConfig]);
   const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); if (next !== 'online') setRoomConfig(null); };
   const signInWithWebLogin = async (event: FormEvent) => {
     event.preventDefault(); setLoginMessage('');
@@ -394,7 +401,7 @@ function App() {
 
     {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
     {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
-    {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
+    {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={exitOnlineRoom} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletApp t={t} token={sessionToken} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}

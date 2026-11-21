@@ -603,9 +603,9 @@ export class Matchmaker {
     if (!Number.isSafeInteger(userId) || userId <= 0 || gameId === 'poker') return null;
     const row = gameId && isMarketplaceGame(gameId)
       ? this.state.storage.sql.exec<{ room_id: string }>(`SELECT p.room_id FROM public_room_players p JOIN public_rooms r ON r.id = p.room_id
-        WHERE p.user_id = ? AND r.game_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId, gameId).toArray()[0]
+        WHERE p.user_id = ? AND r.game_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING') ORDER BY p.joined_at DESC LIMIT 1`, userId, gameId).toArray()[0]
       : this.state.storage.sql.exec<{ room_id: string }>(`SELECT p.room_id FROM public_room_players p JOIN public_rooms r ON r.id = p.room_id
-        WHERE p.user_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING','CANCELLED','EXPIRED') ORDER BY p.joined_at DESC LIMIT 1`, userId).toArray()[0];
+        WHERE p.user_id = ? AND r.status IN ('WAITING','FULL','STARTING','IN_PROGRESS','SETTLING') ORDER BY p.joined_at DESC LIMIT 1`, userId).toArray()[0];
     return row ? this.roomViewForUser(row.room_id, userId) : null;
   }
 
