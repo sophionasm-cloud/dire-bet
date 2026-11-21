@@ -16,6 +16,7 @@ export const PUBLIC_GAMES = [
 
 export const TelegramAuthRequestSchema = z.object({
   initData: z.string().min(1).max(10_000),
+  refreshToken: z.string().min(20).max(200).optional(),
 }).strict();
 
 export const ApiErrorSchema = z.object({ error: z.string() });

@@ -8,11 +8,11 @@ DIRE BET offers free practice and free online rooms while its real-money activat
 
 ## Eligibility and safe play
 
-All players must be at least 18 and pass the administrator-reviewed age-check process before playing. The owner must select a suitable age-check method and obtain qualified legal confirmation before launch. The service must not offer real-money features unless all required approvals and responsible-play controls are in place. Users should stop if play causes distress or loss of control. Self-exclusion, cooling-off, limits and support contact are not yet available as complete player-facing controls.
+DIRE BET is intended for adults aged 18 and over. Free play does not currently require an age review. Real-money features require an approved 18+ age-eligibility check and remain unavailable until the owner has selected a suitable age-check method, recorded all required approvals and obtained qualified legal confirmation. The service must not offer real-money features unless all required approvals and responsible-play controls are in place. Users should stop if play causes distress or loss of control. Self-exclusion, cooling-off, limits and support contact are not yet available as complete player-facing controls.
 
 ## Accounts, conduct and service availability
 
-Telegram profile information may be used to create an account after Telegram init-data verification. Users must not impersonate others or interfere with the service. Availability, multiplayer and account tools may change.
+Telegram profile information may be used to create an account after Telegram init-data verification. Users must not impersonate others or interfere with the service. Users can sign out from the Account screen. Availability, multiplayer and account tools may change.
 
 ## Support, disputes and changes
 

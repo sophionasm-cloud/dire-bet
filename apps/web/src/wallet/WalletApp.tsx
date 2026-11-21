@@ -6,7 +6,7 @@ type Provider = { provider: ProviderId; accountLabel: string; accountNumber: str
 type WalletRequest = { id: string; provider: ProviderId; amount: number; status: string; created_at: string; review_reason: string | null; provider_reference?: string | null; reviewed_at?: string | null };
 type DepositProof = 'receipt' | 'sms';
 type RequestData = { deposits: WalletRequest[]; withdrawals: WalletRequest[] };
-type Props = { t: (key: TranslationKey) => string; token: string | null; onSupport: () => void; ageReviewPending: boolean };
+type Props = { t: (key: TranslationKey) => string; token: string | null; onSupport: () => void };
 type View = 'main' | 'deposit' | 'instructions' | 'withdraw' | 'submitted';
 
 const providerLabel: Record<ProviderId, string> = { telebirr: 'Telebirr', ebirr: 'eBirr' };
@@ -41,7 +41,7 @@ function statusCopy(status: string): string {
   return status;
 }
 
-export default function WalletApp({ t, token, onSupport, ageReviewPending }: Props) {
+export default function WalletApp({ t, token, onSupport }: Props) {
   const [view, setView] = useState<View>('main');
   const [providers, setProviders] = useState<Provider[]>([]);
   const [requests, setRequests] = useState<RequestData>({ deposits: [], withdrawals: [] });
@@ -49,9 +49,6 @@ export default function WalletApp({ t, token, onSupport, ageReviewPending }: Pro
   const [moneyEnabled, setMoneyEnabled] = useState(false);
   const [simulationOnly, setSimulationOnly] = useState(false);
   const [walletError, setWalletError] = useState('');
-  const [ageReference, setAgeReference] = useState('');
-  const [confirmsAdult, setConfirmsAdult] = useState(false);
-  const [ageSubmitted, setAgeSubmitted] = useState(false);
   const [provider, setProvider] = useState<ProviderId | null>(null);
   const [amount, setAmount] = useState(100);
   const [customAmount, setCustomAmount] = useState('');
@@ -167,19 +164,6 @@ export default function WalletApp({ t, token, onSupport, ageReviewPending }: Pro
     finally { setBusy(false); }
   };
 
-  const submitAgeReview = async (event: FormEvent) => {
-    event.preventDefault(); setMessage('');
-    if (!token || !confirmsAdult || ageReference.trim().length < 3) { setMessage('Confirm you are at least 18 and enter your age-check reference.'); return; }
-    setBusy(true);
-    try {
-      const response = await fetch('/api/account/age-verification', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ confirmsAdult, verificationReference: ageReference.trim() }) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || 'Age verification could not be submitted.');
-      setAgeSubmitted(true); setAgeReference(''); setMessage('Your age-check reference was sent for administrator review.');
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Age verification could not be submitted.'); }
-    finally { setBusy(false); }
-  };
-
   const applyPromoCode = async (event: FormEvent) => {
     event.preventDefault(); setPromoMessage('');
     if (!token) { setPromoMessage(t('walletPromoSignIn')); return; }
@@ -212,9 +196,6 @@ export default function WalletApp({ t, token, onSupport, ageReviewPending }: Pro
     <div className="wallet-action-grid"><button className="wallet-action-card primary" disabled={!token || !moneyEnabled} onClick={openDeposit}><WalletIcon name="deposit"/><strong>{t('deposit')}</strong></button><button className="wallet-action-card" disabled={!token || !moneyEnabled} onClick={openWithdrawal}><WalletIcon name="withdraw"/><strong>{t('withdraw')}</strong></button></div>
     {simulationOnly && <div className="wallet-simulation-note" role="status"><strong>Simulation only</strong><span>Requests and balances here are test data. Do not transfer money; real wallet credit and payouts remain authorization-gated.</span></div>}
     {!moneyEnabled && !simulationOnly && <div className="wallet-preview-warning"><span>!</span><p><strong>Money features are locked.</strong> They open only after required approvals are recorded. Do not send money unless active account details are shown here.</p></div>}
-    {walletError.includes('age check') && !ageSubmitted && !ageReviewPending && <form className="wallet-request-form" onSubmit={(event) => void submitAgeReview(event)}><h2>Verify your age</h2><p>Wallet and paid rooms require an approved 18+ check.</p><label className="wallet-field">Age-check reference<input required minLength={3} maxLength={240} value={ageReference} onChange={(event) => setAgeReference(event.target.value)} placeholder="Reference from your age check"/></label><label><input type="checkbox" checked={confirmsAdult} onChange={(event) => setConfirmsAdult(event.target.checked)}/> I confirm I am at least 18 years old.</label>{message && <p className="wallet-form-message" role="status">{message}</p>}<button className="secondary-button" type="submit" disabled={busy || !confirmsAdult}>{busy ? 'Sending…' : 'Submit for age review'}</button></form>}
-    {walletError.includes('age check') && ageReviewPending && <p className="wallet-form-message" role="status">{t('ageGatePending')}</p>}
-    {ageSubmitted && <p className="wallet-form-message" role="status">Age verification request sent. Money features remain locked until an administrator approves it.</p>}
     <form className="wallet-promo-inline" onSubmit={(event) => void applyPromoCode(event)}><label htmlFor="wallet-promo-code">Have an agent promo code?</label><div><input id="wallet-promo-code" autoCapitalize="characters" maxLength={16} value={promoCode} onChange={(event) => setPromoCode(event.target.value.toUpperCase())} placeholder="Enter promo code"/><button type="submit" disabled={!promoCode.trim()}>Apply</button></div>{promoMessage && <small role="status">{promoMessage}</small>}</form>
     <div className="wallet-request-history"><div className="wallet-section-heading"><div><span className="eyebrow">ACTIVITY</span><h2>Your requests</h2></div><button className="text-button" onClick={() => void refresh()}>Refresh ↻</button></div>
       {!token ? <p className="wallet-history-empty">Sign in to see your balance and payment request status.</p> : [...requests.deposits, ...requests.withdrawals].sort((a, b) => b.created_at.localeCompare(a.created_at)).length ? [...requests.deposits.map((item) => ({ ...item, kind: 'Deposit' })), ...requests.withdrawals.map((item) => ({ ...item, kind: 'Withdrawal' }))].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8).map((item) => <article className="wallet-history-row" key={item.id}><span className={`wallet-history-icon ${item.kind.toLowerCase()}`}><WalletIcon name={item.kind === 'Deposit' ? 'deposit' : 'withdraw'}/></span><div><strong>{item.kind} · {providerLabel[item.provider]}</strong><small>{item.id} · {new Date(item.created_at).toLocaleDateString()}</small>{item.review_reason && <small className="wallet-review-note">{item.review_reason}</small>}</div><div className="wallet-history-side"><strong>{item.amount} {t('etb')}</strong><span className={`demo-request-status ${item.status === 'approved' ? 'approved' : item.status === 'rejected' ? 'declined' : 'pending'}`}>{statusCopy(item.status)}</span></div></article>) : <p className="wallet-history-empty">No requests yet. Deposit and withdrawal requests will appear here.</p>}

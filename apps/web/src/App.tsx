@@ -7,6 +7,7 @@ import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeG
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby from './games/PublicRoomLobby';
 import WalletApp from './wallet/WalletApp';
+import { clearAuth, installAuthFetch, isSignedOut, onAuthChange, readAccessToken, readRefreshToken, refreshSession, storeAuth } from './authClient';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
 const AgentApp = lazy(() => import('./agent/AgentApp'));
@@ -15,7 +16,7 @@ type Page = 'home'|'matches'|'online'|'lobby'|'wallet'|'rank'|'menu'|'account'|'
 type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
-type Account = { webUsername: string | null; phoneShared: boolean; ageEligibility: 'unverified' | 'verified' | 'blocked'; ageReviewPending: boolean };
+type Account = { webUsername: string | null; phoneShared: boolean };
 
 const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', om: 'OM' };
 const bannerSlides = [
@@ -78,9 +79,9 @@ function App() {
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem('direbet.recent') || '[]') as string[]);
   const [reduceEffects, setReduceEffects] = useState(() => localStorage.getItem('direbet.reduceEffects') === 'true');
   const [displayName, setDisplayName] = useState('Guest');
-  const [sessionToken, setSessionToken] = useState<string | null>(() => telegramMiniApp ? null : sessionStorage.getItem('direbet.session'));
+  const [sessionToken, setSessionToken] = useState<string | null>(() => isSignedOut() ? null : readAccessToken());
   const [account, setAccount] = useState<Account | null>(null);
-  const [telegramAuthError, setTelegramAuthError] = useState(false);
+  const [telegramAuthError, setTelegramAuthError] = useState(() => isSignedOut());
   const [telegramAuthAttempt, setTelegramAuthAttempt] = useState(0);
   const [accountUsername, setAccountUsername] = useState('');
   const [accountPin, setAccountPin] = useState('');
@@ -101,6 +102,27 @@ function App() {
     document.documentElement.dataset.language = language;
   }, [language]);
 
+  useEffect(() => installAuthFetch(), []);
+
+  useEffect(() => onAuthChange((payload) => {
+    if (!payload?.token) { setSessionToken(null); return; }
+    setSessionToken(payload.token);
+    if (payload.user?.displayName) setDisplayName(payload.user.displayName);
+  }), []);
+
+  useEffect(() => {
+    const check = () => {
+      if (!readRefreshToken()) return;
+      const expiresAt = Number(localStorage.getItem('direbet.sessionExpires') || 0);
+      if (!expiresAt || expiresAt - Date.now() <= 5 * 60_000) void refreshSession();
+    };
+    const timer = window.setInterval(check, 60_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    check();
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
     if (!webApp) return;
@@ -109,13 +131,14 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!telegramInitData) return;
+    if (!telegramInitData || sessionToken || isSignedOut()) return;
     let live = true;
-    fetch('/api/auth/telegram', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData: telegramInitData }) })
-      .then(async (r) => { if (!r.ok) throw new Error(); return r.json() as Promise<{ token: string; user: { displayName?: string } }> })
+    const previousRefresh = readRefreshToken();
+    fetch('/api/auth/telegram', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData: telegramInitData, ...(previousRefresh ? { refreshToken: previousRefresh } : {}) }) })
+      .then(async (r) => { if (!r.ok) throw new Error(); return r.json() as Promise<{ token: string; refreshToken?: string; expiresIn?: number; user: { displayName?: string } }> })
       .then((data) => {
         if (!live) return;
-        sessionStorage.setItem('direbet.session', data.token);
+        storeAuth(data);
         setSessionToken(data.token);
         setDisplayName(data.user.displayName || 'Player');
         setTelegramAuthError(false);
@@ -126,7 +149,7 @@ function App() {
       })
       .catch(() => { if (live) { setDisplayName('Guest'); setTelegramAuthError(true); } });
     return () => { live = false; };
-  }, [telegramInitData, telegramAuthAttempt]);
+  }, [telegramInitData, telegramAuthAttempt, sessionToken]);
 
   useEffect(() => {
     if (!sessionToken) { setAccount(null); return; }
@@ -134,20 +157,19 @@ function App() {
     fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Session expired. Sign in again.');
-        return response.json() as Promise<{ user: { displayName: string; webUsername: string | null; phoneShared: boolean; ageEligibility: Account['ageEligibility']; ageReviewPending: boolean } }>;
+        return response.json() as Promise<{ user: { displayName: string; webUsername: string | null; phoneShared: boolean } }>;
       })
       .then((data) => {
         if (!live) return;
-        setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared, ageEligibility: data.user.ageEligibility, ageReviewPending: data.user.ageReviewPending });
+        setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
         setDisplayName(data.user.displayName || 'Player');
         if (data.user.webUsername) setAccountUsername(data.user.webUsername);
       })
       .catch((cause) => {
         if (!live) return;
-        sessionStorage.removeItem('direbet.session');
+        clearAuth();
         setSessionToken(null);
         setAccount(null);
-        if (telegramMiniApp) setTelegramAuthError(true);
         setAccountMessage(cause instanceof Error ? cause.message : 'Sign in again to continue.');
       });
     return () => { live = false; };
@@ -245,7 +267,7 @@ function App() {
     setLanguage(value); setOverlay(null);
     if (sessionToken) fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } }).catch(() => undefined);
   };
-  const retryTelegramAuthentication = () => { setTelegramAuthError(false); setTelegramAuthAttempt((attempt) => attempt + 1); };
+  const retryTelegramAuthentication = () => { clearAuth(); setTelegramAuthError(false); setTelegramAuthAttempt((attempt) => attempt + 1); };
   const setEffectPreference = () => {
     const value = !reduceEffects; setReduceEffects(value); localStorage.setItem('direbet.reduceEffects', String(value));
   };
@@ -257,9 +279,9 @@ function App() {
     if (!/^\d{8}$/.test(loginPin)) { setLoginMessage('Enter your 8-digit PIN.'); return; }
     try {
       const response = await fetch('/api/auth/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: loginUsername, password: loginPin }) });
-      const data = await response.json() as { token?: string; user?: { displayName?: string }; error?: string };
+      const data = await response.json() as { token?: string; refreshToken?: string; expiresIn?: number; user?: { displayName?: string }; error?: string };
       if (!response.ok || !data.token) throw new Error(data.error || 'Could not sign in.');
-      sessionStorage.setItem('direbet.session', data.token);
+      storeAuth(data);
       setSessionToken(data.token); setDisplayName(data.user?.displayName || loginUsername); setLoginPin(''); setPage('home');
       const nextRoute = new URLSearchParams(location.search).get('next');
       history.replaceState(null, '', nextRoute === '/agent' || nextRoute === '/admin' ? nextRoute : location.pathname);
@@ -273,7 +295,7 @@ function App() {
       const response = await fetch('/api/account/web-login', { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify({ username: accountUsername, password: accountPin }) });
       const data = await response.json() as { username?: string; error?: string };
       if (!response.ok) throw new Error(data.error || 'Could not save web login.');
-      setAccount({ webUsername: data.username || accountUsername, phoneShared: Boolean(account?.phoneShared), ageEligibility: account?.ageEligibility || 'unverified', ageReviewPending: Boolean(account?.ageReviewPending) });
+      setAccount({ webUsername: data.username || accountUsername, phoneShared: Boolean(account?.phoneShared) });
       setAccountUsername(data.username || accountUsername); setAccountPin('');
       setAccountMessage('Web login saved. You can now sign in from a browser.');
     } catch (cause) { setAccountMessage(cause instanceof Error ? cause.message : 'Could not save web login.'); }
@@ -289,22 +311,26 @@ function App() {
     setAccountMessage('Checking your account…');
     try {
       const response = await fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } });
-      const data = await response.json() as { user?: { displayName: string; webUsername: string | null; phoneShared: boolean; ageEligibility: Account['ageEligibility']; ageReviewPending: boolean }; error?: string };
+      const data = await response.json() as { user?: { displayName: string; webUsername: string | null; phoneShared: boolean }; error?: string };
       if (!response.ok || !data.user) throw new Error(data.error || 'Could not check account status.');
-      setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared, ageEligibility: data.user.ageEligibility, ageReviewPending: data.user.ageReviewPending });
+      setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
       setDisplayName(data.user.displayName || 'Player');
       if (data.user.webUsername) setAccountUsername(data.user.webUsername);
       setAccountMessage(data.user.phoneShared ? 'Contact linked to your Telegram account.' : 'The bot has not received your contact yet.');
     } catch (cause) { setAccountMessage(cause instanceof Error ? cause.message : 'Could not check account status.'); }
   };
-  const signOutWeb = () => { sessionStorage.removeItem('direbet.session'); setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); };
+  const signOutWeb = async () => {
+    const refreshToken = readRefreshToken();
+    clearAuth(true);
+    setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); setAccountMessage('');
+    if (telegramMiniApp) setTelegramAuthError(true);
+    if (refreshToken) {
+      await fetch('/api/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }) }).catch(() => undefined);
+    }
+  };
 
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp token={sessionToken} /></Suspense>;
-  const playingPage = ['matches', 'online', 'lobby', 'xo', 'ludo', 'checkers', 'poker'].includes(page);
-  if (playingPage && (!sessionToken || account?.ageEligibility !== 'verified')) {
-    return <main className="player-shell"><AgeVerificationScreen t={t} token={sessionToken} account={account} onRefresh={refreshAccount} onLogin={() => nav('login')} /></main>;
-  }
 
   return <main className="player-shell">
     <header className="topbar">
@@ -365,7 +391,7 @@ function App() {
     {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={() => nav('matches')} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
-    {page === 'wallet' && <WalletApp t={t} token={sessionToken} ageReviewPending={account?.ageReviewPending ?? false} onSupport={() => setOverlay('support')} />}
+    {page === 'wallet' && <WalletApp t={t} token={sessionToken} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}
     {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
     {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}
@@ -390,33 +416,12 @@ function WebLoginScreen({ t, username, pin, message, setUsername, setPin, onSubm
   return <section className="screen auth-screen"><button className="back-button" onClick={onBack}><Icon name="back" size={19}/>{t('home')}</button><span className="eyebrow">DIRE BET</span><h1>{t('webLogin')}</h1><p className="auth-intro">{t('webLoginIntro')}</p><form className="auth-form" onSubmit={onSubmit}><label>{t('username')}<input autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z][A-Za-z0-9_]{2,23}" required value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{t('eightDigitPin')}<input autoComplete="current-password" type="password" inputMode="numeric" pattern="[0-9]{8}" minLength={8} maxLength={8} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))} /></label>{message && <p className="auth-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit">{t('signIn')}<span>→</span></button></form><p className="auth-footnote">{t('needTelegramAccount')} <a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}</a></p></section>;
 }
 
-function AccountScreen({ t, displayName, authenticated, authPending, account, username, pin, message, setUsername, setPin, onSave, onShareContact, onRefresh, onLogin, onSignOut, onBack }: { t:(key:TranslationKey)=>string; displayName:string; authenticated:boolean; authPending:boolean; account:{webUsername:string|null;phoneShared:boolean;ageEligibility:'unverified'|'verified'|'blocked';ageReviewPending:boolean}|null; username:string; pin:string; message:string; setUsername:(value:string)=>void; setPin:(value:string)=>void; onSave:(event:FormEvent)=>void; onShareContact:()=>void; onRefresh:()=>void; onLogin:()=>void; onSignOut:()=>void; onBack:()=>void }) {
+function AccountScreen({ t, displayName, authenticated, authPending, account, username, pin, message, setUsername, setPin, onSave, onShareContact, onRefresh, onLogin, onSignOut, onBack }: { t:(key:TranslationKey)=>string; displayName:string; authenticated:boolean; authPending:boolean; account:{webUsername:string|null;phoneShared:boolean}|null; username:string; pin:string; message:string; setUsername:(value:string)=>void; setPin:(value:string)=>void; onSave:(event:FormEvent)=>void; onShareContact:()=>void; onRefresh:()=>void; onLogin:()=>void; onSignOut:()=>void; onBack:()=>void }) {
   return <section className="screen auth-screen account-screen"><button className="back-button" onClick={onBack}><Icon name="back" size={19}/>{t('menuTitle')}</button><span className="eyebrow">DIRE BET</span><h1>{t('account')}</h1>{authenticated ? <><p className="auth-intro">{t('telegramAccount')} <strong>{displayName}</strong>. {t('webLoginOptional')}</p><div className="account-contact"><div><strong>{t('contactSharing')}</strong><span>{account?.phoneShared ? t('contactLinked') : account ? t('contactNotLinked') : t('onlineConnecting')}</span></div><div className="account-actions">{account && !account.phoneShared && <button className="secondary-button" type="button" onClick={onShareContact}>{t('shareContact')}</button>}<button className="text-button" type="button" onClick={onRefresh}>{t('refreshStatus')}</button></div></div><p className="auth-footnote">{t('contactPrivacy')}</p>{account?.phoneShared ? <form className="auth-form" onSubmit={onSave}><label>{t('username')}<input autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z][A-Za-z0-9_]{2,23}" required value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{t('eightDigitPin')}<input autoComplete="new-password" type="password" inputMode="numeric" pattern="[0-9]{8}" minLength={8} maxLength={8} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))} /></label><small className="auth-footnote">{t('pinTip')}</small>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button wide" type="submit">{account.webUsername ? t('updateWebLogin') : t('saveWebLogin')}<span>→</span></button></form> : account ? <div className="account-prompt"><p>{t('contactNeeded')}</p><a className="secondary-button" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}</a>{message && <p className="auth-message" role="status">{message}</p>}</div> : <p className="auth-message" role="status">{t('onlineConnecting')}</p>}<button className="text-button account-signout" type="button" onClick={onSignOut}>{t('signOut')}</button></> : authPending ? <p className="auth-message" role="status">{t('onlineConnecting')}</p> : <><p className="auth-intro">{t('accountNeedsTelegram')}</p><a className="primary-button wide auth-telegram-link" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}<span>↗</span></a><button className="text-button" onClick={onLogin}>{t('webLogin')}</button>{message && <p className="auth-message" role="status">{message}</p>}</>}</section>;
 }
 
 function MenuScreen({ t, language, onLanguage, onTerms, onPrivacy, onSupport, onEffect, reduceEffects, displayName, account, authenticated, onAccount }: { t:(key:TranslationKey)=>string; language:Language; onLanguage:()=>void; onTerms:()=>void; onPrivacy:()=>void; onSupport:()=>void; onEffect:()=>void; reduceEffects:boolean; displayName:string; account:Account|null; authenticated:boolean; onAccount:()=>void }) {
-  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div><div className="menu-group"><button onClick={onAccount}><span className="menu-icon"><Icon name="person"/></span><span><strong>{t('account')}</strong><small>{t('webLogin')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('ageReview')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · FREE PLAY</div></section>;
-}
-
-function AgeVerificationScreen({ t, token, account, onRefresh, onLogin }: { t:(key:TranslationKey)=>string; token:string|null; account:Account|null; onRefresh:()=>void; onLogin:()=>void }) {
-  const [reference, setReference] = useState('');
-  const [confirmsAdult, setConfirmsAdult] = useState(false);
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const submit = async (event:FormEvent) => {
-    event.preventDefault(); setMessage(''); setBusy(true);
-    try {
-      const response = await fetch('/api/account/age-verification', { method:'POST', headers:{ Authorization:`Bearer ${token}`, 'content-type':'application/json' }, body:JSON.stringify({ confirmsAdult, verificationReference:reference.trim() }) });
-      const result = await response.json() as { error?:string };
-      if (!response.ok) throw new Error(result.error || 'Could not submit your age check.');
-      setSubmitted(true); setMessage(t('ageGatePending'));
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Could not submit your age check.'); }
-    finally { setBusy(false); }
-  };
-  if (!token) return <section className="screen auth-screen account-screen"><span className="eyebrow">DIRE BET</span><h1>{t('ageGateTitle')}</h1><p className="auth-intro">{t('ageGateLogin')}</p><a className="primary-button wide auth-telegram-link" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}<span>↗</span></a><button className="text-button" onClick={onLogin}>{t('webLogin')}</button></section>;
-  if (!account) return <section className="screen auth-screen account-screen" role="status"><span className="eyebrow">DIRE BET</span><h1>{t('ageGateTitle')}</h1><p className="auth-intro">{t('ageGateLoading')}</p></section>;
-  return <section className="screen auth-screen account-screen"><span className="eyebrow">DIRE BET · 18+</span><h1>{t('ageGateTitle')}</h1><p className="auth-intro">{account.ageEligibility === 'blocked' ? t('ageGateBlocked') : account.ageReviewPending || submitted ? t('ageGatePending') : t('ageGateIntro')}</p>{account.ageEligibility === 'unverified' && !account.ageReviewPending && !submitted && <form className="auth-form" onSubmit={(event) => void submit(event)}><label>{t('ageGateReference')}<input autoComplete="off" minLength={3} maxLength={240} required value={reference} onChange={(event) => setReference(event.target.value)}/></label><label><input type="checkbox" checked={confirmsAdult} onChange={(event) => setConfirmsAdult(event.target.checked)}/> {t('ageGateConfirm')}</label>{message && <p className="auth-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !confirmsAdult}>{busy ? t('onlineConnecting') : t('ageGateSubmit')}<span>→</span></button></form>}{(account.ageReviewPending || submitted) && <button className="secondary-button" type="button" onClick={onRefresh}>{t('refreshStatus')}</button>}</section>;
+  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div><div className="menu-group"><button onClick={onAccount}><span className="menu-icon"><Icon name="person"/></span><span><strong>{t('account')}</strong><small>{t('webLogin')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · FREE PLAY</div></section>;
 }
 
 function GameSheet({ game, t, onClose, onRules, onPlay }: { game:Game; t:(key:TranslationKey)=>string; onClose:()=>void; onRules:()=>void; onPlay:()=>void }) {
@@ -429,8 +434,8 @@ function OverlaySheet({ overlay, t, language, displayName, authenticated, phoneS
   if (overlay === 'menu') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><aside className="drawer" role="dialog" aria-modal="true"><div className="drawer-head"><a className="wordmark" href="/" onClick={(e) => e.preventDefault()}><span>DIRE</span><b>BET</b><i>✦</i></a><button className="icon-button" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button></div><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? phoneShared ? t('contactLinked') : phoneShared === false ? t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div>{(['wallet','matches','rank'] as Page[]).map((page) => <button key={page} className={`drawer-row ${page === 'wallet' ? 'wallet-drawer-row' : ''}`} onClick={() => onNavigate(page)}><Icon name={page}/><span>{t(page as TranslationKey)}</span><Icon name="chevron" size={17}/></button>)}<button className="drawer-row" onClick={() => { onClose(); onNotice(t('support')); }}><Icon name="question"/><span>{t('support')}</span><Icon name="chevron" size={17}/></button><button className="drawer-row" onClick={() => { onClose(); onNavigate('menu'); }}><Icon name="globe"/><span>{t('language')}</span><span className="drawer-current">{languageNames[language]}</span></button><div className="drawer-footer">DIRE BET · FREE PLAY</div></aside></div>;
   const isLegal = overlay === 'terms' || overlay === 'privacy';
   const title = overlay === 'support' ? t('support') : overlay === 'notifications' ? t('matches') : overlay === 'terms' ? t('terms') : overlay === 'privacy' ? t('privacy') : t('howToPlay');
-  const copy = overlay === 'support' ? t('comingSoon') : overlay === 'notifications' ? t('matchesEmpty') : overlay === 'rules' ? xoRules[language] : t('ageReview');
-  return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">{isLegal ? t('ageReview') : 'DIRE BET'}</span><h2>{title}</h2><p>{copy}</p><button className="secondary-button wide" onClick={onClose}>{t('close')}</button></section></div>;
+  const copy = overlay === 'support' ? t('comingSoon') : overlay === 'notifications' ? t('matchesEmpty') : overlay === 'rules' ? xoRules[language] : t('legalNote');
+  return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">{isLegal ? t('legalNote') : 'DIRE BET'}</span><h2>{title}</h2><p>{copy}</p><button className="secondary-button wide" onClick={onClose}>{t('close')}</button></section></div>;
 }
 
 function Onboarding({ step, setStep, language, setLanguage, t, onFinish }: { step:number; setStep:(step:number)=>void; language:Language; setLanguage:(language:Language)=>void; t:(key:TranslationKey)=>string; onFinish:()=>void }) {

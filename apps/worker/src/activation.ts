@@ -1,12 +1,8 @@
 export type ActivationEnv = { DB: D1Database; REAL_MONEY_ENABLED: string; DEMO_MODE: string };
 
-export async function ageEligibilityError(env: Pick<ActivationEnv, 'DB'>, userId: number): Promise<string | null> {
-  const row = await env.DB.prepare(`SELECT u.status, p.age_eligibility FROM users u
-    LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id = ?`).bind(userId).first<{
-      status: string; age_eligibility: string | null;
-    }>();
+export async function freePlayEligibilityError(env: Pick<ActivationEnv, 'DB'>, userId: number): Promise<string | null> {
+  const row = await env.DB.prepare('SELECT status FROM users WHERE id = ?').bind(userId).first<{ status: string }>();
   if (!row || row.status !== 'active') return 'Your account is not eligible to use DIRE BET.';
-  if (row.age_eligibility !== 'verified') return 'Complete an approved 18+ age check before playing.';
   return null;
 }
 

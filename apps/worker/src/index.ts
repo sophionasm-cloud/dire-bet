@@ -6,7 +6,7 @@ import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type Po
 import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
 import { addisWeekStart } from './agent-report';
-import { ageEligibilityError, moneyActivationRecorded, moneyEligibilityError } from './activation';
+import { freePlayEligibilityError, moneyActivationRecorded, moneyEligibilityError } from './activation';
 export { moneyActivationRecorded } from './activation';
 
 interface Env {
@@ -30,8 +30,9 @@ interface Env {
 
 const enc = new TextEncoder();
 const ONE_HOUR = 60 * 60;
-const SESSION_LIFETIME = 15 * 60;
+const SESSION_LIFETIME = 24 * 60 * 60;
 const PASSWORD_SESSION_LIFETIME = 12 * 60 * 60;
+const REFRESH_TOKEN_LIFETIME = 30 * 24 * 60 * 60;
 const MAX_WEBHOOK_BYTES = 64 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_TTL_MS = 15 * 60 * 1000;
@@ -407,8 +408,8 @@ async function connectRoom(request: Request, env: Env, code: string): Promise<Re
   if (!ticket || ticket.code !== code) return json({ error: 'Room ticket is invalid or expired.' }, 401);
   const room = await env.DB.prepare('SELECT game_id FROM game_rooms WHERE id = ?').bind(code).first<{ game_id: string }>();
   if (room?.game_id === 'poker') return json({ error: 'American Texas is coming soon.' }, 409);
-  const ageError = await ageEligibilityError(env, ticket.userId);
-  if (ageError) return json({ error: ageError }, 403);
+  const eligibilityError = await freePlayEligibilityError(env, ticket.userId);
+  if (eligibilityError) return json({ error: eligibilityError }, 403);
   const headers = new Headers(request.headers);
   headers.set('X-Game-User', String(ticket.userId));
   headers.set('X-Game-Name', ticket.displayName);
@@ -443,6 +444,82 @@ async function readSession(request: Request, secret?: string): Promise<number | 
   } catch { return null; }
 }
 
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function newRefreshToken(): string {
+  return base64url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function hashRefreshToken(token: string, secret: string): Promise<string> {
+  return hex(await hmac(secret, `dire-bet-refresh-v1:${token}`));
+}
+
+async function createAuthSession(env: Env, userId: number, request: Request, familyId = crypto.randomUUID()): Promise<{ refreshToken: string; expiresIn: number }> {
+  const refreshToken = newRefreshToken();
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_LIFETIME * 1000).toISOString();
+  await env.DB.prepare(`INSERT INTO auth_sessions (id, user_id, token_hash, family_id, expires_at, user_agent)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(crypto.randomUUID(), userId, await hashRefreshToken(refreshToken, env.SESSION_SECRET || ''), familyId, expiresAt, request.headers.get('User-Agent')?.slice(0, 200) || null).run();
+  return { refreshToken, expiresIn: REFRESH_TOKEN_LIFETIME };
+}
+
+async function revokeRefreshToken(env: Env, refreshToken: string): Promise<void> {
+  if (!env.SESSION_SECRET) return;
+  const row = await env.DB.prepare('SELECT family_id FROM auth_sessions WHERE token_hash = ?')
+    .bind(await hashRefreshToken(refreshToken, env.SESSION_SECRET)).first<{ family_id: string }>();
+  if (!row) return;
+  await env.DB.prepare('UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE family_id = ? AND revoked_at IS NULL')
+    .bind(row.family_id).run();
+}
+
+async function issueAuthResponse(env: Env, userId: number, request: Request, user: Record<string, unknown>, lifetime = SESSION_LIFETIME): Promise<Response> {
+  const token = await issueSession(userId, env.SESSION_SECRET || '', lifetime);
+  const refresh = await createAuthSession(env, userId, request);
+  return json({ token, expiresIn: lifetime, refreshToken: refresh.refreshToken, refreshExpiresIn: refresh.expiresIn, user });
+}
+
+async function renewAuthSession(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  if (!env.SESSION_SECRET) return json({ error: 'Session renewal is not configured' }, 503);
+  let body: { refreshToken?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
+  if (typeof body.refreshToken !== 'string' || body.refreshToken.length < 20 || body.refreshToken.length > 200) return json({ error: 'Session renewal is invalid or expired' }, 401);
+  const row = await env.DB.prepare(`SELECT s.id, s.user_id, s.family_id, s.expires_at, s.revoked_at,
+      u.status, u.first_name, u.web_username, u.language
+    FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`)
+    .bind(await hashRefreshToken(body.refreshToken, env.SESSION_SECRET))
+    .first<{ id: string; user_id: number; family_id: string; expires_at: string; revoked_at: string | null; status: string; first_name: string; web_username: string | null; language: string }>();
+  if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now() || row.status !== 'active') {
+    return json({ error: 'Session renewal is invalid or expired' }, 401);
+  }
+  const refreshToken = newRefreshToken();
+  const newId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_LIFETIME * 1000).toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP, replaced_by = ?, last_used_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND revoked_at IS NULL`).bind(newId, row.id),
+    env.DB.prepare(`INSERT INTO auth_sessions (id, user_id, token_hash, family_id, expires_at, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .bind(newId, row.user_id, await hashRefreshToken(refreshToken, env.SESSION_SECRET), row.family_id, expiresAt, request.headers.get('User-Agent')?.slice(0, 200) || null),
+  ]);
+  if (results[0]?.meta.changes !== 1) return json({ error: 'Session renewal is invalid or expired' }, 401);
+  const token = await issueSession(row.user_id, env.SESSION_SECRET);
+  return json({ token, expiresIn: SESSION_LIFETIME, refreshToken, refreshExpiresIn: REFRESH_TOKEN_LIFETIME,
+    user: { displayName: row.web_username || row.first_name, webUsername: row.web_username, language: row.language } });
+}
+
+async function endAuthSession(request: Request, env: Env): Promise<Response> {
+  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+  let body: { refreshToken?: unknown };
+  try { body = await request.json() as typeof body; } catch { return json({ error: 'Invalid request' }, 400); }
+  if (typeof body.refreshToken === 'string' && body.refreshToken.length >= 20 && body.refreshToken.length <= 200) {
+    await revokeRefreshToken(env, body.refreshToken).catch(() => undefined);
+  }
+  return json({ ok: true });
+}
+
 function validEvidenceReference(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length >= 3 && value.trim().length <= 240;
 }
@@ -464,6 +541,18 @@ const welcome: Record<string, string> = {
   am: 'ወደ DIRE BET እንኳን በደህና መጡ። ከጓደኞችዎ ጋር በነፃ ይጫወቱ።',
   so: 'Ku soo dhowow DIRE BET. Saaxiibbadaa kula ciyaar bilaash.',
   om: 'Baga DIRE BET dhuftan. Hiriyoota waliin bilisaan taphadhaa.',
+};
+const welcomeBack: Record<string, string> = {
+  en: 'Welcome back to DIRE BET. Your account is ready.',
+  am: 'ወደ DIRE BET እንደገና እንኳን በደህና መጡ። መለያዎ ዝግጁ ነው።',
+  so: 'Ku soo dhawow DIRE BET. Akoonkaaga waa diyaar.',
+  om: 'Baga gara DIRE BET deebitan. Herregni kee qophaa’eera.',
+};
+const menuPrompt: Record<string, string> = {
+  en: 'Use the menu below to play or open your wallet.',
+  am: 'ከታች ያለውን ምናሌ ተጠቅመው ይጫወቱ ወይም ዋሌትዎን ይክፈቱ።',
+  so: 'Isticmaal menu-ga hoose si aad u ciyaarto ama u furto jeebkaaga.',
+  om: 'Menuu gadii fayyadamuun taphadhu yookaan wallet kee bani.',
 };
 
 async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
@@ -504,6 +593,11 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     }
   }
   const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
+  const telegramId = Number.isSafeInteger(message.from?.id) && (message.from?.id || 0) > 0 ? message.from!.id! : null;
+  const account = telegramId ? await env.DB.prepare(`SELECT u.id,
+      EXISTS(SELECT 1 FROM user_contacts c WHERE c.user_id = u.id) AS phone_shared
+    FROM users u WHERE u.telegram_id = ?`).bind(telegramId).first<{ id: number; phone_shared: number }>() : null;
+  const hasContact = account?.phone_shared === 1;
   const base = new URL(request.url).origin;
   const isOwner = Boolean(env.SUPER_ADMIN_TELEGRAM_ID && message.from && String(message.from.id) === env.SUPER_ADMIN_TELEGRAM_ID);
   const gameList: Record<string, string> = {
@@ -513,11 +607,13 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     om: 'Shaakala bilisaa bot waliin: XO, Ludo, Checkers fi Texas Hold’em. Tapha afran keessaa kamiyyuu irratti kutaa dhuunfaa uumi.',
   };
   const responses: Record<string, string> = {
-    '/start': welcome[lang],
-    '/play': welcome[lang],
+    '/start': hasContact ? welcomeBack[lang] : welcome[lang],
+    '/play': hasContact ? welcomeBack[lang] : welcome[lang],
     '/games': gameList[lang],
     '/profile': 'Open DIRE BET to view your player profile.',
-    '/account': 'Share your contact with this bot, then open Account in DIRE BET to set an optional web username and 8-digit PIN.',
+    '/account': hasContact
+      ? 'Open Account in DIRE BET to update your optional web username and 8-digit PIN.'
+      : 'Share your contact with this bot, then open Account in DIRE BET to set an optional web username and 8-digit PIN.',
     '/wallet': 'Wallet payments are locked until required approvals are recorded. Do not send funds.',
     '/leaderboard': 'The public leaderboard is not available yet.',
     '/help': 'DIRE BET free play is available. Wallet payments remain locked pending required approvals. Use /support for help.',
@@ -544,7 +640,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   } : undefined;
   await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
     chat_id: message.chat.id,
-      text: roomPayload ? `${welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${welcome[lang]} Promo code ${agentCode} includes a one-time 10 Birr welcome bonus after your age check is approved.` : responses[command] || 'Use /play to open free games, or /help for help.',
+      text: roomPayload ? `${hasContact ? welcomeBack[lang] : welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${hasContact ? welcomeBack[lang] : welcome[lang]} Promo code ${agentCode} includes a one-time 10 Birr welcome bonus once wallet credit is enabled.` : responses[command] || 'Use /play to open free games, or /help for help.',
     ...(reply_markup ? { reply_markup } : {}),
   });
   if (command === '/start') {
@@ -561,15 +657,16 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
       om: { play: '🎮 Taphadhu', contact: 'Quunnamtii qoodi', wallet: 'Wallet', more: 'Dabalata' },
     };
     const labels = keyboardLabels[lang];
+    const keyboard: Array<Array<Record<string, unknown>>> = [
+      [{ text: labels.play, web_app: { url: base } }],
+      ...(hasContact ? [] : [[{ text: labels.contact, request_contact: true }]]),
+      [{ text: labels.wallet, web_app: { url: `${base}/?page=wallet` } }, { text: labels.more, web_app: { url: `${base}/?page=menu` } }],
+    ];
     await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
       chat_id: message.chat.id,
-      text: registrationText[lang],
+      text: hasContact ? menuPrompt[lang] : registrationText[lang],
       reply_markup: {
-        keyboard: [
-          [{ text: labels.play, web_app: { url: base } }],
-          [{ text: labels.contact, request_contact: true }],
-          [{ text: labels.wallet, web_app: { url: `${base}/?page=wallet` } }, { text: labels.more, web_app: { url: `${base}/?page=menu` } }],
-        ],
+        keyboard,
         resize_keyboard: true,
         is_persistent: true,
         input_field_placeholder: 'Choose an option',
@@ -630,8 +727,8 @@ async function authenticate(request: Request, env: Env): Promise<Response> {
       ON CONFLICT(telegram_id) DO UPDATE SET username = excluded.username, first_name = excluded.first_name,
       last_name = excluded.last_name, updated_at = CURRENT_TIMESTAMP RETURNING id`).bind(id, username, firstName, lastName, lang).first<{ id: number }>();
     if (!result) return json({ error: 'Could not create session' }, 500);
-    const token = await issueSession(result.id, env.SESSION_SECRET);
-    return json({ token, expiresIn: SESSION_LIFETIME, user: { displayName: firstName, username, language: lang } });
+    if (parsed.data.refreshToken) await revokeRefreshToken(env, parsed.data.refreshToken).catch(() => undefined);
+    return await issueAuthResponse(env, result.id, request, { displayName: firstName, username, language: lang });
   } catch {
     return json({ error: 'Could not create session' }, 503);
   }
@@ -689,8 +786,7 @@ async function authenticatePassword(request: Request, env: Env): Promise<Respons
   const candidate = await hashWebPassword(body.password, salt, env.SESSION_SECRET);
   const stored = user?.password_hash ? Uint8Array.from(decodeBase64url(user.password_hash), (character) => character.charCodeAt(0)) : new Uint8Array(32);
   if (!user || !user.password_salt || !user.password_hash || !equalBytes(candidate, stored)) return json({ error: 'Username or PIN did not match.' }, 401);
-  const token = await issueSession(user.id, env.SESSION_SECRET, PASSWORD_SESSION_LIFETIME);
-  return json({ token, expiresIn: PASSWORD_SESSION_LIFETIME, user: { displayName: user.web_username } });
+  return await issueAuthResponse(env, user.id, request, { displayName: user.web_username }, PASSWORD_SESSION_LIFETIME);
 }
 
 async function storeTelegramContact(message: { chat?: { id?: number }; from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; contact?: { user_id?: number; phone_number?: string; first_name?: string } }, env: Env, origin: string): Promise<void> {
@@ -859,64 +955,6 @@ async function playerWalletBalance(env: Env, userId: number): Promise<Response> 
   const kind = mode === 'real' ? 'real' : 'demo';
   const row = await env.DB.prepare('SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = ?').bind(userId, kind).first<{ balance_santim: number }>();
   return json({ enabled: true, simulated: mode === 'simulation', balanceSantim: row?.balance_santim || 0, balance: (row?.balance_santim || 0) / 100 });
-}
-
-async function submitAgeVerification(request: Request, env: Env, userId: number): Promise<Response> {
-  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-  const input = await request.json().catch(() => null) as { verificationReference?: unknown; confirmsAdult?: unknown } | null;
-  const reference = typeof input?.verificationReference === 'string' ? input.verificationReference.trim() : '';
-  if (input?.confirmsAdult !== true || reference.length < 3 || reference.length > 240) return json({ error: 'Confirm you are at least 18 and enter the reference from your age check.' }, 400);
-  const profile = await env.DB.prepare('SELECT age_eligibility FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_eligibility: string }>();
-  if (profile?.age_eligibility === 'blocked') return json({ error: 'Contact support to request a new age review.' }, 409);
-  const ciphertext = await encryptContact(reference, env.SESSION_SECRET || '');
-  await env.DB.prepare(`INSERT INTO user_profiles (user_id, age_eligibility, age_review_reference)
-    VALUES (?, 'unverified', ?) ON CONFLICT(user_id) DO UPDATE SET age_review_reference = excluded.age_review_reference,
-    updated_at = CURRENT_TIMESTAMP WHERE user_profiles.age_eligibility = 'unverified'`)
-    .bind(userId, ciphertext).run();
-  return json({ submitted: true, status: 'unverified' }, 202);
-}
-
-async function adminAgeRequests(env: Env): Promise<Response> {
-  const rows = await env.DB.prepare(`SELECT u.id AS user_id, u.first_name, u.username, u.web_username, p.age_review_reference, p.updated_at
-    FROM user_profiles p JOIN users u ON u.id = p.user_id
-    WHERE p.age_eligibility = 'unverified' AND p.age_review_reference IS NOT NULL
-    ORDER BY p.updated_at LIMIT 100`).all<{ user_id: number; first_name: string; username: string | null; web_username: string | null; age_review_reference: string; updated_at: string }>();
-  const requests = await Promise.all(rows.results.map(async (row) => {
-    let verificationReference = '';
-    try { verificationReference = await decryptContact(row.age_review_reference, env.SESSION_SECRET || ''); } catch { /* Keep the review visible without the protected reference. */ }
-    return { userId: row.user_id, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), verificationReference, submittedAt: row.updated_at };
-  }));
-  return json({ requests });
-}
-
-async function reviewAgeRequest(request: Request, env: Env, adminId: number, userId: number): Promise<Response> {
-  if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
-  const input = await request.json().catch(() => null) as { status?: unknown; verifiedAge?: unknown; reason?: unknown } | null;
-  if (!input || (input.status !== 'verified' && input.status !== 'blocked')) return json({ error: 'Choose verified or blocked.' }, 400);
-  if (input.status === 'verified' && adminId === userId) return json({ error: 'An administrator cannot approve their own age check.' }, 403);
-  const minimumAge = await env.DB.prepare('SELECT minimum_age FROM activation_records ORDER BY approved_at DESC, id DESC LIMIT 1').first<{ minimum_age: number }>();
-  const requiredAge = Math.max(18, minimumAge?.minimum_age || 18);
-  if (input.status === 'verified' && (!Number.isInteger(input.verifiedAge) || (input.verifiedAge as number) < requiredAge || (input.verifiedAge as number) > 120)) return json({ error: `Verify an age of at least ${requiredAge} before approving this account.` }, 400);
-  const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 240) : '';
-  if (input.status === 'blocked' && reason.length < 3) return json({ error: 'Add a short reason for blocking this account.' }, 400);
-  const row = await env.DB.prepare('SELECT age_eligibility FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_eligibility: string }>();
-  if (!row) return json({ error: 'Age review request not found.' }, 404);
-  if (row.age_eligibility !== 'unverified') return json({ error: 'This age request has already been reviewed.' }, 409);
-  const reference = await env.DB.prepare('SELECT age_review_reference FROM user_profiles WHERE user_id = ?').bind(userId).first<{ age_review_reference: string | null }>();
-  try {
-    if (!reference?.age_review_reference || (await decryptContact(reference.age_review_reference, env.SESSION_SECRET || '')).trim().length < 3) throw new Error();
-  } catch { return json({ error: 'The age-check reference is unavailable for review.' }, 409); }
-  const statements = [
-    env.DB.prepare(`UPDATE user_profiles SET age_eligibility = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE user_id = ? AND age_eligibility = 'unverified'`).bind(input.status, userId),
-    env.DB.prepare(`INSERT INTO audit_logs (id, actor_type, actor_id, action, entity_type, entity_id, before_json, after_json)
-      SELECT ?, 'admin', ?, ?, 'user_profile', ?, json_object('ageEligibility', 'unverified'), json_object('ageEligibility', ?, 'verifiedAge', ?, 'reason', ?)
-      WHERE changes() = 1`)
-      .bind(crypto.randomUUID(), String(adminId), input.status === 'verified' ? 'AGE_VERIFIED' : 'AGE_BLOCKED', String(userId), input.status, input.verifiedAge || null, reason || null),
-  ];
-  if (input.status === 'verified') statements.push(...agentSignupBonusStatements(env, userId));
-  await env.DB.batch(statements);
-  return json({ ok: true, status: input.status });
 }
 
 async function playerWalletRequests(env: Env, userId: number): Promise<Response> {
@@ -1270,10 +1308,6 @@ async function agentDashboard(env: Env, userId: number): Promise<Response> {
 async function handleWalletAndStaff(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === '/api/wallet/settings' && request.method === 'GET') return publicPaymentSettings(env);
-  if (url.pathname === '/api/account/age-verification' && request.method === 'POST') {
-    const userId = await readSession(request, env.SESSION_SECRET);
-    return userId ? submitAgeVerification(request, env, userId) : json({ error: 'Sign in before requesting an age review.' }, 401);
-  }
   if (url.pathname.startsWith('/api/wallet/')) {
     const userId = await readSession(request, env.SESSION_SECRET);
     if (!userId) return json({ error: 'Sign in through Telegram or your web account to continue.' }, 401);
@@ -1294,9 +1328,6 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
     const adminId = await superAdmin(request, env);
     if (adminId instanceof Response) return adminId;
     if (url.pathname === '/api/admin/identity' && request.method === 'GET') return json({ isSuperAdmin: true });
-    if (url.pathname === '/api/admin/identity/age-requests' && request.method === 'GET') return adminAgeRequests(env);
-    const ageReview = url.pathname.match(/^\/api\/admin\/identity\/age-requests\/(\d+)$/);
-    if (ageReview && request.method === 'PATCH') return reviewAgeRequest(request, env, adminId, Number(ageReview[1]));
     if (url.pathname === '/api/admin/activation' && request.method === 'GET') return adminActivationStatus(env);
     if (url.pathname === '/api/admin/activation' && request.method === 'POST') return recordActivationEvidence(request, env, adminId);
     if (url.pathname === '/api/admin/wallet/settings' && request.method === 'GET') return adminPaymentSettings(env);
@@ -1370,24 +1401,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === '/api/auth/telegram' && request.method === 'POST') return authenticate(request, env);
   if (url.pathname === '/api/auth/password' && request.method === 'POST') return authenticatePassword(request, env);
+  if (url.pathname === '/api/auth/refresh' && request.method === 'POST') return renewAuthSession(request, env);
+  if (url.pathname === '/api/auth/logout' && request.method === 'POST') return endAuthSession(request, env);
   if (url.pathname === '/api/account/web-login' && request.method === 'POST') return setWebLogin(request, env);
   if (url.pathname === '/api/me' && request.method === 'GET') {
     const id = await readSession(request, env.SESSION_SECRET);
     if (!id) return json({ error: 'Authentication required' }, 401);
     const user = await env.DB.prepare(`SELECT id, first_name, web_username, language,
-      COALESCE((SELECT age_eligibility FROM user_profiles WHERE user_id = users.id), 'unverified') AS age_eligibility,
-      EXISTS(SELECT 1 FROM user_profiles WHERE user_id = users.id AND age_review_reference IS NOT NULL) AS age_review_pending,
-      EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; age_eligibility: string; age_review_pending: number; phone_shared: number }>();
-    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, ageEligibility: user.age_eligibility, ageReviewPending: user.age_review_pending === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
-  }
-  if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/')
-    && !url.pathname.startsWith('/api/admin/')
-    && !['/api/me', '/api/account/web-login', '/api/account/age-verification'].includes(url.pathname)) {
-    const userId = await readSession(request, env.SESSION_SECRET);
-    if (userId) {
-      const ageError = await ageEligibilityError(env, userId);
-      if (ageError) return json({ error: ageError }, 403);
-    }
+      EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
+    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
   }
   const walletStaffResponse = await handleWalletAndStaff(request, env);
   if (walletStaffResponse) return walletStaffResponse;
@@ -1420,8 +1442,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (ticketValue) {
       const ticket = await readRoomTicket(ticketValue, env.SESSION_SECRET);
       if (!ticket || ticket.code !== 'MARKET') return json({ error: 'Room list connection ticket is invalid or expired.' }, 401);
-      const ageError = await ageEligibilityError(env, ticket.userId);
-      if (ageError) return json({ error: ageError }, 403);
+      const eligibilityError = await freePlayEligibilityError(env, ticket.userId);
+      if (eligibilityError) return json({ error: eligibilityError }, 403);
       headers.set('X-Market-User', String(ticket.userId));
     }
     const marketRequest = new Request(`https://market/connect?gameId=${encodeURIComponent(gameId)}`, { method: 'GET', headers });
@@ -1433,6 +1455,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return setupTelegram(request, env);
   }
   if (url.pathname.startsWith('/ws/')) return json({ error: 'Room not found.' }, 404);
+  if (url.pathname.startsWith('/api/')) return json({ error: 'API route not found.' }, 404);
   return env.ASSETS.fetch(request);
 }
 
@@ -1443,6 +1466,7 @@ export default {
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(env.DB.prepare("DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP").run().then(() => undefined).catch(() => undefined));
+    ctx.waitUntil(env.DB.prepare("DELETE FROM auth_sessions WHERE expires_at < CURRENT_TIMESTAMP OR (revoked_at IS NOT NULL AND revoked_at < datetime('now', '-7 days'))").run().then(() => undefined).catch(() => undefined));
     ctx.waitUntil(publicMarketplace(env).fetch('https://market/reconcile', { method: 'POST' }).then(() => undefined).catch(() => undefined));
   },
 };
@@ -1492,8 +1516,8 @@ export class GameRoom {
     const userId = attachment?.userId;
     const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
     if (!userId || text.length > 512) return this.sendError(socket, 'Move could not be read.');
-    const ageError = await ageEligibilityError(this.env, userId);
-    if (ageError) { this.sendError(socket, ageError); socket.close(1008, 'Age check required'); return; }
+    const eligibilityError = await freePlayEligibilityError(this.env, userId);
+    if (eligibilityError) { this.sendError(socket, eligibilityError); socket.close(1008, 'Account not eligible'); return; }
     let input: { type?: unknown; index?: unknown; token?: unknown; action?: unknown; from?: unknown; to?: unknown };
     try { input = JSON.parse(text) as typeof input; } catch { return this.sendError(socket, 'Move could not be read.'); }
     if (typeof input.type !== 'string') return this.sendError(socket, 'Move is not allowed.');

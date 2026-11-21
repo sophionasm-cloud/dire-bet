@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker, { moneyActivationRecorded, validateInitData } from './index';
-import { ageEligibilityError } from './activation';
+import { freePlayEligibilityError } from './activation';
 import { PUBLIC_GAMES } from '@dire-bet/shared';
 
 const token = 'test-bot-token';
@@ -44,6 +44,10 @@ async function signedSession(secret: string, userId: number): Promise<string> {
   return `${body}.${base64url(await sign(secret, body))}`;
 }
 
+async function refreshHash(secret: string, refreshToken: string): Promise<string> {
+  return hex(await sign(secret, `dire-bet-refresh-v1:${refreshToken}`));
+}
+
 describe('Telegram initData verification', () => {
   it('accepts correctly signed, fresh user data', async () => {
     const verified = await validateInitData(await initData(Math.floor(Date.now()/1000)), token);
@@ -63,35 +67,47 @@ describe('Telegram initData verification', () => {
 describe('account sign-in paths', () => {
   it('authenticates an existing Telegram account and returns its saved contact status', async () => {
     const statements: string[] = [];
-    const db = { prepare: (sql: string) => ({ bind: () => ({ first: async () => {
-      statements.push(sql);
-      if (sql.includes('INSERT INTO users (telegram_id')) return { id: 42 };
-      if (sql.includes('SELECT id, first_name, web_username, language')) return { id: 42, first_name: 'Existing', web_username: 'existing_user', language: 'am', age_eligibility: 'verified', age_review_pending: 0, phone_shared: 1 };
-      return null;
-    } }) }) };
+    const db = { prepare: (sql: string) => ({ bind: () => ({
+      first: async () => {
+        statements.push(sql);
+        if (sql.includes('INSERT INTO users (telegram_id')) return { id: 42 };
+        if (sql.includes('SELECT id, first_name, web_username, language')) return { id: 42, first_name: 'Existing', web_username: 'existing_user', language: 'am', phone_shared: 1 };
+        return null;
+      },
+      run: async () => { statements.push(sql); return { success: true, meta: { changes: 1 } }; },
+    }) }) };
     const env = { TELEGRAM_BOT_TOKEN: token, SESSION_SECRET: 'session-secret', DB: db } as never;
     const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/telegram', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData: await initData(Math.floor(Date.now() / 1000)) }),
     }), env);
     expect(response.status).toBe(200);
-    const data = await response.json() as { token: string };
+    const data = await response.json() as { token: string; refreshToken: string; expiresIn: number };
+    expect(data.refreshToken).toBeTruthy();
+    expect(data.expiresIn).toBe(24 * 60 * 60);
     expect(statements.filter((sql) => sql.includes('INSERT INTO users (telegram_id'))).toHaveLength(1);
-    expect(statements[0]).toContain('ON CONFLICT(telegram_id) DO UPDATE');
+    expect(statements.find((sql) => sql.includes('INSERT INTO users (telegram_id'))).toContain('ON CONFLICT(telegram_id) DO UPDATE');
+    expect(statements.some((sql) => sql.includes('INSERT INTO auth_sessions'))).toBe(true);
     const profile = await worker.fetch(new Request('https://dire-bet.test/api/me', { headers: { Authorization: `Bearer ${data.token}` } }), env);
     expect(profile.status).toBe(200);
-    expect((await profile.json() as { user: { displayName: string; phoneShared: boolean } }).user).toMatchObject({ displayName: 'existing_user', phoneShared: true });
+    const user = (await profile.json() as { user: { displayName: string; phoneShared: boolean; ageEligibility?: string; ageReviewPending?: boolean } }).user;
+    expect(user).toMatchObject({ displayName: 'existing_user', phoneShared: true });
+    expect(user.ageEligibility).toBeUndefined();
+    expect(user.ageReviewPending).toBeUndefined();
   });
 
   it('keeps the regular browser username and PIN login working', async () => {
     const secret = 'browser-session-secret';
     const salt = 'AAECAwQFBgcICQoLDA0ODw';
-    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ id: 7, first_name: 'Browser', web_username: 'browser_user', password_salt: salt, password_hash: await passwordHash('12345678', salt, secret) }) }) }) };
+    const db = { prepare: () => ({ bind: () => ({
+      first: async () => ({ id: 7, first_name: 'Browser', web_username: 'browser_user', password_salt: salt, password_hash: await passwordHash('12345678', salt, secret) }),
+      run: async () => ({ success: true, meta: { changes: 1 } }),
+    }) }) };
     const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
     const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/password', {
       method: 'POST', headers: { Origin: 'https://dire-bet.test', 'content-type': 'application/json' }, body: JSON.stringify({ username: 'browser_user', password: '12345678' }),
     }), { SESSION_SECRET: secret, DB: db, RATE_LIMITER: rateLimiter } as never);
     expect(response.status).toBe(200);
-    expect((await response.json() as { token: string; user: { displayName: string } })).toMatchObject({ user: { displayName: 'browser_user' } });
+    expect(await response.json() as { token: string; refreshToken: string; user: { displayName: string } }).toMatchObject({ user: { displayName: 'browser_user' } });
   });
 });
 
@@ -104,7 +120,7 @@ describe('American Texas listing', () => {
     const secret = 'coming-soon-room-secret';
     const authorization = `Bearer ${await signedSession(secret, 9)}`;
     const db = { prepare: (sql: string) => ({ bind: () => ({ first: async () => {
-      if (sql.includes('LEFT JOIN user_profiles')) return { status: 'active', age_eligibility: 'verified' };
+      if (sql.includes('SELECT status FROM users')) return { status: 'active' };
       if (sql.includes('FROM user_contacts')) return { user_id: 9 };
       return null;
     } }) }) };
@@ -190,7 +206,7 @@ describe('wallet proof and agent signup credit', () => {
     expect(rejectedStatements).toHaveLength(0);
   });
 
-  it('links a referral and leaves its 10 Birr credit pending until age approval', async () => {
+  it('links a referral and leaves its 10 Birr credit pending until the real-money age gate opens', async () => {
     const statements: { sql: string; values: unknown[] }[] = [];
     const authorization = `Bearer ${await signedSession(secret, 71)}`;
     const response = await worker.fetch(new Request('https://dire-bet.test/api/referrals/claim', {
@@ -251,27 +267,152 @@ describe('wallet proof and agent signup credit', () => {
   });
 });
 
-describe('adult access gate', () => {
-  const env = (row: { status: string; age_eligibility: string | null } | null) => ({ DB: {
+describe('free-play eligibility', () => {
+  const env = (row: { status: string } | null) => ({ DB: {
     prepare: () => ({ bind: () => ({ first: async () => row }) }),
   } } as never);
-  it('blocks missing, unverified and inactive accounts', async () => {
-    expect(await ageEligibilityError(env(null), 1)).toContain('not eligible');
-    expect(await ageEligibilityError(env({ status:'active', age_eligibility:'unverified' }), 1)).toContain('18+');
-    expect(await ageEligibilityError(env({ status:'suspended', age_eligibility:'verified' }), 1)).toContain('not eligible');
+  it('blocks missing and inactive accounts', async () => {
+    expect(await freePlayEligibilityError(env(null), 1)).toContain('not eligible');
+    expect(await freePlayEligibilityError(env({ status:'suspended' }), 1)).toContain('not eligible');
   });
-  it('allows active accounts after admin age approval', async () => {
-    expect(await ageEligibilityError(env({ status:'active', age_eligibility:'verified' }), 1)).toBeNull();
+  it('allows active accounts without an age review', async () => {
+    expect(await freePlayEligibilityError(env({ status:'active' }), 1)).toBeNull();
   });
-  it('blocks unverified signed-in players from protected API routes', async () => {
+  it('does not apply an age gate to signed-in API routes', async () => {
     const secret = 'test-session-secret';
-    const body = `${base64url(encoder.encode(JSON.stringify({ alg:'HS256', typ:'JWT' })))}.${base64url(encoder.encode(JSON.stringify({ sub:'1', exp:Math.floor(Date.now()/1000)+60 })))}`;
-    const session = `${body}.${base64url(await sign(secret, body))}`;
+    const session = await signedSession(secret, 1);
     const response = await worker.fetch(new Request('https://dire-bet.test/api/rooms', {
-      method:'POST', headers:{ Authorization:`Bearer ${session}`, 'Content-Type':'application/json' }, body:'{}',
-    }), { SESSION_SECRET:secret, DB:{ prepare:() => ({ bind:() => ({ first:async() => ({ status:'active', age_eligibility:'unverified' }) }) }) } } as never);
-    expect(response.status).toBe(403);
-    expect((await response.json() as { error:string }).error).toContain('18+');
+      method:'POST', headers:{ Authorization:`Bearer ${session}`, Origin:'https://dire-bet.test', 'Content-Type':'application/json' }, body:'{}',
+    }), { SESSION_SECRET:secret, DB:{ prepare: () => ({ bind: () => ({ first:async() => ({ user_id: 1 }) }) }) }, RATE_LIMITER: { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed:true }), { status:200 }) }) } } as never);
+    expect(response.status).toBe(409);
+    expect((await response.json() as { error:string }).error).toBe('This game cannot be played online.');
+  });
+});
+
+describe('persistent sessions', () => {
+  const secret = 'refresh-test-secret';
+  const refreshToken = 'r'.repeat(32);
+
+  it('rotates the refresh token and issues a fresh access token', async () => {
+    const captured: { sql: string; values: unknown[] }[] = [];
+    const db = {
+      prepare(sql: string) {
+        const statement = {
+          sql,
+          values: [] as unknown[],
+          bind(...values: unknown[]) { this.values = values; return this; },
+          first: async () => sql.includes('FROM auth_sessions s') ? {
+            id: 'session-old', user_id: 42, family_id: 'family-1',
+            expires_at: new Date(Date.now() + 86_400_000).toISOString(), revoked_at: null,
+            status: 'active', first_name: 'Existing', web_username: 'existing_user', language: 'en',
+          } : null,
+          run: async () => ({ success: true, meta: { changes: 1 } }),
+        };
+        captured.push(statement);
+        return statement;
+      },
+      batch: async (statements: { sql: string; values: unknown[] }[]) => { captured.push(...statements); return [{ meta: { changes: 1 } }, { meta: { changes: 1 } }]; },
+    };
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/refresh', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }),
+    }), { SESSION_SECRET: secret, DB: db } as never);
+    expect(response.status).toBe(200);
+    const data = await response.json() as { token: string; refreshToken: string; expiresIn: number; user: { displayName: string } };
+    expect(data.token).toBeTruthy();
+    expect(data.refreshToken).toBeTruthy();
+    expect(data.refreshToken).not.toBe(refreshToken);
+    expect(data.expiresIn).toBe(24 * 60 * 60);
+    expect(data.user.displayName).toBe('existing_user');
+    expect(captured.some((statement) => statement.sql.includes('UPDATE auth_sessions SET revoked_at'))).toBe(true);
+    expect(captured.some((statement) => statement.sql.includes('INSERT INTO auth_sessions'))).toBe(true);
+    expect(captured.find((statement) => statement.sql.includes('SELECT s.id'))?.values).toContain(await refreshHash(secret, refreshToken));
+  });
+
+  it('rejects a revoked refresh token', async () => {
+    const db = { prepare: () => ({ bind: () => ({
+      first: async () => ({ id: 'session-old', user_id: 42, family_id: 'family-1', expires_at: new Date(Date.now() + 86_400_000).toISOString(), revoked_at: '2026-11-20T00:00:00Z', status: 'active', first_name: 'Existing', web_username: null, language: 'en' }),
+    }) }) };
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/refresh', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }),
+    }), { SESSION_SECRET: secret, DB: db } as never);
+    expect(response.status).toBe(401);
+  });
+
+  it('revokes the refresh token family on logout', async () => {
+    const captured: { sql: string; values: unknown[] }[] = [];
+    const db = { prepare: (sql: string) => {
+      const statement = {
+        sql,
+        values: [] as unknown[],
+        bind(...values: unknown[]) { this.values = values; return this; },
+        first: async () => sql.includes('SELECT family_id FROM auth_sessions') ? { family_id: 'family-1' } : null,
+        run: async () => { captured.push(statement); return { success: true, meta: { changes: 1 } }; },
+      };
+      return statement;
+    } };
+    const response = await worker.fetch(new Request('https://dire-bet.test/api/auth/logout', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }),
+    }), { SESSION_SECRET: secret, DB: db } as never);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    const update = captured.find((statement) => statement.sql.includes('UPDATE auth_sessions SET revoked_at'));
+    expect(update).toBeTruthy();
+    expect(update?.values).toContain('family-1');
+  });
+
+  it('removes the simulation age-review routes', async () => {
+    const secret = 'removed-age-route-secret';
+    const player = `Bearer ${await signedSession(secret, 1)}`;
+    const admin = `Bearer ${await signedSession(secret, 7788)}`;
+    const env = { SESSION_SECRET: secret, SUPER_ADMIN_TELEGRAM_ID: '7788', DB: { prepare: (sql: string) => ({ bind: () => ({ first: async () => sql.includes('SELECT telegram_id FROM users') ? { telegram_id: 7788 } : null }) }) } } as never;
+    const submit = await worker.fetch(new Request('https://dire-bet.test/api/account/age-verification', {
+      method: 'POST', headers: { Authorization: player, 'content-type': 'application/json' }, body: JSON.stringify({ confirmsAdult: true, verificationReference: 'ref' }),
+    }), env);
+    const list = await worker.fetch(new Request('https://dire-bet.test/api/admin/identity/age-requests', { headers: { Authorization: admin } }), env);
+    const review = await worker.fetch(new Request('https://dire-bet.test/api/admin/identity/age-requests/1', {
+      method: 'PATCH', headers: { Authorization: admin, 'content-type': 'application/json' }, body: JSON.stringify({ status: 'verified', verifiedAge: 18 }),
+    }), env);
+    expect(submit.status).toBe(404);
+    expect(list.status).toBe(404);
+    expect(review.status).toBe(404);
+  });
+});
+
+describe('Telegram /start contact prompt', () => {
+  async function startKeyboard(hasContact: boolean) {
+    const calls: Record<string, unknown>[] = [];
+    const telegram = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ id: 42, phone_shared: hasContact ? 1 : 0 }) }) }) };
+    try {
+      const response = await worker.fetch(new Request('https://dire-bet.test/telegram/webhook', {
+        method: 'POST',
+        headers: { 'X-Telegram-Bot-Api-Secret-Token': 'hook-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ message: { text: '/start', chat: { id: 99 }, from: { id: 123456789, first_name: 'Existing', language_code: 'en' } } }),
+      }), { TELEGRAM_BOT_TOKEN: token, TELEGRAM_WEBHOOK_SECRET: 'hook-secret', DB: db } as never);
+      expect(response.status).toBe(200);
+    } finally {
+      telegram.mockRestore();
+    }
+    const call = calls.find((entry) => (entry.reply_markup as { keyboard?: unknown } | undefined)?.keyboard);
+    expect(call).toBeTruthy();
+    return call as { text: string; reply_markup: { keyboard: Array<Array<Record<string, unknown>>> } };
+  }
+
+  it('does not ask a registered user to share contact again', async () => {
+    const call = await startKeyboard(true);
+    const flat = call.reply_markup.keyboard.flat();
+    expect(flat.some((button) => button.request_contact === true)).toBe(false);
+    expect(call.text).toContain('menu below');
+  });
+
+  it('asks a new user to share contact only once during registration', async () => {
+    const call = await startKeyboard(false);
+    const flat = call.reply_markup.keyboard.flat();
+    expect(flat.some((button) => button.request_contact === true)).toBe(true);
+    expect(call.text).toContain('Optional web login');
   });
 });
 
