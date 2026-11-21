@@ -56,6 +56,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   const [connection, setConnection] = useState<'connecting'|'connected'|'disconnected'>('connecting');
   const [error, setError] = useState('');
   const socketRef = useRef<WebSocket | null>(null);
+  const walletRefresh = useRef('');
   const winning = useMemo(() => snapshot?.gameId === 'xo' ? winningLine((snapshot.game as XOState).board) : [], [snapshot]);
 
   useEffect(() => {
@@ -77,6 +78,14 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     socket.onclose = () => setConnection('disconnected');
     return () => { if (socketRef.current === socket) socketRef.current = null; socket.close(1000, 'Leaving room'); };
   }, [room.code, ticket, t]);
+
+  useEffect(() => {
+    if (!snapshot || (snapshot.status !== 'finished' && snapshot.status !== 'cancelled')) return;
+    const key = `${snapshot.code}:${snapshot.status}`;
+    if (walletRefresh.current === key) return;
+    walletRefresh.current = key;
+    window.dispatchEvent(new Event('direbet:wallet-changed'));
+  }, [snapshot]);
 
   const send = useCallback((payload: unknown) => { if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify(payload)); }, []);
   const reconnect = async () => {

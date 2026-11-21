@@ -37,6 +37,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const requestKey = useRef('');
   if (!requestKey.current) requestKey.current = crypto.randomUUID();
   const launching = useRef('');
+  const settledRefresh = useRef('');
   const amount = entry === 'free' ? 0 : entry === -1 ? Number(customAmount) : entry;
   const insufficient = Boolean(token && balance !== null && entry !== 'free' && amount > balance);
   const title = gameTitle(gameId);
@@ -116,6 +117,14 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   }, []);
 
   useEffect(() => {
+    if (!activeRoom || !['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(activeRoom.status)) return;
+    const key = `${activeRoom.id}:${activeRoom.status}`;
+    if (settledRefresh.current === key) return;
+    settledRefresh.current = key;
+    window.dispatchEvent(new Event('direbet:wallet-changed'));
+  }, [activeRoom]);
+
+  useEffect(() => {
     if (!token || !activeRoom || !['IN_PROGRESS', 'SETTLING', 'COMPLETED'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
     launching.current = activeRoom.id;
     let live = true;
@@ -142,6 +151,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
       requestKey.current = crypto.randomUUID();
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
+      window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
     finally { setBusy(false); }
   };
@@ -156,6 +166,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
+      window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
     finally { setBusy(false); }
   };
@@ -169,6 +180,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const result = await response.json() as ResponseBody;
       if (!response.ok) throw new Error(result.error || t('onlineDisconnected'));
       setActiveRoom(result.room || null); setRooms((items) => items.filter((item) => item.id !== activeRoom.id));
+      window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
     finally { setBusy(false); }
   };

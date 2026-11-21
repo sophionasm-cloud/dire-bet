@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
 import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
 import { languageNames, translate, type Language, type TranslationKey } from './i18n';
@@ -7,6 +7,8 @@ import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeG
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby from './games/PublicRoomLobby';
 import WalletApp from './wallet/WalletApp';
+import DireBetPoster from './DireBetPoster';
+import WalletBalancePill from './WalletBalancePill';
 import { clearAuth, installAuthFetch, isSignedOut, onAuthChange, readAccessToken, readRefreshToken, refreshSession, storeAuth } from './authClient';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));
@@ -19,12 +21,13 @@ type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'ru
 type Account = { webUsername: string | null; phoneShared: boolean };
 
 const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', om: 'OM' };
-const bannerSlides = [
-  { image: '/promotions/amharic-games.png', alt: 'Dire Bet Amharic gaming poster with players, cards, numbers and trophies' },
-  { image: '/promotions/community-games.png', alt: 'Dire Bet poster showing multiple games and people playing together' },
-  { image: '/promotions/blue-games.png', alt: 'Blue Dire Bet game poster featuring XO, Ludo, Bingo and Spin' },
-  { image: '/promotions/play-together.png', alt: 'Dire Bet lifestyle poster showing two people playing together' },
+const bannerSlides: { image: string; alt: string; poster?: boolean; ratio: number }[] = [
+  { image: '/promotions/dire-bet-poster-bg.jpg', alt: 'Dire Bet friends playing together poster with Ludo, checkers and XO artwork', poster: true, ratio: 727 / 1600 },
+  { image: '/promotions/amharic-games.png', alt: 'Dire Bet Amharic gaming poster with players, cards, numbers and trophies', ratio: 543 / 1280 },
+  { image: '/promotions/community-games.png', alt: 'Dire Bet poster showing multiple games and people playing together', ratio: 698 / 1280 },
+  { image: '/promotions/blue-games.png', alt: 'Blue Dire Bet game poster featuring XO, Ludo, Bingo and Spin', ratio: 543 / 1280 },
 ];
+const posterHeadline = translate('am', 'tagline');
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
   const paths: Record<string, ReactNode> = {
@@ -334,7 +337,10 @@ function App() {
 
   return <main className="player-shell">
     <header className="topbar">
-      <a className="wordmark" href="/" onClick={(e) => { e.preventDefault(); nav('home'); }} aria-label="DIRE BET home"><span>DIRE</span><b>BET</b><i>✦</i></a>
+      <div className="topbar-brand">
+        <a className="wordmark" href="/" onClick={(e) => { e.preventDefault(); nav('home'); }} aria-label="DIRE BET home"><span>DIRE</span><b>BET</b><i>✦</i></a>
+        <WalletBalancePill token={sessionToken} pending={telegramAuthPending} onOpen={() => nav('wallet')} />
+      </div>
       <div className="top-actions">
         <button className="icon-button language-trigger" onClick={() => setOverlay('language')} aria-label={t('language')}><Icon name="globe" size={17}/><span>{languageCodes[language]}</span></button>
         <button className="icon-button bell-button" onClick={() => setOverlay('notifications')} aria-label={t('matches')}><Icon name="bell" size={18}/><span className="notification-dot" /></button>
@@ -345,10 +351,9 @@ function App() {
     {page === 'home' && <section className="screen home-screen">
       {sessionToken ? <div className="profile-welcome"><div className="profile-avatar">{displayName.slice(0, 1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting')}</span></div><button className="profile-open" onClick={() => nav('account')}>{t('account')}</button></div> : telegramMiniApp ? <div className="telegram-auth-status" role="status"><span>{telegramAuthPending ? t('onlineConnecting') : t('telegramAuthFailed')}</span>{!telegramAuthPending && <button type="button" onClick={retryTelegramAuthentication}>{t('retryTelegramAuth')}</button>}</div> : <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><div className="guest-actions"><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a><button className="guest-login" onClick={() => nav('login')}>{t('webLogin')}</button></div></div>}
       <section className="promo-carousel" aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }} onTouchStart={(event) => { const touch = event.touches[0]; promoTouchStart.current = { x: touch.clientX, y: touch.clientY }; }} onTouchEnd={(event) => { const start = promoTouchStart.current; const touch = event.changedTouches[0]; promoTouchStart.current = null; if (!start || !touch) return; const dx = touch.clientX - start.x; const dy = touch.clientY - start.y; if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) setBanner((current) => (current + (dx < 0 ? 1 : bannerSlides.length - 1)) % bannerSlides.length); }} onTouchCancel={() => { promoTouchStart.current = null; }}>
-        <div className="promo-window"><div className="promo-track" style={{ transform: `translateX(-${banner * 100}%)` }}>
-          {bannerSlides.map((slide, index) => <div key={slide.image} className="promo-slide" role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${bannerSlides.length}`}><img src={slide.image} alt={slide.alt} draggable={false} decoding="async" /></div>)}
+        <div className="promo-window" style={{ '--promo-ratio': bannerSlides[banner].ratio } as CSSProperties}><div className="promo-track" style={{ transform: `translateX(-${banner * 100}%)` }}>
+          {bannerSlides.map((slide, index) => <div key={slide.image} className="promo-slide" role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${bannerSlides.length}`} aria-hidden={banner !== index}>{slide.poster ? <DireBetPoster headline={posterHeadline} quickLabel={t('quickPlay')} onQuickPlay={openXo} active={banner === index}/> : <img src={slide.image} alt={slide.alt} draggable={false} decoding="async" />}</div>)}
         </div></div>
-        <button className="primary-button promo-quick-play" onClick={openXo}>{t('quickPlay')}<span>↗</span></button>
         <div className="promo-dots" role="group" aria-label={t('chooseGame')}>{bannerSlides.map((slide, index) => <button key={slide.image} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => setBanner(index)} />)}</div>
       </section>
 

@@ -627,3 +627,66 @@
 @media(prefers-reduced-motion:reduce){.promo-track{transition:none}}
 .wallet-simulation-note{display:grid;gap:4px;margin:12px 0;padding:12px;border:1px solid #b3904c66;border-radius:12px;background:linear-gradient(110deg,#151b25,#111317);color:#e7cf91;font-size:11px;line-height:1.45}.wallet-simulation-note span{color:#c5cbd4;font-size:10px}.wallet-simulation-note strong{font-size:11px;letter-spacing:.04em}.payment-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;margin:12px 0}.payment-summary-grid article{min-width:0;display:grid;gap:5px;padding:11px;border:1px solid #293b50;border-radius:12px;background:linear-gradient(145deg,#101b29,#101317)}.payment-summary-grid span{color:#aab4c0;font-size:9px;line-height:1.3}.payment-summary-grid strong{color:#f0d17e;font-size:17px;line-height:1.2}.payment-notification-control{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 12px;color:var(--muted);font-size:10px}.payment-notification-control button{flex:none}.payment-request-card .room-admin-status{max-width:42%;text-align:center}.payment-detail-grid dd{overflow-wrap:anywhere}
 @media(max-width:520px){.payment-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.payment-summary-grid article:last-child{grid-column:1/-1}.payment-notification-control{align-items:flex-start}.payment-request-main{gap:8px}.payment-request-meta{display:grid;gap:6px}.payment-review-actions{display:grid;grid-template-columns:1fr}.payment-review-actions button{width:100%}}
+
+/* DIRE BET campaign poster */
+.promo-carousel{container-type:inline-size}
+.promo-window{height:auto;height:calc(100cqw * var(--promo-ratio,.4544));transition:height .45s cubic-bezier(.22,.72,.2,1)}
+.dire-poster{position:relative;width:100%;aspect-ratio:1600/727;overflow:hidden;border:1px solid rgba(216,185,111,.55);border-radius:18px;background:#040c1c url('/promotions/dire-bet-poster-bg.jpg') left center/cover no-repeat;isolation:isolate;container-type:inline-size;box-shadow:inset 0 0 0 1px rgba(255,229,160,.06)}
+.poster-glow{position:absolute;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse 34% 58% at 58% 42%,rgba(30,110,255,.28),transparent 72%),radial-gradient(ellipse 30% 38% at 84% 84%,rgba(232,183,88,.16),transparent 72%),radial-gradient(ellipse 28% 42% at 10% 90%,rgba(22,92,220,.12),transparent 70%);mix-blend-mode:screen}
+.poster-grid{position:absolute;top:0;right:0;bottom:0;left:50%;z-index:1;pointer-events:none;background-image:linear-gradient(rgba(120,180,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(120,180,255,.055) 1px,transparent 1px);background-size:4.2cqw 4.2cqw;opacity:.55;-webkit-mask-image:linear-gradient(90deg,transparent,#000 32%);mask-image:linear-gradient(90deg,transparent,#000 32%)}
+.poster-copy{position:absolute;top:0;right:0;bottom:0;left:50%;z-index:3;display:flex;flex-direction:column;align-items:flex-start;padding:3.4cqw 4.6cqw 3.2cqw 4.2cqw;min-width:0}
+.poster-brand{display:flex;align-items:center;gap:1.1cqw;color:#f6e7c6;font-size:max(6.5px,2.1cqw);font-weight:700;letter-spacing:.15em;line-height:1;white-space:nowrap}
+.poster-brand svg{width:max(10px,3.2cqw);height:auto;flex:none;filter:drop-shadow(0 0 6px rgba(240,199,102,.28))}
+.poster-brand b{color:#f0c766}
+.poster-brand i{color:#e7bd63;font-size:max(5px,1.6cqw);font-style:normal;margin-left:.3cqw}
+.poster-headline{margin:1.6cqw 0 0;font-family:'Noto Sans Ethiopic',Inter,system-ui,sans-serif;font-size:max(13px,5cqw);line-height:1.05;font-weight:600;letter-spacing:-.018em;color:#fff;text-shadow:0 2px 16px rgba(0,0,0,.55)}
+.poster-headline span,.poster-headline em{display:block}
+.poster-headline em{font-style:normal;color:#f2cd77;background:linear-gradient(180deg,#ffe9ab 12%,#e8bf62 58%,#c79434 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 2px 8px rgba(232,191,98,.2))}
+.poster-tagline{margin:1.1cqw 0 0;color:#cfdaea;font-size:max(6.5px,1.85cqw);font-weight:500;letter-spacing:.055em;line-height:1.3;text-shadow:0 1px 8px rgba(0,0,0,.5)}
+.poster-quick-play{margin-top:auto;align-self:flex-end;display:inline-flex;align-items:center;gap:max(4px,1.2cqw);min-height:max(24px,7.1cqw);padding:0 max(9px,2.4cqw);border:1px solid rgba(255,238,176,.85);border-radius:999px;background:linear-gradient(180deg,#ffe6a0 0%,#f4c85f 46%,#dba63c 100%);color:#1c1303;font-size:max(8px,2.15cqw);font-weight:800;letter-spacing:.01em;white-space:nowrap;cursor:pointer;box-shadow:0 5px 16px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.7);transition:transform .18s var(--ease),box-shadow .18s var(--ease),filter .18s var(--ease)}
+.poster-quick-play:hover{filter:brightness(1.07);transform:translateY(-1px);box-shadow:0 8px 22px rgba(0,0,0,.48),0 0 18px rgba(244,200,95,.28),inset 0 1px 0 rgba(255,255,255,.8)}
+.poster-quick-play:active{transform:translateY(1px) scale(.985);box-shadow:0 3px 10px rgba(0,0,0,.45),inset 0 2px 4px rgba(90,55,0,.28)}
+.poster-quick-play:focus-visible{outline:2px solid #ffe6a0;outline-offset:3px}
+.poster-quick-arrow{display:grid;place-items:center;width:max(14px,3.3cqw);height:max(14px,3.3cqw);border-radius:50%;background:rgba(28,19,3,.12);font-size:max(9px,2.5cqw);line-height:1}
+.poster-games{position:absolute;left:27%;bottom:3.8%;z-index:2;width:29%;display:flex;align-items:flex-end;gap:3%;pointer-events:none}
+.poster-games::before{content:"";position:absolute;inset:-12% -8% -14%;background:radial-gradient(ellipse at center,rgba(40,120,255,.22),transparent 68%);filter:blur(4px);z-index:-1}
+.poster-game-tile{width:31.333%;aspect-ratio:1;display:grid;place-items:center;padding:8%;border:1px solid rgba(227,188,101,.5);border-radius:22%;background:linear-gradient(160deg,rgba(17,38,66,.96),rgba(4,10,22,.98));box-shadow:0 4px 12px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.12),0 0 14px rgba(30,110,255,.16)}
+.poster-game-tile svg{width:100%;height:100%;display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))}
+.poster-game-tile.ludo{transform:rotate(-7deg)}
+.poster-game-tile.checkers{transform:translateY(-7%) rotate(4deg)}
+.poster-game-tile.xo{transform:translateY(2%) rotate(-3deg)}
+
+/* Navbar wallet balance */
+.topbar-brand{display:flex;align-items:center;gap:7px;min-width:0}
+.navbar-wallet{display:inline-flex;align-items:center;gap:5px;height:30px;min-width:0;max-width:118px;padding:0 8px 0 7px;border:1px solid rgba(227,188,101,.3);border-radius:999px;background:linear-gradient(135deg,rgba(17,34,56,.94),rgba(7,13,23,.97));color:#f6e7c6;cursor:pointer;white-space:nowrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 4px 12px rgba(0,0,0,.25);transition:border-color .18s,background .18s,transform .18s,box-shadow .18s}
+.navbar-wallet:hover{border-color:rgba(240,205,120,.62);background:linear-gradient(135deg,rgba(23,45,73,.98),rgba(9,17,30,.99));box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 5px 16px rgba(0,0,0,.3),0 0 12px rgba(40,120,255,.1)}
+.navbar-wallet:active{transform:scale(.97)}
+.navbar-wallet svg{width:13px;height:13px;flex:none;color:#e8c878;filter:drop-shadow(0 0 4px rgba(232,200,120,.18))}
+.navbar-wallet-label{flex:none;color:#bda46d;font-size:7px;font-weight:800;letter-spacing:.11em;line-height:1}
+.navbar-wallet-amount{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#f7e9c9;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.015em;line-height:1}
+.navbar-wallet-amount.is-loading{color:#a99a7e;letter-spacing:.08em;animation:wallet-pulse 1.2s ease-in-out infinite}
+.navbar-wallet[data-state="error"]{border-color:rgba(255,140,110,.32)}
+.navbar-wallet-error{flex:none;width:11px;height:11px;display:grid;place-items:center;border-radius:50%;background:rgba(255,107,107,.16);color:#ff9b8a;font-size:7px;font-weight:800;line-height:1}
+@keyframes wallet-pulse{0%,100%{opacity:.45}50%{opacity:1}}
+
+@media(max-width:400px){
+  .topbar-brand{gap:5px}
+  .navbar-wallet{height:28px;max-width:104px;padding:0 7px 0 6px;gap:4px}
+  .navbar-wallet svg{width:12px;height:12px}
+  .navbar-wallet-label{font-size:6.5px}
+  .navbar-wallet-amount{font-size:9px}
+  .poster-copy{padding:3.2cqw 4.4cqw 3cqw 4cqw}
+  .poster-brand{letter-spacing:.11em}
+  .poster-games{left:26%;width:30%}
+}
+@media(max-width:350px){
+  .navbar-wallet{height:26px;max-width:90px;padding:0 6px 0 5px;gap:3px}
+  .navbar-wallet svg{width:11px;height:11px}
+  .navbar-wallet-label{font-size:6px}
+  .navbar-wallet-amount{font-size:8px}
+  .wordmark{font-size:12px}
+  .poster-copy{padding:2.8cqw 4cqw 2.6cqw 3.6cqw}
+  .poster-headline{letter-spacing:-.03em}
+  .poster-tagline{letter-spacing:.02em}
+  .poster-games{left:24%;width:28%}
+}
