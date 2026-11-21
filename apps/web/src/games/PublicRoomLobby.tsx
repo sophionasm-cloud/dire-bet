@@ -188,33 +188,44 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const fullPool = amount * 2;
   const payout = fullPool;
 
+  if (activeRoom) {
+    return <WaitingRoom
+      room={activeRoom}
+      countdown={countdown}
+      busy={busy}
+      connection={connection}
+      displayName={displayName}
+      onCancel={() => void cancel()}
+      onBack={() => { setActiveRoom(null); void loadRooms(); }}
+      t={t}
+    />;
+  }
+
   return <section className="screen public-lobby-screen">
     <header className="public-lobby-header"><button className="back-button" onClick={onExit}>← {t('home')}</button><div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
     <p className="public-lobby-intro">{t('marketLobbyIntro')}</p>
     {token && balance !== null && <div className="demo-credit-balance"><span>{t('marketDemoBalance')}</span><strong>{formatCredits(balance)} {t('etb')}</strong><small>{t('marketCreditOnly')}</small></div>}
     {!token && <div className="market-signin-hint" role="status">{t('marketTelegramRequired')}</div>}
-    {!activeRoom ? <>
-      <div className="market-room-browser">
-        <div className="market-section-heading"><div><span className="eyebrow">{t('marketPublicRooms')}</span><h2>{t('marketAvailableRooms')} <b>{rooms.length}</b></h2></div><button className="market-refresh" type="button" aria-label={t('marketRefresh')} title={t('marketRefresh')} disabled={refreshing || loading} onClick={() => { setRefreshing(true); void loadRooms().finally(() => setRefreshing(false)); }}>{refreshing ? '…' : '↻'}</button></div>
-        <div className="public-room-list">
-          {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => void join(room)} t={t}/>) : <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div>}
-        </div>
+    <div className="market-room-browser">
+      <div className="market-section-heading"><div><span className="eyebrow">{t('marketPublicRooms')}</span><h2>{t('marketAvailableRooms')} <b>{rooms.length}</b></h2></div><button className="market-refresh" type="button" aria-label={t('marketRefresh')} title={t('marketRefresh')} disabled={refreshing || loading} onClick={() => { setRefreshing(true); void loadRooms().finally(() => setRefreshing(false)); }}>{refreshing ? '…' : '↻'}</button></div>
+      <div className="public-room-list">
+        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => void join(room)} t={t}/>) : <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div>}
       </div>
-      <div className="market-create-panel">
-        <div className="market-form-heading"><div><span className="eyebrow">{t('marketCreateRoom')}</span><h2>{t('marketEntryAmount')}</h2></div><span className="market-capacity">2 {t('marketPlayersRequired')}</span></div>
-        {gameId === 'ludo' && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
-        <div className="market-option-heading"><strong>{t('marketEntryAmount')}</strong><small>{t('marketDemoCredits')}</small></div>
-        <div className="market-entry-options"><button type="button" aria-pressed={entry === 'free'} className={entry === 'free' ? 'selected' : ''} onClick={() => setEntry('free')}><strong>{t('marketFree')}</strong></button>{settings.standardAmounts.map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
-        {entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
-        {gameId === 'ludo' && <fieldset className="market-color-field"><legend>{t('marketColor')}</legend><button type="button" aria-pressed={player0Color === 'yellow'} className={player0Color === 'yellow' ? 'selected' : ''} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><span>{t('marketYellow')}</span><b>VS</b><i className="color-token red-token"/><span>{t('marketRed')}</span></button><button type="button" aria-pressed={player0Color === 'green'} className={player0Color === 'green' ? 'selected' : ''} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><span>{t('marketGreen')}</span><b>VS</b><i className="color-token blue-token"/><span>{t('marketBlue')}</span></button></fieldset>}
-        <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>
-        <div className="market-preview"><span>{t('marketPerPlayer')} <strong>{entry === 'free' ? t('marketFree') : `${amount} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketPlayersRequired')} <strong>2</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(fullPool)} {t('marketDemoCredits')}</strong></span><span>{t('marketEstimatedPayout')} <strong>{formatCredits(payout)} {t('marketDemoCredits')}</strong></span><small>{t('marketSimulationNote')}</small></div>
-        {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
-        {message && <p className="market-message" role="alert">{message}</p>}
-        <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient} onClick={() => void create()}>{busy ? t('marketCreating') : t('marketCreateAction')}<span>↗</span></button>
-        <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
-      </div>
-    </> : <WaitingRoom room={activeRoom} countdown={countdown} busy={busy} onCancel={() => void cancel()} onBack={() => { setActiveRoom(null); void loadRooms(); }} t={t}/>}
+    </div>
+    <div className="market-create-panel">
+      <div className="market-form-heading"><div><span className="eyebrow">{t('marketCreateRoom')}</span><h2>{t('marketEntryAmount')}</h2></div><span className="market-capacity">2 {t('marketPlayersRequired')}</span></div>
+      {gameId === 'ludo' && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
+      <div className="market-option-heading"><strong>{t('marketEntryAmount')}</strong><small>{t('marketDemoCredits')}</small></div>
+      <div className="market-entry-options"><button type="button" aria-pressed={entry === 'free'} className={entry === 'free' ? 'selected' : ''} onClick={() => setEntry('free')}><strong>{t('marketFree')}</strong></button>{settings.standardAmounts.map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
+      {entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
+      {gameId === 'ludo' && <fieldset className="market-color-field"><legend>{t('marketColor')}</legend><button type="button" aria-pressed={player0Color === 'yellow'} className={player0Color === 'yellow' ? 'selected' : ''} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><span>{t('marketYellow')}</span><b>VS</b><i className="color-token red-token"/><span>{t('marketRed')}</span></button><button type="button" aria-pressed={player0Color === 'green'} className={player0Color === 'green' ? 'selected' : ''} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><span>{t('marketGreen')}</span><b>VS</b><i className="color-token blue-token"/><span>{t('marketBlue')}</span></button></fieldset>}
+      <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>
+      <div className="market-preview"><span>{t('marketPerPlayer')} <strong>{entry === 'free' ? t('marketFree') : `${amount} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketPlayersRequired')} <strong>2</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(fullPool)} ${t('marketDemoCredits')}</strong></span><span>{t('marketEstimatedPayout')} <strong>{formatCredits(payout)} ${t('marketDemoCredits')}</strong></span><small>{t('marketSimulationNote')}</small></div>
+      {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
+      {message && <p className="market-message" role="alert">{message}</p>}
+      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient} onClick={() => void create()}>{busy ? t('marketCreating') : t('marketCreateAction')}<span>↗</span></button>
+      <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
+    </div>
   </section>;
 }
 
@@ -228,20 +239,228 @@ function RoomCard({ room, now, busy, canJoin, onJoin, t }: { room: MarketplaceRo
   </article>;
 }
 
-function WaitingRoom({ room, countdown, busy, onCancel, onBack, t }: { room: MarketplaceRoom; countdown: number; busy: boolean; onCancel: () => void; onBack: () => void; t: Translator }) {
+function WaitingRoom({
+  room,
+  countdown,
+  busy,
+  connection,
+  displayName,
+  onCancel,
+  onBack,
+  t,
+}: {
+  room: MarketplaceRoom;
+  countdown: number;
+  busy: boolean;
+  connection?: 'connecting' | 'connected' | 'offline';
+  displayName?: string;
+  onCancel: () => void;
+  onBack: () => void;
+  t: Translator;
+}) {
+  const [copied, setCopied] = useState(false);
   const preparing = ['FULL', 'STARTING'].includes(room.status);
-  return <section className="market-waiting-room" aria-live="polite">
-    <div className="market-waiting-title"><span className="market-room-status">{preparing ? t('marketStarting') : t('marketWaiting')}</span><h2>{preparing ? t('marketRoomFullCopy') : t('marketWaitingCopy')}</h2><p>{gameTitle(room.gameId)} · {room.mode}</p></div>
-    <div className="market-room-id"><span>{t('marketRoomId')}</span><strong>#{room.code}</strong><small>{preparing ? t('marketPreparingGame') : `${t('marketTimeLeft')} · ${countdown}s`}</small></div>
-    <div className="market-waiting-players">{Array.from({ length: room.capacity }, (_, index) => {
-      const player = room.players.find((seat) => seat.seat === index);
-      return <div className={`market-wait-seat ${player ? 'occupied' : ''}`} key={index}>{player ? <><span className="market-avatar">{player.avatar}</span><span><strong>{player.name}</strong><small>{room.viewerSeat === index ? t('marketYou') : t('marketPlayer')}</small></span><i>●</i></> : <><span className="market-seat-empty">＋</span><span><strong>{t('marketOpenSeat')}</strong><small>{t('marketWaiting')}</small></span></>}</div>;
-    })}</div>
-    <div className="market-waiting-entry"><span>{t('marketPerPlayer')} <strong>{room.entryCredits === 0 ? t('marketFree') : `${room.entryCredits} ${t('marketDemoCredits')}`}</strong></span><span>{t('marketEstimatedPool')} <strong>{formatCredits(room.poolCredits)} {t('marketDemoCredits')}</strong></span></div>
-    {room.viewerIsCreator && room.status === 'WAITING' && <button className="secondary-button wide market-cancel-button" disabled={busy} onClick={onCancel}>{t('marketCancelRoom')}</button>}
-    {!room.viewerIsCreator && <p className="market-wait-note">{t('marketWaitingCopy')}</p>}
-    {room.status === 'CANCELLED' || room.status === 'EXPIRED' ? <div className="market-expired-state"><p>{room.status === 'EXPIRED' ? t('marketRoomExpired') : t('marketRoomCancelled')}</p><button className="secondary-button" onClick={onBack}>{t('marketBackToRooms')}</button></div> : null}
-  </section>;
+  const isSettled = ['CANCELLED', 'EXPIRED'].includes(room.status);
+
+  // Identify viewer and opponent
+  const viewerSeat = room.viewerSeat ?? (room.viewerIsCreator ? 0 : 1);
+  const me = room.players.find((p) => p.seat === viewerSeat) || {
+    name: displayName || room.creatorName || t('marketYou'),
+    avatar: room.creatorAvatar || '👤',
+    seat: viewerSeat,
+  };
+  const opponent = room.players.find((p) => p.seat !== viewerSeat);
+
+  const copyRoomCode = () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(room.code);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+    }
+  };
+
+  const inviteFriend = () => {
+    const shareUrl = `https://t.me/Dire_Bet_bot?start=room_${room.code}`;
+    const text = `Play ${gameTitle(room.gameId)} on Dire Bet with me! Room #${room.code}`;
+    const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(text)}`;
+    const tg = (window as unknown as { Telegram?: { WebApp?: { openTelegramLink?: (url: string) => void } } }).Telegram?.WebApp;
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(tgUrl);
+    } else {
+      window.open(tgUrl, '_blank');
+    }
+  };
+
+  const formattedCountdown = `00:${countdown < 10 ? '0' + countdown : countdown}`;
+  const entryFormatted = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('etb')}`;
+  const poolFormatted = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.poolCredits || room.entryCredits * 2)} ${t('etb')}`;
+
+  return (
+    <section className="screen market-waiting-room baron-waiting-room" aria-live="polite">
+      {/* 1. Header Bar */}
+      <header className="baron-waiting-header">
+        <button className="baron-back-btn" onClick={onCancel} disabled={busy} title={t('marketCancelRoom')}>
+          <span className="back-arrow">←</span>
+          <span>{t('marketCancelRoom')}</span>
+        </button>
+
+        <div className="baron-room-badge" onClick={copyRoomCode} role="button" tabIndex={0} title="Click to copy code">
+          <span className="game-icon">{gameSymbol(room.gameId)}</span>
+          <span className="room-code-tag">#{room.code}</span>
+          <span className="copy-icon">{copied ? '✓' : '📋'}</span>
+          {copied && <span className="copied-tooltip">Copied!</span>}
+        </div>
+
+        <div className={`baron-conn-badge ${connection || 'connected'}`}>
+          <span className="pulse-dot" />
+          <span>{connection === 'connected' || !connection ? (preparing ? t('marketStarting') : t('marketWaiting')) : connection}</span>
+        </div>
+      </header>
+
+      {/* 2. Hero Headline Banner */}
+      <div className="baron-hero-headline">
+        <div className="baron-mode-pill">
+          <span className="glow-star">⚡</span>
+          <span>1 VS 1 BATTLE ARENA</span>
+        </div>
+        <h2 className="baron-status-title">
+          {preparing ? t('marketRoomFullCopy') : t('marketWaitingCopy')}
+        </h2>
+        <div className="baron-countdown-pill">
+          <span className="clock-icon">⏱</span>
+          <span className="countdown-digits">{formattedCountdown}</span>
+          <span className="countdown-label">{t('marketTimeLeft')}</span>
+        </div>
+      </div>
+
+      {/* 3. The Hero VS Battle Arena */}
+      <div className="baron-vs-arena">
+        {/* Player 1 (You) */}
+        <div className="baron-fighter-card baron-fighter-left">
+          <div className="baron-avatar-wrap pulse-glow">
+            <span className="baron-avatar">{me.avatar || '👤'}</span>
+            <span className="baron-you-crown">👑 YOU</span>
+          </div>
+          <strong className="baron-fighter-name">{me.name}</strong>
+          <span className="baron-ready-pill ready">✓ READY</span>
+          <div className="baron-fighter-stake">
+            <small>{t('marketPerPlayer')}</small>
+            <strong>{entryFormatted}</strong>
+          </div>
+        </div>
+
+        {/* Center VS & Radar Pulses */}
+        <div className="baron-vs-core">
+          <div className="baron-radar-ripples">
+            <span className="radar-ring r1" />
+            <span className="radar-ring r2" />
+            <span className="radar-ring r3" />
+          </div>
+          <div className="baron-vs-emblem">
+            <span>VS</span>
+          </div>
+          <div className="baron-pool-box">
+            <span className="pool-trophy">🏆</span>
+            <div className="pool-info">
+              <span className="pool-label">{t('marketEstimatedPool')}</span>
+              <strong className="pool-amount">{poolFormatted}</strong>
+            </div>
+          </div>
+        </div>
+
+        {/* Player 2 (Opponent) */}
+        <div className="baron-fighter-card baron-fighter-right">
+          {opponent ? (
+            <div className="baron-fighter-loaded">
+              <div className="baron-avatar-wrap opponent-glow">
+                <span className="baron-avatar">{opponent.avatar || '👤'}</span>
+                <span className="baron-challenger-tag">CHALLENGER</span>
+              </div>
+              <strong className="baron-fighter-name">{opponent.name}</strong>
+              <span className="baron-ready-pill ready">✓ READY</span>
+              <div className="baron-fighter-stake">
+                <small>{t('marketPerPlayer')}</small>
+                <strong>{entryFormatted}</strong>
+              </div>
+            </div>
+          ) : (
+            <div className="baron-fighter-searching">
+              <div className="baron-avatar-wrap radar-scanner">
+                <div className="radar-sweep-beam" />
+                <span className="radar-mystery-icon">?</span>
+              </div>
+              <strong className="baron-fighter-name searching-text">
+                Searching<span className="animated-dots">...</span>
+              </strong>
+              <span className="baron-ready-pill waiting">WAITING</span>
+              <button className="baron-invite-pill" type="button" onClick={inviteFriend}>
+                <span>📲</span> Invite Friend
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 4. Match Spec Info Strip */}
+      <div className="baron-match-spec-strip">
+        <div className="spec-item">
+          <span>🎮 {t('marketMode')}</span>
+          <strong>{gameTitle(room.gameId)} ({room.mode})</strong>
+        </div>
+        <div className="spec-item">
+          <span>👥 {t('marketPlayersRequired')}</span>
+          <strong>{room.playerCount} / {room.capacity}</strong>
+        </div>
+        <div className="spec-item">
+          <span>💰 {t('marketEstimatedPayout')}</span>
+          <strong>{poolFormatted}</strong>
+        </div>
+      </div>
+
+      {/* 5. Bottom Action & Guarantee Bar */}
+      <footer className="baron-waiting-footer">
+        {room.viewerIsCreator && room.status === 'WAITING' && (
+          <button
+            className="baron-cancel-btn"
+            disabled={busy}
+            onClick={onCancel}
+          >
+            {busy ? '…' : `✕ ${t('marketCancelRoom')}`}
+          </button>
+        )}
+        {!room.viewerIsCreator && room.status === 'WAITING' && (
+          <p className="baron-wait-notice">{t('marketWaitingCopy')}</p>
+        )}
+
+        <div className="baron-security-banner">
+          <span>🔒 100% Instant Refund</span>
+          <small>Held bet is returned to your wallet balance immediately upon cancel or timeout.</small>
+        </div>
+        <div className="baron-trust-marks">
+          <span>🛡️ Provably Fair</span>
+          <span>⚡ Real-Time P2P Match</span>
+        </div>
+      </footer>
+
+      {/* Cancelled or Expired State Overlay */}
+      {isSettled && (
+        <div className="baron-settled-modal">
+          <div className="baron-settled-card">
+            <span className="settled-icon">{room.status === 'EXPIRED' ? '⏱' : '✕'}</span>
+            <h3>{room.status === 'EXPIRED' ? t('marketRoomExpired') : t('marketRoomCancelled')}</h3>
+            <p>Your entry bet of {entryFormatted} has been credited back to your balance.</p>
+            <button className="primary-button wide" onClick={onBack}>
+              {t('marketBackToRooms')}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }

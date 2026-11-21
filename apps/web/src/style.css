@@ -690,3 +690,710 @@
   .poster-tagline{letter-spacing:.02em}
   .poster-games{left:24%;width:28%}
 }
+
+
+/* ==========================================================================
+   BARON GAMES WAITING ROOM & HERO SECTION (100dvh Telegram Fit)
+   ========================================================================== */
+
+/* Full Viewport Isolation in Telegram WebApp */
+.player-shell:has(.baron-waiting-room) {
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 100dvh !important;
+  height: 100dvh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: radial-gradient(circle at 50% 12%, #0f2545 0%, #071426 55%, #030913 100%) !important;
+  overflow: hidden !important;
+}
+
+.player-shell:has(.baron-waiting-room) .topbar,
+.player-shell:has(.baron-waiting-room) .demo-ribbon,
+.player-shell:has(.baron-waiting-room) .bottom-nav,
+.player-shell:has(.baron-waiting-room) .support-float {
+  display: none !important;
+}
+
+.baron-waiting-room {
+  width: 100%;
+  max-width: 540px;
+  min-height: 100dvh;
+  height: 100dvh;
+  margin: 0 auto;
+  padding: clamp(10px, 2.2dvh, 18px) clamp(12px, 3.5vw, 20px) max(14px, env(safe-area-inset-bottom, 14px));
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+  color: #f3f7ff;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* 1. Header Bar */
+.baron-waiting-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: clamp(6px, 1.2dvh, 10px);
+  border-bottom: 1px solid rgba(56, 88, 130, 0.25);
+  flex: none;
+}
+
+.baron-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid rgba(85, 120, 165, 0.35);
+  border-radius: 999px;
+  background: rgba(16, 32, 54, 0.75);
+  backdrop-filter: blur(8px);
+  color: #c7d8ed;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.baron-back-btn:hover {
+  background: rgba(26, 48, 78, 0.9);
+  color: #fff;
+  border-color: rgba(100, 150, 210, 0.6);
+}
+.baron-back-btn .back-arrow {
+  font-size: 13px;
+}
+
+.baron-room-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border: 1px solid rgba(75, 140, 220, 0.45);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(16, 40, 72, 0.92), rgba(9, 24, 46, 0.92));
+  box-shadow: 0 0 12px rgba(30, 100, 200, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: #e6f1ff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.15s ease;
+}
+.baron-room-badge:active {
+  transform: scale(0.96);
+}
+.baron-room-badge .game-icon {
+  font-size: 13px;
+  color: #4da3ff;
+}
+.baron-room-badge .room-code-tag {
+  letter-spacing: 0.08em;
+  color: #ffd166;
+}
+.baron-room-badge .copy-icon {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.baron-room-badge .copied-tooltip {
+  position: absolute;
+  top: 115%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #10b981;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  animation: baron-tooltip-pop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes baron-tooltip-pop {
+  from { opacity: 0; transform: translate(-50%, -6px) scale(0.85); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.baron-conn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(14, 28, 46, 0.85);
+  border: 1px solid rgba(50, 80, 120, 0.3);
+  color: #a9bece;
+}
+.baron-conn-badge .pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+.baron-conn-badge.connected .pulse-dot {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+.baron-conn-badge.offline .pulse-dot {
+  background: #ef4444;
+}
+
+/* 2. Hero Headline */
+.baron-hero-headline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin: clamp(6px, 1.5dvh, 14px) 0 clamp(6px, 1.2dvh, 10px);
+  gap: 5px;
+  flex: none;
+}
+
+.baron-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 183, 3, 0.15), rgba(251, 133, 0, 0.15));
+  border: 1px solid rgba(255, 183, 3, 0.4);
+  color: #ffd166;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.baron-mode-pill .glow-star {
+  color: #ffd166;
+  font-size: 11px;
+}
+
+.baron-status-title {
+  margin: 0;
+  font-size: clamp(15px, 4vw, 19px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  background: linear-gradient(180deg, #ffffff 30%, #b8d4f6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  line-height: 1.25;
+}
+
+.baron-countdown-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(14, 30, 52, 0.7);
+  border: 1px solid rgba(56, 110, 180, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  color: #9ebdd8;
+}
+.baron-countdown-pill .clock-icon {
+  font-size: 11px;
+  color: #38bdf8;
+}
+.baron-countdown-pill .countdown-digits {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 800;
+  color: #38bdf8;
+  letter-spacing: 0.05em;
+}
+.baron-countdown-pill .countdown-label {
+  font-size: 9px;
+  color: #839fb8;
+}
+
+/* ==========================================================================
+   3. THE HERO VS BATTLE ARENA (BARON GAMES SIGNATURE)
+   ========================================================================== */
+.baron-vs-arena {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(8px, 2.5vw, 16px);
+  margin: clamp(6px, 1.2dvh, 14px) 0;
+  padding: clamp(12px, 2.5dvh, 20px) clamp(8px, 2vw, 14px);
+  border: 1px solid rgba(48, 85, 134, 0.45);
+  border-radius: 20px;
+  background: linear-gradient(165deg, rgba(14, 28, 48, 0.85) 0%, rgba(7, 16, 29, 0.98) 100%);
+  box-shadow: 0 12px 36px rgba(2, 6, 14, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  position: relative;
+  flex: 1;
+  max-height: 290px;
+}
+
+/* Fighter Cards */
+.baron-fighter-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.baron-avatar-wrap {
+  position: relative;
+  width: clamp(62px, 14.5vw, 80px);
+  height: clamp(62px, 14.5vw, 80px);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+
+.baron-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: clamp(24px, 5.5vw, 34px);
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #1e4976, #0d223a);
+  border: 2px solid rgba(80, 150, 230, 0.8);
+  box-shadow: 0 0 16px rgba(30, 120, 220, 0.35);
+  overflow: hidden;
+}
+
+.baron-avatar-wrap.pulse-glow .baron-avatar {
+  border-color: #38bdf8;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.45);
+}
+
+.baron-avatar-wrap.opponent-glow .baron-avatar {
+  border-color: #34d399;
+  box-shadow: 0 0 20px rgba(52, 211, 153, 0.45);
+}
+
+.baron-you-crown {
+  position: absolute;
+  top: -6px;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.baron-challenger-tag {
+  position: absolute;
+  top: -6px;
+  background: linear-gradient(135deg, #059669, #047857);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.baron-fighter-name {
+  font-size: clamp(11px, 2.7vw, 13px);
+  font-weight: 700;
+  color: #f1f6ff;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.baron-ready-pill {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.baron-ready-pill.ready {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+.baron-ready-pill.waiting {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.baron-fighter-stake {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.baron-fighter-stake small {
+  font-size: 8px;
+  color: #8da4be;
+}
+.baron-fighter-stake strong {
+  font-size: clamp(10px, 2.5vw, 12px);
+  color: #ffd166;
+  font-weight: 700;
+}
+
+/* Searching State for Opponent (Radar Sonar) */
+.baron-fighter-searching {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.baron-avatar-wrap.radar-scanner {
+  background: rgba(15, 30, 50, 0.6);
+  border: 2px dashed rgba(60, 110, 170, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.radar-sweep-beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(56, 189, 248, 0.45) 0deg, transparent 60deg, transparent 360deg);
+  animation: baron-radar-sweep 2s linear infinite;
+}
+
+@keyframes baron-radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.radar-mystery-icon {
+  font-size: clamp(22px, 5vw, 28px);
+  font-weight: 800;
+  color: rgba(130, 175, 225, 0.7);
+  z-index: 2;
+  animation: baron-pulse-subtle 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes baron-pulse-subtle {
+  from { opacity: 0.4; transform: scale(0.92); }
+  to { opacity: 0.9; transform: scale(1.08); }
+}
+
+.searching-text {
+  color: #9cbcdb !important;
+}
+.animated-dots {
+  display: inline-block;
+  animation: baron-dots 1.5s steps(4, end) infinite;
+}
+@keyframes baron-dots {
+  0%, 20% { content: ''; }
+  40% { content: '.'; }
+  60% { content: '..'; }
+  80%, 100% { content: '...'; }
+}
+
+.baron-invite-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(30, 60, 100, 0.5);
+  border: 1px solid rgba(80, 140, 220, 0.4);
+  color: #bfe0ff;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.baron-invite-pill:hover {
+  background: rgba(40, 85, 145, 0.8);
+  color: #fff;
+}
+
+/* Center VS & Radar Pulses */
+.baron-vs-core {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 1.8dvh, 16px);
+  position: relative;
+  min-width: clamp(75px, 20vw, 105px);
+}
+
+.baron-radar-ripples {
+  position: absolute;
+  top: 36px;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90px;
+  height: 90px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.radar-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  animation: baron-radar-ping 2.4s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+}
+.radar-ring.r1 { width: 44px; height: 44px; animation-delay: 0s; }
+.radar-ring.r2 { width: 72px; height: 72px; animation-delay: 0.8s; }
+.radar-ring.r3 { width: 100px; height: 100px; animation-delay: 1.6s; }
+
+@keyframes baron-radar-ping {
+  0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+}
+
+.baron-vs-emblem {
+  position: relative;
+  z-index: 1;
+  width: clamp(40px, 9vw, 50px);
+  height: clamp(40px, 9vw, 50px);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #1b3558, #0e2039);
+  border: 2px solid #f59e0b;
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.4), inset 0 2px 4px rgba(255, 255, 255, 0.25);
+}
+
+.baron-vs-emblem span {
+  font-size: clamp(14px, 3.2vw, 18px);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  background: linear-gradient(135deg, #ffedd5, #f59e0b 80%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-style: italic;
+}
+
+.baron-pool-box {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(30, 24, 10, 0.9), rgba(45, 34, 12, 0.9));
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 10px rgba(245, 158, 11, 0.15);
+  white-space: nowrap;
+}
+.baron-pool-box .pool-trophy {
+  font-size: clamp(13px, 3vw, 16px);
+}
+.baron-pool-box .pool-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+.baron-pool-box .pool-label {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fcd34d;
+  text-transform: uppercase;
+}
+.baron-pool-box .pool-amount {
+  font-size: clamp(10px, 2.6vw, 13px);
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+/* 4. Match Spec Info Strip */
+.baron-match-spec-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: clamp(5px, 1dvh, 10px) 0;
+  padding: 7px 10px;
+  border-radius: 14px;
+  background: rgba(14, 26, 44, 0.65);
+  border: 1px solid rgba(45, 75, 115, 0.3);
+  flex: none;
+}
+.baron-match-spec-strip .spec-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+.baron-match-spec-strip .spec-item span {
+  font-size: 8px;
+  color: #8fa6c0;
+}
+.baron-match-spec-strip .spec-item strong {
+  font-size: 10px;
+  font-weight: 700;
+  color: #e2edf8;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 5. Bottom Action & Guarantee Bar */
+.baron-waiting-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 4px;
+  flex: none;
+}
+
+.baron-cancel-btn {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: linear-gradient(135deg, rgba(185, 28, 28, 0.85), rgba(127, 29, 29, 0.95));
+  box-shadow: 0 4px 18px rgba(220, 38, 38, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.baron-cancel-btn:hover {
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.95), rgba(153, 27, 27, 1));
+  box-shadow: 0 6px 22px rgba(220, 38, 38, 0.45);
+}
+.baron-cancel-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.baron-wait-notice {
+  margin: 4px 0;
+  font-size: 11px;
+  color: #9cbcdb;
+  text-align: center;
+}
+
+.baron-security-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 5px 12px;
+  border-radius: 10px;
+  background: rgba(12, 24, 40, 0.5);
+  border: 1px solid rgba(40, 70, 105, 0.25);
+  width: 100%;
+  box-sizing: border-box;
+}
+.baron-security-banner span {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6ee7b7;
+}
+.baron-security-banner small {
+  font-size: 8px;
+  color: #7d96b0;
+  line-height: 1.3;
+}
+
+.baron-trust-marks {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 9px;
+  color: #647d96;
+}
+
+/* Settled Modal (Cancelled or Expired) */
+.baron-settled-modal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 10, 20, 0.88);
+  backdrop-filter: blur(10px);
+  z-index: 50;
+  box-sizing: border-box;
+}
+
+.baron-settled-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 24px 20px;
+  border-radius: 20px;
+  background: linear-gradient(150deg, #10243d, #091524);
+  border: 1px solid rgba(60, 110, 170, 0.4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.baron-settled-card .settled-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #f87171;
+  font-size: 20px;
+}
+.baron-settled-card h3 {
+  margin: 0;
+  font-size: 17px;
+  color: #f1f5f9;
+}
+.baron-settled-card p {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
