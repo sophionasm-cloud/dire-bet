@@ -278,7 +278,7 @@ function App() {
   const enterOnlineRoom = useCallback((room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
   const exitOnlineRoom = useCallback(() => {
     if (roomConfig?.code && roomConfig.gameId) {
-      try { sessionStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); } catch {}
+      try { sessionStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); localStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); } catch {}
     }
     setRoomConfig(null);
     nav('home');
