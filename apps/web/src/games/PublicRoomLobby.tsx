@@ -209,18 +209,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const fullPool = amount * 2;
   const payout = fullPool;
 
-  if (activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status)) {
-    return <WaitingRoom
-      room={activeRoom}
-      countdown={countdown}
-      busy={busy}
-      connection={connection}
-      displayName={displayName}
-      onCancel={() => void cancel()}
-      onBack={() => { setActiveRoom(null); void loadRooms(); }}
-      t={t}
-    />;
-  }
+  // Inline active room in public lobby
 
   return <section className="screen public-lobby-screen">
     <header className="public-lobby-header"><button className="back-button" onClick={onExit}>← {t('home')}</button><div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
@@ -230,7 +219,39 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     <div className="market-room-browser">
       <div className="market-section-heading"><div><span className="eyebrow">{t('marketPublicRooms')}</span><h2>{t('marketAvailableRooms')} <b>{rooms.length}</b></h2></div><button className="market-refresh" type="button" aria-label={t('marketRefresh')} title={t('marketRefresh')} disabled={refreshing || loading} onClick={() => { setRefreshing(true); void loadRooms().finally(() => setRefreshing(false)); }}>{refreshing ? '…' : '↻'}</button></div>
       <div className="public-room-list">
-        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => void join(room)} t={t}/>) : <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div>}
+        {activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) && (
+          <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
+            <div className="market-room-primary">
+              <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>👑</span>
+              <div className="market-room-player">
+                <strong>{t('marketYou')} (#{activeRoom.code})</strong>
+                <small style={{ color: '#ffc840' }}>⏳ {t('marketWaiting')}</small>
+              </div>
+              <div className="market-room-stake">
+                <strong>{activeRoom.entryCredits === 0 ? t('marketFree') : formatCredits(activeRoom.entryCredits)}</strong>
+                <small>{activeRoom.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small>
+              </div>
+              <div className="market-room-time">
+                <strong style={{ color: '#ffc840' }}>{Math.max(0, Math.ceil((activeRoom.expiresAt - clockNow) / 1000))}s</strong>
+                <small>{t('marketTimeLeft')}</small>
+              </div>
+              <button
+                className="market-join-button"
+                style={{ background: 'linear-gradient(145deg, #d83a3a, #991b1b)', borderColor: '#ef4444', color: '#fff' }}
+                disabled={busy}
+                onClick={() => void cancel()}
+              >
+                {busy ? '…' : t('marketCancelRoom')}
+              </button>
+            </div>
+            <div className="market-room-details">
+              <span>#{activeRoom.code}</span>
+              <span>{gameTitle(activeRoom.gameId)}</span>
+              <span>1/{activeRoom.capacity} {t('marketPlayersRequired')}</span>
+            </div>
+          </article>
+        )}
+        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => void join(room)} t={t}/>) : !activeRoom ? <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div> : null}
       </div>
     </div>
     <div className="market-create-panel">
@@ -244,7 +265,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       
       {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
       {message && <p className="market-message" role="alert">{message}</p>}
-      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient} onClick={() => void create()}>{busy ? t('marketCreating') : entry === 'free' ? `${t('marketCreateAction')} (${t('marketFree')})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
+      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : entry === 'free' ? `${t('marketCreateAction')} (${t('marketFree')})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
       <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
     </div>
   </section>;

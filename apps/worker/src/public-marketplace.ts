@@ -315,7 +315,6 @@ export class Matchmaker {
     const room = this.roomRow(code);
     if (!room) return reply({ error: 'Public room not found.' }, 404);
     if (room.game_id === 'poker') return reply({ error: 'American Texas is coming soon.' }, 409);
-    if (room.wallet_kind === 'demo') return reply({ error: 'This old preview room cannot accept players or move funds.' }, 409);
     if (this.isPlayer(code, input.userId as number)) return reply({ error: 'You already joined this room.' }, 409);
     if (room.status !== 'WAITING' || room.game_ready !== 1 || room.expires_at <= Date.now()) {
       if (room.status === 'WAITING' && room.expires_at <= Date.now()) await this.expireRoom(code);
