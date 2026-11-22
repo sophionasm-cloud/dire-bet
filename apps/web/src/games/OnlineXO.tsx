@@ -17,7 +17,7 @@ type Props = { t: Translator; token: string | null };
 type RoomPlayer = { id: number; name: string; mark: 'X' | 'O' | null; online: boolean };
 type PokerPublic = ReturnType<typeof viewPoker>;
 type RoomGame = XOState | LudoState | CheckersState | PokerPublic;
-type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' } | null; drawOfferBy?: number | null; publicRoom?: { id: string; entryCredits: number; options: Record<string, unknown> } };
+type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null; drawOfferBy?: number | null; turnDeadline?: number | null; serverTime?: number; publicRoom?: { id: string; entryCredits: number; options: Record<string, unknown> } };
 type ApiResult = { code?: string; ticket?: string; gameId?: GameId; error?: string };
 
 export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: RoomConfig) => void }) {
@@ -104,10 +104,15 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     catch { setError(link); }
   };
   const gameComplete = snapshot ? isFinished(snapshot.gameId, snapshot.game) : false;
-  const result = snapshot ? resultCopy(snapshot.gameId, snapshot.game, snapshot.seat, snapshot.you, t) : '';
+  const result = snapshot ? resultCopy(snapshot.gameId, snapshot.game, snapshot.seat, snapshot.you, t, snapshot.terminal) : '';
   const statusText = snapshot?.status === 'waiting' ? t('waitingForPlayer') : snapshot?.status === 'active' ? (isMyTurn(snapshot) ? t('yourTurn') : t('opponent')) : '';
   const clockGame = snapshot?.gameId === 'ludo' ? snapshot.game as LudoState : null;
-  const turnSeconds = useLudoTurnClock(clockGame ? `${clockGame.turn}-${clockGame.lastEvent}-${clockGame.lastMove?.player ?? ''}-${clockGame.lastMove?.token ?? ''}` : 'inactive');
+  const turnSeconds = useLudoTurnClock(
+    clockGame ? `${clockGame.turn}-${clockGame.lastEvent}-${clockGame.lastMove?.player ?? ''}-${clockGame.lastMove?.token ?? ''}` : 'inactive',
+    snapshot?.turnDeadline ?? null,
+    snapshot?.serverTime ?? null,
+    snapshot?.status === 'active',
+  );
   if (room.gameId === 'checkers') {
     const checkersSnapshot: CheckersSnapshot | null = snapshot && snapshot.gameId === 'checkers' ? {
       code: snapshot.code,
@@ -127,7 +132,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     const roomMeta = snapshot.publicRoom;
     const playerZeroColor = roomLudoColor(roomMeta.options.player0Color);
     const colorAt = (seat: number): LudoBoardColor => seat === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
-    const notice = state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.winner !== null ? result : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
+    const notice = snapshot.status === 'finished' ? result : state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
     const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
     return <section className="online-room-screen public-ludo-shell ludo-room-layout">
       <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
@@ -152,7 +157,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     <p className="practice-note">{t('freeRoomNotice')}</p>
     {snapshot && <div className="room-seats">{snapshot.players.map((player, index) => <div className="room-seat" key={player.id}><i className={`player-dot ${player.mark === 'X' || (player.mark === null && index === 0) ? 'red-dot' : 'blue-dot'} ${player.online ? 'online' : ''}`}/><span><strong>{player.name}</strong><small>{player.mark ? `${player.mark === snapshot.you ? t('you') : t('opponent')} · ${player.mark}` : player.id === snapshot.players[snapshot.seat]?.id ? t('you') : t('opponent')}</small></span><b>{player.mark || (player.online ? '●' : '·')}</b></div>)}{snapshot.status === 'waiting' && snapshot.players.length < 2 && <div className="room-seat waiting-seat"><span className="seat-placeholder">＋</span><span><strong>{t('waitingForPlayer')}</strong><small>{t('shareInvite')}</small></span></div>}</div>}
     {snapshot?.status === 'active' && <>
-      <div className="online-game-status" aria-live="polite">{statusText}</div>
+      <div className="online-game-status" aria-live="polite">{statusText}{snapshot.gameId === 'ludo' && <span className="ludo-turn-clock">◷ {turnSeconds}s</span>}</div>
       {snapshot.gameId === 'xo' && <XOBoard game={snapshot.game as XOState} enabled={isMyTurn(snapshot)} winning={winning} onMove={(index) => send({ type: 'move', index })} />}
       {snapshot.gameId === 'ludo' && <OnlineLudo game={snapshot.game as LudoState} seat={snapshot.seat} playerZeroColor={roomLudoColor(snapshot.publicRoom?.options.player0Color)} t={t} send={send} />}
       {snapshot.gameId === 'poker' && <OnlinePoker game={snapshot.game as PokerPublic} seat={snapshot.seat} t={t} send={send} />}
@@ -222,7 +227,8 @@ function isFinished(id: GameId, state: RoomGame): boolean {
   const poker = state as PokerPublic; return poker.street === 'showdown' || poker.street === 'folded';
 }
 
-function resultCopy(id: GameId, state: RoomGame, seat: number, you: 'X'|'O'|null, t: Translator): string {
+function resultCopy(id: GameId, state: RoomGame, seat: number, you: 'X'|'O'|null, t: Translator, terminal?: { winner: number | 'draw'; reason: string } | null): string {
+  if (terminal) return terminal.winner === 'draw' ? t('gameSplitTitle') : terminal.winner === seat ? t('gameWinTitle') : t('gameLossTitle');
   if (id === 'xo') { const winner = (state as XOState).winner; return winner === 'draw' ? t('gameSplitTitle') : winner ? winner === you ? t('gameWinTitle') : t('gameLossTitle') : ''; }
   if (id === 'ludo') return (state as LudoState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');
   if (id === 'checkers') return (state as CheckersState).winner === seat ? t('gameWinTitle') : t('gameLossTitle');

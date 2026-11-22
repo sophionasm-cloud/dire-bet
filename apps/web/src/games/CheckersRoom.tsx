@@ -4,7 +4,7 @@ import type { TranslationKey } from '../i18n';
 import type { RoomConfig } from './marketplaceTypes';
 
 export type CheckersTranslator = (key: TranslationKey) => string;
-export type CheckersTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' } | null;
+export type CheckersTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null;
 export type CheckersPlayerInfo = { name: string; online: boolean; bot?: boolean };
 export type CheckersSnapshot = {
   code: string;

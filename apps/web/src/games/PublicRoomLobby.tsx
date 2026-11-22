@@ -37,6 +37,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const launching = useRef('');
   const creating = useRef(false);
   const settledRefresh = useRef('');
+  const roomMutation = useRef(0);
+  const cancelledRooms = useRef(new Set<string>());
   const amount = entry === 'free' ? 0 : entry === -1 ? Number(customAmount) : entry;
   const insufficient = Boolean(token && balance !== null && entry !== 'free' && amount > balance);
   const title = gameTitle(gameId);
@@ -46,7 +48,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     try {
       const response = await fetch(`/api/public-rooms?gameId=${gameId}`);
       const body = await response.json() as { rooms?: MarketplaceRoom[] };
-      if (response.ok) setRooms(body.rooms || []);
+      if (response.ok) setRooms((body.rooms || []).filter((room) => !cancelledRooms.current.has(room.id)));
     } catch { setConnection('offline'); }
     finally { setLoading(false); }
   }, [gameId]);
@@ -58,6 +60,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     const load = async () => {
       await loadRooms();
       if (!live) return;
+      const mutation = roomMutation.current;
       if (token) {
         const [configResult, balanceResult, ownResult] = await Promise.allSettled([
           fetch('/api/public-rooms/config').then((response) => response.json() as Promise<MarketplaceSettings>),
@@ -67,9 +70,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
         if (!live) return;
         if (configResult.status === 'fulfilled') setSettings(configResult.value);
         if (balanceResult.status === 'fulfilled' && balanceResult.value) setBalance(balanceResult.value.balance);
-        if (ownResult.status === 'fulfilled' && ownResult.value.room) {
+        if (ownResult.status === 'fulfilled' && mutation === roomMutation.current) {
           const own = ownResult.value.room;
-          if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(own.status) || isExited(gameId, own.code)) {
+          if (!own || ['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(own.status)) {
             setActiveRoom(null);
           } else if (['WAITING', 'FULL', 'STARTING'].includes(own.status)) {
             setActiveRoom(own);
@@ -96,9 +99,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
         try {
           const snapshot = JSON.parse(String(event.data)) as MarketState;
           if (snapshot.type !== 'market' || !live) return;
-          setRooms((snapshot.rooms || []).filter((room) => room.id !== snapshot.ownRoom?.id));
-          if (snapshot.ownRoom) {
-            if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(snapshot.ownRoom.status) || isExited(gameId, snapshot.ownRoom.code)) {
+          setRooms((snapshot.rooms || []).filter((room) => room.id !== snapshot.ownRoom?.id && !cancelledRooms.current.has(room.id)));
+          if (snapshot.ownRoom && !cancelledRooms.current.has(snapshot.ownRoom.id)) {
+            if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(snapshot.ownRoom.status)) {
               setActiveRoom(null);
             } else {
               setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
@@ -169,6 +172,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
+      roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
@@ -186,6 +190,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const response = await fetch(`/api/public-rooms/${room.code}/join`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
+      roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
@@ -201,6 +206,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const result = await response.json() as ResponseBody;
       if (!response.ok) throw new Error(result.error || t('onlineDisconnected'));
       try { if (activeRoom?.code) { sessionStorage.setItem(`direbet.exited_${gameId}`, activeRoom.code); localStorage.setItem(`direbet.exited_${gameId}`, activeRoom.code); } } catch {}
+      roomMutation.current += 1; cancelledRooms.current.add(activeRoom.id);
       setActiveRoom(null); setRooms((items) => items.filter((item) => item.id !== activeRoom.id));
       window.dispatchEvent(new Event('direbet:wallet-changed'));
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
@@ -466,7 +472,7 @@ function WaitingRoom({
 
       {/* 5. Bottom Action & Guarantee Bar */}
       <footer className="baron-waiting-footer">
-        {room.viewerIsCreator && room.status === 'WAITING' && (
+        {room.viewerIsCreator && ['WAITING', 'FULL', 'STARTING'].includes(room.status) && (
           <button
             className="baron-cancel-btn"
             disabled={busy}

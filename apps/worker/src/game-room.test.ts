@@ -52,7 +52,7 @@ describe('authoritative XO room', () => {
     expect(current.status).toBe('finished');
     expect(current.game.winner).toBe('X');
     expect(current.game.board).toEqual(['X', 'X', 'X', 'O', 'O', null, null, null, null]);
-    expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT INTO match_events')))).toBe(true);
+    expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT OR IGNORE INTO match_events')))).toBe(true);
     expect(batches.some((batch) => batch.some((sql) => sql.includes("status = 'completed'")))).toBe(true);
   });
 
@@ -71,7 +71,28 @@ describe('authoritative XO room', () => {
     await room.webSocketMessage(socket(31, []), JSON.stringify({ type: 'roll' }));
     current = records.get('room') as typeof current;
     expect(current.game.lastEvent).not.toBeNull();
-    expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT INTO match_events')))).toBe(true);
+    expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT OR IGNORE INTO match_events')))).toBe(true);
+  });
+
+  it('forfeits a Ludo match when the server turn deadline expires, exactly once', async () => {
+    const { room, records, batches } = createFixture();
+    const code = 'TMR345';
+    await room.fetch(request('/create', { code, gameId: 'ludo', userId: 81, displayName: 'Host', expiresAt: Date.now() + 60_000 }));
+    await room.fetch(request('/join', { code, userId: 82, displayName: 'Friend' }));
+    const stored = records.get('room') as { turnDeadline?: number; game: { turn: number } };
+    expect(stored.turnDeadline).toBeGreaterThan(Date.now());
+    expect(stored.game.turn).toBe(0);
+    stored.turnDeadline = Date.now() - 1;
+    await room.alarm();
+    const finished = records.get('room') as { status: string; terminal?: { winner: number | 'draw'; reason: string }; timeoutRecorded?: boolean };
+    expect(finished.status).toBe('finished');
+    expect(finished.terminal).toEqual({ winner: 1, reason: 'timeout' });
+    expect(finished.timeoutRecorded).toBe(true);
+    const timeoutEvents = () => batches.filter((batch) => batch.some((sql) => sql.includes('INSERT OR IGNORE INTO match_events')));
+    expect(timeoutEvents()).toHaveLength(1);
+    expect(batches.some((batch) => batch.some((sql) => sql.includes("status = 'completed'")))).toBe(true);
+    await room.alarm();
+    expect(timeoutEvents()).toHaveLength(1);
   });
 
   it.each([1, 2, 4] as const)('carries a %i-crown public-room target into the match engine', async (crownTarget) => {
@@ -102,7 +123,7 @@ describe('free room game catalog', () => {
     await room.fetch(request('/create', { code, gameId: 'poker', userId: 51, displayName: 'Host', expiresAt: Date.now() + 60_000 }));
     await room.fetch(request('/join', { code, userId: 52, displayName: 'Friend' }));
     await room.webSocketMessage(socket(51, []), JSON.stringify({ type: 'action', action: { type: 'call' } }));
-    const event = boundStatements.find((entry) => entry.sql.includes('INSERT INTO match_events'))!;
+    const event = boundStatements.find((entry) => entry.sql.includes('INSERT OR IGNORE INTO match_events'))!;
     const payload = JSON.parse(String(event.values[4])) as { state: { players: Record<string, unknown>[]; deck?: unknown; deckCount?: number } };
     expect(payload.state.players.every((player) => !('hole' in player))).toBe(true);
     expect(payload.state).not.toHaveProperty('deck');

@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
-export function useLudoTurnClock(resetKey: string): number {
-  const [seconds, setSeconds] = useState(99);
+export function useLudoTurnClock(resetKey: string, turnDeadline: number | null = null, serverTime: number | null = null, active = true): number {
+  const [seconds, setSeconds] = useState(30);
   useEffect(() => {
-    setSeconds(99);
-    const interval = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
+    if (!active) return;
+    const remaining = turnDeadline && serverTime ? Math.max(0, turnDeadline - serverTime) : 30_000;
+    const end = Date.now() + remaining;
+    const tick = () => setSeconds(Math.max(0, Math.ceil((end - Date.now()) / 1000)));
+    tick();
+    const interval = window.setInterval(tick, 1000);
     return () => window.clearInterval(interval);
-  }, [resetKey]);
+  }, [resetKey, turnDeadline, serverTime, active]);
   return seconds;
 }
 

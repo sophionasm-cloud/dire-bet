@@ -2,6 +2,12 @@ export type EntryChoice = { kind: 'free' } | { kind: 'standard' | 'custom'; amou
 export type LudoRoomOptions = { player0Color: 'red' | 'yellow' | 'green'; crownTarget: 1 | 2 | 4 };
 export type PublicWalletKind = 'demo' | 'real' | 'free';
 
+export const MATCHMAKING_WAITING_SECONDS = 30;
+
+export function isCreatorCancellableRoom(status: string): boolean {
+  return status === 'WAITING' || status === 'FULL' || status === 'STARTING';
+}
+
 export function isFundedWalletKind(walletKind: string): walletKind is 'real' | 'demo' {
   return walletKind === 'real' || walletKind === 'demo';
 }
@@ -76,7 +82,7 @@ export function validateMarketplaceSettings(input: unknown): MarketplaceSettings
     standardAmounts: [...amounts].sort((a, b) => a - b),
     customEnabled: value.customEnabled,
     customMaximum: value.customMaximum as number,
-    waitingSeconds: value.waitingSeconds as number,
+    waitingSeconds: MATCHMAKING_WAITING_SECONDS,
     realMoneyEnabled: false,
   };
 }

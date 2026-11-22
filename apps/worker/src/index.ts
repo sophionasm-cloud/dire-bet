@@ -1,4 +1,4 @@
-import { PUBLIC_GAMES, TelegramAuthRequestSchema, type GameId } from '@dire-bet/shared';
+import { PUBLIC_GAMES, TelegramAuthRequestSchema, parseTransactionSms, type GameId } from '@dire-bet/shared';
 import { applyXO, initXO, type Mark, type XOState } from '@dire-bet/engines/xo';
 import { initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyCheckerMove, newCheckersGame, type CheckersState } from '@dire-bet/engines/checkers';
@@ -7,6 +7,7 @@ import { Matchmaker } from './public-marketplace';
 import { isMarketplaceGame } from './marketplace';
 import { addisWeekStart } from './agent-report';
 import { freePlayEligibilityError, moneyActivationRecorded, moneyEligibilityError } from './activation';
+import { verifyDepositTransaction } from './bank-verifier';
 export { moneyActivationRecorded } from './activation';
 
 interface Env {
@@ -37,12 +38,13 @@ const MAX_WEBHOOK_BYTES = 64 * 1024;
 const ROOM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const ROOM_TTL_MS = 15 * 60 * 1000;
 const RECONNECT_GRACE_MS = 60 * 1000;
+const LUDO_TURN_MS = 30 * 1000;
 
 type RoomGame = 'xo' | 'ludo' | 'checkers' | 'poker';
 type RoomState = XOState | LudoState | CheckersState | PokerState;
 type RoomPlayer = { id: number; name: string; mark: Mark | null; online: boolean };
-type RoomTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' };
-type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; terminal?: RoomTerminal; drawOfferBy?: number };
+type RoomTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' };
+type StoredRoom = { code: string; gameId: RoomGame; hostId: number; status: 'waiting' | 'active' | 'finished' | 'cancelled'; players: RoomPlayer[]; game: RoomState; matchId: string | null; sequence: number; expiresAt: number; publicRoomId?: string; publicRoomOptions?: Record<string, unknown>; entryCredits?: number; terminal?: RoomTerminal; drawOfferBy?: number; turnDeadline?: number; timeoutRecorded?: boolean; reconnectDeadline?: number };
 type RoomTicket = { userId: number; displayName: string; code: string; expiresAt: number };
 
 const securityHeaders = {
@@ -988,10 +990,17 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; proofMethod?: unknown; confirmationSms?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
   const amount = validRequestAmount(input?.amount);
-  const senderPhone = validPaymentPhone(input?.senderPhone);
-  const reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
-  const proofMethod = input?.proofMethod;
   const confirmationSms = typeof input?.confirmationSms === 'string' ? input.confirmationSms.trim() : '';
+  const extractedSms = confirmationSms ? parseTransactionSms(confirmationSms, provider) : null;
+  let senderPhone = validPaymentPhone(input?.senderPhone);
+  if (!senderPhone && extractedSms?.senderPhone) {
+    senderPhone = validPaymentPhone(extractedSms.senderPhone);
+  }
+  let reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
+  if (!reference && extractedSms?.reference) {
+    reference = extractedSms.reference;
+  }
+  const proofMethod = input?.proofMethod || (confirmationSms ? 'sms' : 'receipt');
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
   if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !['receipt', 'sms'].includes(String(proofMethod)) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
   if (confirmationSms.length > 1000) return json({ error: 'The confirmation SMS must be 1,000 characters or fewer.' }, 400);
@@ -1020,11 +1029,27 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
   if (receiptSha256 && await env.DB.prepare('SELECT id FROM deposit_requests WHERE receipt_sha256 = ?').bind(receiptSha256).first()) return json({ error: 'That receipt was already submitted.' }, 409);
   const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
   if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
+
+  const walletKind = mode === 'real' ? 'real' : 'demo';
+  const simulationOnly = mode === 'simulation' ? 1 : 0;
+
+  // Verify transaction details against duplicate check and authoritative source
+  const verification = proofMethod === 'sms'
+    ? await verifyDepositTransaction(env, {
+        provider,
+        reference,
+        expectedAmountSantim: amount * 100,
+        extractedSms,
+        walletKind,
+        simulationOnly: mode === 'simulation',
+      })
+    : { verified: false, autoApprove: false, status: 'pending' as const, reason: 'Manual review required for receipt' };
+
+  if (verification.duplicate) return json({ error: verification.error || 'That transaction reference was already submitted.' }, 409);
+
   const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
   const smsCiphertext = proofMethod === 'sms' ? await encryptContact(confirmationSms, env.SESSION_SECRET || '') : null;
-  const walletKind = mode === 'real' ? 'real' : 'demo';
-  const simulationOnly = mode === 'simulation' ? 1 : 0;
   const statements = [env.DB.prepare(`INSERT INTO deposit_requests
     (id, user_id, wallet_kind, simulation_only, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext, receipt_sha256)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`)
@@ -1035,9 +1060,12 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
       VALUES (?, ?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), id, receiptType, enc.encode(encryptedReceipt), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()));
   }
+  if (verification.autoApprove) {
+    statements.push(env.DB.prepare(`UPDATE deposit_requests SET status = 'approved', reviewed_by = 'system:auto-verified', reviewed_at = CURRENT_TIMESTAMP, review_reason = ? WHERE id = ? AND status = 'pending'`).bind(verification.reason, id));
+  }
   try { await env.DB.batch(statements); }
   catch { return json({ error: 'That request could not be saved. Check whether its receipt or transaction reference was already used.' }, 409); }
-  return json({ requestId: id, status: 'pending', simulationOnly: mode === 'simulation' }, 201);
+  return json({ requestId: id, status: verification.autoApprove ? 'approved' : 'pending', verified: verification.autoApprove, autoApproved: verification.autoApprove, simulationOnly: mode === 'simulation' }, 201);
 }
 
 async function createRealWithdrawal(request: Request, env: Env, userId: number): Promise<Response> {
@@ -1496,6 +1524,9 @@ export class GameRoom {
       if (!room || !room.publicRoomId) return json({ error: 'Public room not found.' }, 404);
       if (room.status === 'cancelled' || room.status === 'finished') return json({ ok: true });
       room.status = 'cancelled';
+      room.turnDeadline = undefined;
+      room.timeoutRecorded = undefined;
+      room.reconnectDeadline = undefined;
       await this.state.storage.put('room', room);
       await this.state.storage.deleteAlarm();
       await this.env.DB.batch([
@@ -1526,10 +1557,15 @@ export class GameRoom {
     const player = room.players.find((entry) => entry.id === userId);
     const playerIndex = room.players.findIndex((entry) => entry.id === userId);
     if (!player || playerIndex < 0) return this.sendError(socket, 'You are not seated in this room.');
+    if (room.gameId === 'ludo' && room.status === 'active' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
+      await this.finishTurnTimeout(room);
+      return this.sendError(socket, 'The turn timer expired. The match has ended.');
+    }
     if (room.terminal) return this.sendError(socket, 'This match has finished.');
     const control = input.type === 'resign' || input.type === 'draw-offer' || input.type === 'draw-accept' || input.type === 'draw-decline';
     if (!control && gameTurn(room) !== playerIndex) return this.sendError(socket, 'Please wait for your turn.');
-    const previous = { game: room.game, status: room.status, terminal: room.terminal, drawOfferBy: room.drawOfferBy };
+    const turnBefore = gameTurn(room);
+    const previous = { game: room.game, status: room.status, terminal: room.terminal, drawOfferBy: room.drawOfferBy, turnDeadline: room.turnDeadline, timeoutRecorded: room.timeoutRecorded };
     try {
       if (control) {
         if (room.gameId !== 'checkers') return this.sendError(socket, 'Move is not allowed for this game.');
@@ -1561,6 +1597,11 @@ export class GameRoom {
     room.sequence++;
     const completion = gameComplete(room);
     if (completion.done) room.status = 'finished';
+    if (room.status === 'finished') {
+      room.turnDeadline = undefined;
+    } else if (room.gameId === 'ludo' && (gameTurn(room) !== turnBefore || !room.turnDeadline)) {
+      this.startTurnClock(room);
+    }
     try {
       await this.recordMove(room, player.id, { type: input.type, ...(Number.isInteger(input.index) ? { index: input.index } : {}), ...(Number.isInteger(input.token) ? { token: input.token } : {}), ...(Number.isInteger(input.from) ? { from: input.from } : {}), ...(Number.isInteger(input.to) ? { to: input.to } : {}), ...(input.action && typeof input.action === 'object' ? { action: input.action } : {}) }, completion.winner);
       await this.state.storage.put('room', room);
@@ -1570,8 +1611,11 @@ export class GameRoom {
       room.status = previous.status;
       room.terminal = previous.terminal;
       room.drawOfferBy = previous.drawOfferBy;
+      room.turnDeadline = previous.turnDeadline;
+      room.timeoutRecorded = previous.timeoutRecorded;
       return this.sendError(socket, 'Move could not be saved. Please try again.');
     }
+    await this.scheduleRoomAlarm(room);
     this.broadcast(room);
   }
 
@@ -1583,13 +1627,23 @@ export class GameRoom {
     if (!room) return;
     if (room.status === 'waiting' && room.expiresAt <= Date.now()) {
       room.status = 'cancelled';
+      room.turnDeadline = undefined;
+      room.timeoutRecorded = undefined;
+      room.reconnectDeadline = undefined;
       await this.state.storage.put('room', room);
       await this.env.DB.prepare("UPDATE game_rooms SET status = 'cancelled' WHERE id = ? AND status = 'waiting'").bind(room.code).run();
       this.broadcast(room);
       return;
     }
-    if (room.status === 'active' && room.players.some((player) => !player.online)) {
+    if (room.status === 'active' && room.gameId === 'ludo' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
+      await this.finishTurnTimeout(room);
+      return;
+    }
+    if (room.status === 'active' && room.players.some((player) => !player.online) && (!room.reconnectDeadline || room.reconnectDeadline <= Date.now())) {
       room.status = 'cancelled';
+      room.turnDeadline = undefined;
+      room.timeoutRecorded = undefined;
+      room.reconnectDeadline = undefined;
       await this.state.storage.put('room', room);
       await this.env.DB.batch([
         this.env.DB.prepare("UPDATE game_rooms SET status = 'cancelled' WHERE id = ?").bind(room.code),
@@ -1601,7 +1655,63 @@ export class GameRoom {
         await market.fetch('https://market/void', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: room.code, matchId: room.matchId }) }).catch(() => undefined);
       }
       this.broadcast(room);
+      return;
     }
+    if (room.status === 'active' && room.gameId === 'ludo' && !room.turnDeadline && !room.terminal) this.startTurnClock(room);
+    await this.scheduleRoomAlarm(room);
+  }
+
+  private startTurnClock(room: StoredRoom): void {
+    room.turnDeadline = Date.now() + LUDO_TURN_MS;
+    room.timeoutRecorded = undefined;
+  }
+
+  private async scheduleRoomAlarm(room: StoredRoom): Promise<void> {
+    if (room.status === 'finished' || room.status === 'cancelled') {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const now = Date.now();
+    const deadlines: number[] = [];
+    if (room.status === 'waiting') deadlines.push(room.expiresAt);
+    if (room.status === 'active') {
+      if (room.gameId === 'ludo' && room.turnDeadline) deadlines.push(room.turnDeadline);
+      if (room.players.some((player) => !player.online)) deadlines.push(room.reconnectDeadline ?? now + RECONNECT_GRACE_MS);
+    }
+    if (!deadlines.length) {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    await this.state.storage.setAlarm(Math.min(...deadlines));
+  }
+
+  private async finishTurnTimeout(room: StoredRoom): Promise<boolean> {
+    if (room.status !== 'active' || room.gameId !== 'ludo' || room.terminal || room.timeoutRecorded) return false;
+    if (!room.turnDeadline || room.turnDeadline > Date.now()) return false;
+    const loserSeat = gameTurn(room);
+    if (loserSeat === null) return false;
+    const winner = loserSeat === 0 ? 1 : 0;
+    const previous = { status: room.status, terminal: room.terminal, timeoutRecorded: room.timeoutRecorded, turnDeadline: room.turnDeadline, sequence: room.sequence };
+    room.sequence++;
+    room.timeoutRecorded = true;
+    room.terminal = { winner, reason: 'timeout' };
+    room.status = 'finished';
+    room.turnDeadline = undefined;
+    try {
+      await this.recordMove(room, room.players[loserSeat]?.id ?? 0, { type: 'timeout' }, winner);
+      await this.state.storage.put('room', room);
+    } catch {
+      room.status = previous.status;
+      room.terminal = previous.terminal;
+      room.timeoutRecorded = previous.timeoutRecorded;
+      room.turnDeadline = previous.turnDeadline;
+      room.sequence = previous.sequence;
+      await this.state.storage.setAlarm(Date.now() + 5_000);
+      return false;
+    }
+    await this.scheduleRoomAlarm(room);
+    this.broadcast(room);
+    return true;
   }
 
   private async joinRoom(request: Request): Promise<Response> {
@@ -1624,13 +1734,17 @@ export class GameRoom {
     room.sequence = 0;
     room.terminal = undefined;
     room.drawOfferBy = undefined;
+    room.turnDeadline = undefined;
+    room.timeoutRecorded = undefined;
+    room.reconnectDeadline = room.players.some((player) => !player.online) ? Date.now() + RECONNECT_GRACE_MS : undefined;
+    if (room.gameId === 'ludo') this.startTurnClock(room);
     await this.env.DB.batch([
       this.env.DB.prepare("UPDATE game_rooms SET status = 'active' WHERE id = ? AND status = 'waiting'").bind(room.code),
       this.env.DB.prepare("INSERT INTO matches (id, room_id, game_id, status, bot_match) VALUES (?, ?, ?, 'active', 0)").bind(room.matchId, room.code, room.gameId),
       ...room.players.map((player, seat) => this.env.DB.prepare('INSERT INTO match_players (match_id, user_id, seat) VALUES (?, ?, ?)').bind(room.matchId, player.id, seat)),
     ]);
     await this.state.storage.put('room', room);
-    await this.state.storage.setAlarm(Date.now() + RECONNECT_GRACE_MS);
+    await this.scheduleRoomAlarm(room);
     this.broadcast(room);
     return json({ mark: room.players[1].mark, status: room.status });
   }
@@ -1648,10 +1762,15 @@ export class GameRoom {
     this.state.acceptWebSocket(server);
     const seat = room.players.find((player) => player.id === userId)!;
     seat.online = true;
+    if (room.players.every((player) => player.online)) room.reconnectDeadline = undefined;
+    if (room.status === 'active' && room.gameId === 'ludo' && !room.turnDeadline && !room.terminal) this.startTurnClock(room);
     await this.state.storage.put('room', room);
-    if (room.status === 'waiting' || room.players.some((player) => !player.online)) await this.state.storage.setAlarm(room.status === 'waiting' ? room.expiresAt : Date.now() + RECONNECT_GRACE_MS);
-    else await this.state.storage.deleteAlarm();
-    this.broadcast(room);
+    if (room.status === 'active' && room.gameId === 'ludo' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
+      if (!(await this.finishTurnTimeout(room))) this.broadcast(room);
+    } else {
+      await this.scheduleRoomAlarm(room);
+      this.broadcast(room);
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1663,8 +1782,10 @@ export class GameRoom {
     const stillConnected = this.state.getWebSockets().some((candidate) => (candidate.deserializeAttachment() as { userId?: number } | null)?.userId === attachment.userId);
     const player = room.players.find((entry) => entry.id === attachment.userId);
     if (player) player.online = stillConnected;
+    if (room.players.every((entry) => entry.online)) room.reconnectDeadline = undefined;
+    else if (room.status === 'active') room.reconnectDeadline ??= Date.now() + RECONNECT_GRACE_MS;
     await this.state.storage.put('room', room);
-    if (!stillConnected && room.status === 'active') await this.state.storage.setAlarm(Date.now() + RECONNECT_GRACE_MS);
+    await this.scheduleRoomAlarm(room);
     this.broadcast(room);
   }
 
@@ -1673,7 +1794,7 @@ export class GameRoom {
     const stateText = JSON.stringify(room.game);
     const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(stateText)));
     const stateHash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-    const event = this.env.DB.prepare('INSERT INTO match_events (match_id, sequence, actor_user_id, event_type, payload_json, state_hash) VALUES (?, ?, ?, ?, ?, ?)')
+    const event = this.env.DB.prepare('INSERT OR IGNORE INTO match_events (match_id, sequence, actor_user_id, event_type, payload_json, state_hash) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(room.matchId, room.sequence, userId, 'action', JSON.stringify({ action, state: roomAuditView(room) }), stateHash);
     const statements = [event];
     if (room.status === 'finished' && winner !== null) {
@@ -1697,6 +1818,7 @@ export class GameRoom {
       let game: unknown = room.game;
       if (room.gameId === 'poker' && seat >= 0) game = viewPoker(room.game as PokerState, seat as 0 | 1);
       try { socket.send(JSON.stringify({ type: 'state', code: room.code, gameId: room.gameId, status: room.status, players: room.players, game, you: room.players[seat]?.mark || null, seat, matchId: room.matchId, terminal: room.terminal || null, drawOfferBy: room.drawOfferBy ?? null,
+        turnDeadline: room.status === 'active' && room.gameId === 'ludo' ? room.turnDeadline ?? null : null, serverTime: Date.now(),
         ...(room.publicRoomId ? { publicRoom: { id: room.publicRoomId, entryCredits: room.entryCredits || 0, options: room.publicRoomOptions || {} } } : {}) })); }
       catch { socket.close(1011, 'Unable to send room update'); }
     }

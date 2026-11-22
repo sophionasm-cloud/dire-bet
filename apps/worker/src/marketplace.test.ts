@@ -4,7 +4,9 @@ import {
   DEFAULT_MARKETPLACE_SETTINGS,
   gameRoomWalletKind,
   isCancelledOrExpiredRoom,
+  isCreatorCancellableRoom,
   isFundedWalletKind,
+  MATCHMAKING_WAITING_SECONDS,
   parseEntryChoice,
   parseLudoRoomOptions,
   validateMarketplaceSettings,
@@ -50,6 +52,20 @@ describe('public room entry rules', () => {
   it('ignores historical commission settings', () => {
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, commissionBps: 100 })).toEqual(DEFAULT_MARKETPLACE_SETTINGS);
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, standardAmounts: [10, 10] })).toBeNull();
+  });
+
+  it('always normalizes the matchmaking wait to exactly 30 seconds', () => {
+    expect(MATCHMAKING_WAITING_SECONDS).toBe(30);
+    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, waitingSeconds: 120 })?.waitingSeconds).toBe(30);
+  });
+
+  it('lets creators cancel only before a match starts', () => {
+    expect(isCreatorCancellableRoom('WAITING')).toBe(true);
+    expect(isCreatorCancellableRoom('FULL')).toBe(true);
+    expect(isCreatorCancellableRoom('STARTING')).toBe(true);
+    expect(isCreatorCancellableRoom('IN_PROGRESS')).toBe(false);
+    expect(isCreatorCancellableRoom('SETTLING')).toBe(false);
+    expect(isCreatorCancellableRoom('COMPLETED')).toBe(false);
   });
 
   it('maps demo rooms to free game_rooms rows while preserving real stakes', () => {

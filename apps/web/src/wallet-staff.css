@@ -25,3 +25,21 @@
 @media(max-width:500px){.wallet-action-card{min-height:70px;padding:10px;gap:5px 8px}.wallet-action-card strong{font-size:11px}.wallet-hero-card{min-height:166px;padding:15px}.wallet-hero-card>strong{font-size:34px}.wallet-flow-header h1{font-size:15px}.wallet-method-card{grid-template-columns:35px 1fr;min-height:70px;padding:9px;gap:4px 8px}.wallet-method-mark{width:32px;height:32px;font-size:19px}.wallet-method-card strong{font-size:10px}.wallet-method-check{top:7px;right:7px}.wallet-history-row{grid-template-columns:30px minmax(0,1fr)}.wallet-history-side{grid-column:2;display:flex;justify-content:space-between;align-items:center}.wallet-history-side .demo-request-status{max-width:130px;text-align:right}.payment-review-actions{grid-template-columns:1fr}.payment-review-actions button:last-child{grid-column:auto}.payment-detail-grid{grid-template-columns:1fr 1fr}.payment-request-main h3{font-size:15px}.agent-admin-meta{align-items:flex-start;flex-direction:column}.agent-admin-main>.room-admin-status{font-size:7px}.agent-week-list article>span{min-width:0}.agent-week-list article>span strong{overflow-wrap:anywhere}.agent-code-card>div strong{font-size:23px}}
 @media(max-width:760px){.staff-shell .staff-layout{grid-template-columns:1fr}.staff-shell .staff-sidebar{display:flex;flex-direction:row;align-items:center;gap:4px;overflow-x:auto;padding:9px 14px;border-right:0;border-bottom:1px solid var(--border);background:#0b0b0c;position:sticky;top:0;z-index:6;scrollbar-width:none}.staff-shell .staff-sidebar::-webkit-scrollbar{display:none}.staff-shell .staff-sidebar>.staff-label,.staff-shell .staff-sidebar-note{display:none}.staff-shell .staff-sidebar button{flex:0 0 auto;min-height:38px;padding:0 10px;white-space:nowrap;gap:6px}}
 @media(prefers-reduced-motion:reduce){.wallet-action-card,.wallet-method-card{transition:none}}
+
+.wallet-sms-preview-card{display:grid;gap:8px;margin:10px 0;padding:12px;border:1px solid #3c5442;border-radius:11px;background:#0d1811;color:#bce5cb}
+.sms-preview-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sms-preview-badge{font-size:10px;font-weight:700;color:#52d186}
+.sms-provider-tag{padding:2px 7px;border-radius:6px;background:#142d1e;border:1px solid #2d6b45;font-size:8px;font-weight:750;letter-spacing:.05em;color:#7fe7a8}
+.sms-preview-fields{display:grid;gap:5px;font-size:9px}
+.sms-field-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:3px 0;border-bottom:1px solid #1c3325}
+.sms-field-row:last-child{border-bottom:0}
+.sms-field-row span:first-child{color:#8abfa0}
+.sms-field-row strong{color:#e2f7ec;font-weight:600}
+.sms-field-row .amount-match{color:#4ade80}
+.sms-field-row .amount-mismatch{color:#fbbf24}
+.status-pill{padding:2px 6px;border-radius:99px;font-size:8px;text-transform:uppercase}
+.status-pill.successful,.status-pill.completed{background:#164e2e;color:#86efac}
+.status-pill.failed{background:#451a1a;color:#fca5a5}
+.status-pill.unknown{background:#2a2b2e;color:#9ca3af}
+.wallet-sms-textarea{width:100%;min-height:85px;padding:9px;border:1px solid #373432;border-radius:9px;background:#080808;color:#f6f0e7;font-size:11px;line-height:1.45;resize:vertical;box-sizing:border-box}
+.wallet-sms-textarea:focus{border-color:#c38838;outline:2px solid #f6ae4933;outline-offset:0}

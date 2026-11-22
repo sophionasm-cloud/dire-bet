@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { parseTransactionSms, type ExtractedSmsData } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 
 type ProviderId = 'telebirr' | 'ebirr';
 type Provider = { provider: ProviderId; accountLabel: string; accountNumber: string; enabled: boolean; minimumAmount: number; maximumAmount: number };
 type WalletRequest = { id: string; provider: ProviderId; amount: number; status: string; created_at: string; review_reason: string | null; provider_reference?: string | null; reviewed_at?: string | null };
-type DepositProof = 'receipt' | 'sms';
 type RequestData = { deposits: WalletRequest[]; withdrawals: WalletRequest[] };
 type Props = { t: (key: TranslationKey) => string; token: string | null; onSupport: () => void };
 type View = 'main' | 'deposit' | 'instructions' | 'withdraw' | 'submitted';
@@ -15,14 +15,13 @@ function ProviderMark({ provider }: { provider: ProviderId }) {
   return <span className={`wallet-provider-mark ${provider}`} aria-hidden="true">{provider === 'telebirr' ? 'T' : 'e'}</span>;
 }
 
-function WalletIcon({ name }: { name: 'wallet' | 'deposit' | 'withdraw' | 'copy' | 'upload' | 'phone' | 'receipt' | 'person' | 'back' }) {
+function WalletIcon({ name }: { name: 'wallet' | 'deposit' | 'withdraw' | 'copy' | 'phone' | 'receipt' | 'person' | 'back' }) {
   const common = { width: 23, height: 23, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
   const paths = {
     wallet: <><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 9h18M16 14h2"/><path d="M6 5V3h12v2"/></>,
     deposit: <><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M5 14v5h14v-5"/></>,
     withdraw: <><path d="M12 8v12m0 0 5-5m-5 5-5-5"/><path d="M5 10V5h14v5"/></>,
     copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>,
-    upload: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></>,
     phone: <><path d="M7 3H5a2 2 0 0 0-2 2c0 8.8 7.2 16 16 16a2 2 0 0 0 2-2v-2l-5-2-2 3a14 14 0 0 1-7-7l3-2-3-5Z"/></>,
     receipt: <><path d="M5 3h14v18l-3-2-4 2-4-2-3 2V3Z"/><path d="M8 8h8M8 12h8M8 16h4"/></>,
     person: <><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></>,
@@ -55,20 +54,23 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const [useCustom, setUseCustom] = useState(false);
   const [senderPhone, setSenderPhone] = useState('');
   const [transactionReference, setTransactionReference] = useState('');
-  const [proofMethod, setProofMethod] = useState<DepositProof>('receipt');
   const [confirmationSms, setConfirmationSms] = useState('');
-  const [receipt, setReceipt] = useState<{ file: File; data: string } | null>(null);
   const [destinationPhone, setDestinationPhone] = useState('');
   const [accountHolderName, setAccountHolderName] = useState('');
   const [message, setMessage] = useState('');
   const [requestId, setRequestId] = useState('');
   const [submittedKind, setSubmittedKind] = useState<'deposit' | 'withdrawal'>('deposit');
+  const [submittedStatus, setSubmittedStatus] = useState<string>('pending');
   const [busy, setBusy] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoMessage, setPromoMessage] = useState('');
   const idempotencyKey = useRef(crypto.randomUUID());
   const selectedProvider = useMemo(() => providers.find((item) => item.provider === provider && item.enabled) || null, [provider, providers]);
   const requestAmount = useCustom ? Number(customAmount) : amount;
+
+  const extractedSms = useMemo<ExtractedSmsData | null>(() => {
+    return confirmationSms.trim().length >= 8 ? parseTransactionSms(confirmationSms, provider) : null;
+  }, [confirmationSms, provider]);
 
   const refresh = async () => {
     const settingResponse = await fetch('/api/wallet/settings').catch(() => null);
@@ -113,37 +115,40 @@ export default function WalletApp({ t, token, onSupport }: Props) {
     setView('instructions');
   };
 
-  const pickReceipt = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!['image/png', 'image/jpeg'].includes(file.type) || file.size > 2 * 1024 * 1024) {
-      setMessage('Choose a PNG or JPG image up to 2 MB.'); event.target.value = ''; return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') { setReceipt({ file, data: reader.result }); setMessage(''); }
-      else setMessage('That image could not be previewed.');
-    };
-    reader.onerror = () => setMessage('That image could not be previewed.');
-    reader.readAsDataURL(file);
-  };
-
   const submitDeposit = async (event: FormEvent) => {
     event.preventDefault(); setMessage('');
     if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
-    if (!provider || !Number.isSafeInteger(requestAmount) || !senderPhone.trim() || transactionReference.trim().length < 5 || (proofMethod === 'receipt' ? !receipt : confirmationSms.trim().length < 8)) { setMessage(t('walletProofRequired')); return; }
+    const finalRef = (transactionReference.trim() || extractedSms?.reference || '').trim();
+    if (!provider || !Number.isSafeInteger(requestAmount) || !senderPhone.trim() || finalRef.length < 5 || confirmationSms.trim().length < 8) {
+      setMessage('Please enter your sender number, paste the transaction SMS, and provide the transaction reference.');
+      return;
+    }
     setBusy(true);
     try {
-      const response = await fetch('/api/wallet/deposits', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
-        provider, amount: requestAmount, senderPhone, transactionReference, proofMethod,
-        receiptData: proofMethod === 'receipt' ? receipt?.data || null : null,
-        confirmationSms: proofMethod === 'sms' ? confirmationSms.trim() : null,
-        idempotencyKey: idempotencyKey.current,
-      }) });
-      const data = await response.json() as { requestId?: string; status?: string; error?: string };
+      const response = await fetch('/api/wallet/deposits', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider,
+          amount: requestAmount,
+          senderPhone: senderPhone.trim(),
+          transactionReference: finalRef,
+          proofMethod: 'sms',
+          confirmationSms: confirmationSms.trim(),
+          idempotencyKey: idempotencyKey.current,
+        })
+      });
+      const data = await response.json() as { requestId?: string; status?: string; verified?: boolean; autoApproved?: boolean; error?: string };
       if (!response.ok || !data.requestId) throw new Error(data.error || 'The request could not be sent.');
-      idempotencyKey.current = crypto.randomUUID(); setRequestId(data.requestId); setSubmittedKind('deposit'); setView('submitted');
-      setSenderPhone(''); setTransactionReference(''); setReceipt(null); setConfirmationSms(''); await refresh();
+      idempotencyKey.current = crypto.randomUUID();
+      setRequestId(data.requestId);
+      setSubmittedStatus(data.status || 'pending');
+      setSubmittedKind('deposit');
+      setView('submitted');
+      setSenderPhone('');
+      setTransactionReference('');
+      setConfirmationSms('');
+      await refresh();
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The request could not be sent.'); }
     finally { setBusy(false); }
   };
@@ -151,16 +156,28 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const submitWithdrawal = async (event: FormEvent) => {
     event.preventDefault(); setMessage('');
     if (!token) { setMessage('Sign in through Telegram or your web account before sending a request.'); return; }
-    if (!provider || !Number.isSafeInteger(requestAmount) || !destinationPhone.trim() || accountHolderName.trim().length < 2 || (balance !== null && requestAmount > balance)) { setMessage('Check your amount, available balance, destination number and account name.'); return; }
+    if (!provider || !Number.isSafeInteger(requestAmount) || !destinationPhone.trim() || accountHolderName.trim().length < 2 || (balance !== null && requestAmount > balance)) {
+      setMessage('Check your amount, available balance, destination number and account name.'); return;
+    }
     setBusy(true);
     try {
-      const response = await fetch('/api/wallet/withdrawals', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({
-        provider, amount: requestAmount, destinationPhone, accountHolderName, idempotencyKey: idempotencyKey.current,
-      }) });
+      const response = await fetch('/api/wallet/withdrawals', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider, amount: requestAmount, destinationPhone, accountHolderName, idempotencyKey: idempotencyKey.current,
+        })
+      });
       const data = await response.json() as { requestId?: string; status?: string; error?: string };
       if (!response.ok || !data.requestId) throw new Error(data.error || 'The request could not be sent.');
-      idempotencyKey.current = crypto.randomUUID(); setRequestId(data.requestId); setSubmittedKind('withdrawal'); setView('submitted');
-      setDestinationPhone(''); setAccountHolderName(''); await refresh();
+      idempotencyKey.current = crypto.randomUUID();
+      setRequestId(data.requestId);
+      setSubmittedStatus('pending');
+      setSubmittedKind('withdrawal');
+      setView('submitted');
+      setDestinationPhone('');
+      setAccountHolderName('');
+      await refresh();
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : 'The request could not be sent.'); }
     finally { setBusy(false); }
   };
@@ -190,7 +207,29 @@ export default function WalletApp({ t, token, onSupport }: Props) {
 
   const amountOptions = (label: string) => <fieldset className="wallet-amount-fieldset"><legend>{label}</legend><div className="wallet-amount-grid">{[50, 100, 200, 500].map((item) => <button key={item} type="button" className={`wallet-amount-button ${!useCustom && amount === item ? 'selected' : ''}`} aria-pressed={!useCustom && amount === item} onClick={() => { setAmount(item); setUseCustom(false); setMessage(''); }}><strong>{item}</strong><small>{t('etb')}</small></button>)}</div><button type="button" className={`wallet-custom-amount ${useCustom ? 'selected' : ''}`} aria-pressed={useCustom} onClick={() => { setUseCustom(true); setCustomAmount(''); }}><span aria-hidden="true">⌨</span>{t('marketCustom')}</button>{useCustom && <label className="wallet-field">Amount in whole Birr<input type="number" inputMode="numeric" min={selectedProvider?.minimumAmount || 50} max={selectedProvider?.maximumAmount || 10000} step="1" placeholder={`Enter amount (${t('etb')})`} value={customAmount} onChange={(event) => setCustomAmount(event.target.value)}/></label>}</fieldset>;
 
-  if (view === 'submitted') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-confirmation-mark">✓</div><span className="eyebrow">REQUEST RECEIVED</span><h1>{submittedKind === 'deposit' ? 'Deposit request sent' : 'Withdrawal request sent'}</h1><p className="wallet-flow-copy">{submittedKind === 'deposit' ? t('walletDepositReview') : 'An administrator will review your request and send the payout manually. The request status will show when it is complete.'}</p><div className="wallet-confirmation-card"><span>Request ID</span><strong>{requestId}</strong><span className="demo-request-status pending">PENDING {submittedKind === 'deposit' ? 'VERIFICATION' : 'REVIEW'}</span></div><button className="primary-button wide" onClick={backToMain}>{t('wallet')}<span aria-hidden="true">→</span></button></section>;
+  if (view === 'submitted') {
+    const isAutoApproved = submittedKind === 'deposit' && submittedStatus === 'approved';
+    return <section className="screen wallet-screen wallet-flow-screen">
+      <div className="wallet-confirmation-mark">{isAutoApproved ? '✓' : '⏳'}</div>
+      <span className="eyebrow">{isAutoApproved ? 'AUTOMATICALLY APPROVED' : 'REQUEST RECEIVED'}</span>
+      <h1>{isAutoApproved ? 'Deposit verified & approved!' : submittedKind === 'deposit' ? 'Deposit request sent' : 'Withdrawal request sent'}</h1>
+      <p className="wallet-flow-copy">
+        {isAutoApproved
+          ? 'Your transaction SMS was automatically verified and your wallet has been credited!'
+          : submittedKind === 'deposit'
+          ? 'Your payment confirmation SMS has been submitted. Validated transactions are credited automatically or queued for manual admin review.'
+          : 'An administrator will review your request and send the payout manually. The request status will show when it is complete.'}
+      </p>
+      <div className="wallet-confirmation-card">
+        <span>Request ID</span>
+        <strong>{requestId}</strong>
+        <span className={`demo-request-status ${isAutoApproved ? 'approved' : 'pending'}`}>
+          {isAutoApproved ? 'APPROVED & CREDITED' : submittedKind === 'deposit' ? 'PENDING VERIFICATION' : 'PENDING REVIEW'}
+        </span>
+      </div>
+      <button className="primary-button wide" onClick={backToMain}>{t('wallet')}<span aria-hidden="true">→</span></button>
+    </section>;
+  }
 
   if (view === 'main') return <section className="screen wallet-screen wallet-redesign">
     <span className="eyebrow">{t('wallet')}</span><h1>{t('wallet')}</h1>
@@ -204,17 +243,62 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   </section>;
 
   if (view === 'deposit') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={backToMain} aria-label="Back"><WalletIcon name="back"/></button><h1>{t('deposit')}</h1><span className="wallet-home-mark" aria-hidden="true">⌂</span></div><p className="wallet-choice-title">Choose a payment method</p>{methodCards('deposit')}{amountOptions(t('marketEntryAmount'))}
-    <div className="wallet-preview-warning compact"><span aria-hidden="true">i</span><p>{t('walletDepositProofHint')}</p></div>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" disabled={!moneyEnabled || !selectedProvider || !Number.isSafeInteger(requestAmount)} onClick={continueToInstructions}>{t('continue')}<span aria-hidden="true">→</span></button>
+    <div className="wallet-preview-warning compact"><span aria-hidden="true">i</span><p>Submit the official transaction SMS message. No screenshots or image uploads required.</p></div>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" disabled={!moneyEnabled || !selectedProvider || !Number.isSafeInteger(requestAmount)} onClick={continueToInstructions}>{t('continue')}<span aria-hidden="true">→</span></button>
   </section>;
 
   if (view === 'instructions') return <section className="screen wallet-screen wallet-flow-screen"><div className="wallet-flow-header"><button className="wallet-back" onClick={() => setView('deposit')} aria-label="Back"><WalletIcon name="back"/></button><h1>Pay with {provider ? providerLabel[provider] : 'Telebirr'}</h1><span className="wallet-home-mark" aria-hidden="true">⌂</span></div>
     {provider && <div className="wallet-provider-tabs">{(['telebirr', 'ebirr'] as ProviderId[]).map((id) => <button type="button" key={id} className={provider === id ? 'selected' : ''} disabled={!providers.find((entry) => entry.provider === id)?.enabled} onClick={() => { setProvider(id); setMessage(''); }}><ProviderMark provider={id}/><span>{providerLabel[id]}</span></button>)}</div>}
     <div className="wallet-receiving-card"><span className="wallet-receiving-label">DIRE BET RECEIVING ACCOUNT</span><strong>{selectedProvider?.accountNumber || 'Not configured'}</strong><button type="button" className="wallet-copy-number" onClick={() => void navigator.clipboard.writeText(selectedProvider?.accountNumber || '').then(() => setMessage('Number copied.')).catch(() => setMessage('Select the number to copy it.'))} disabled={!selectedProvider?.accountNumber}><WalletIcon name="copy"/>Copy number</button>{selectedProvider?.accountLabel && <small>{selectedProvider.accountLabel}</small>}<div className="wallet-receiving-amount"><span>Send exactly</span><strong>{requestAmount} {t('etb')}</strong></div></div>
-    <div className="wallet-instructions"><strong>Deposit steps</strong><ol><li>Send the exact amount to this account.</li><li>Enter your sender number and transaction reference.</li><li>Choose either the receipt photo or confirmation SMS below.</li><li>An administrator checks the payment and approves or rejects it.</li></ol></div>
-    <form className="wallet-request-form" onSubmit={(event) => void submitDeposit(event)}><label className="wallet-field">Sender phone number<input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={senderPhone} onChange={(event) => setSenderPhone(event.target.value)}/></label><label className="wallet-field">Transaction reference<input autoComplete="off" minLength={5} maxLength={80} placeholder="Transaction reference" required value={transactionReference} onChange={(event) => setTransactionReference(event.target.value)}/></label>
-      <fieldset className="wallet-proof-choice"><legend>{t('walletProofChoice')}</legend><div><button type="button" aria-pressed={proofMethod === 'receipt'} className={proofMethod === 'receipt' ? 'selected' : ''} onClick={() => { setProofMethod('receipt'); setConfirmationSms(''); }}>{t('walletProofReceipt')}</button><button type="button" aria-pressed={proofMethod === 'sms'} className={proofMethod === 'sms' ? 'selected' : ''} onClick={() => { setProofMethod('sms'); setReceipt(null); }}>{t('walletProofSms')}</button></div></fieldset>
-      {proofMethod === 'receipt' ? <><label className="wallet-receipt-upload"><input type="file" accept="image/png,image/jpeg" required onChange={(event) => void pickReceipt(event)}/><WalletIcon name="upload"/><span>{receipt ? receipt.file.name : 'Upload payment receipt'}</span><small>PNG or JPG · max 2 MB</small></label>{receipt && <div className="wallet-receipt-preview"><img src={receipt.data} alt="Payment receipt preview"/><div><strong>{receipt.file.name}</strong><small>{(receipt.file.size / 1024).toFixed(0)} KB</small></div><button type="button" onClick={() => setReceipt(null)}>Remove</button></div>}</> : <label className="wallet-field">{t('walletProofSmsLabel')}<textarea required minLength={8} maxLength={1000} rows={4} value={confirmationSms} onChange={(event) => setConfirmationSms(event.target.value)} placeholder={t('walletProofSmsPlaceholder')}/></label>}
-      <p className="wallet-pin-warning">♢ Never share your PIN or OTP.</p>{message && <p className="wallet-form-message" role="alert">{message}</p>}<button className="primary-button wide" type="submit" disabled={busy || !selectedProvider || (proofMethod === 'receipt' ? !receipt : confirmationSms.trim().length < 8)}>{busy ? 'Sending request…' : 'Submit Deposit Request'}<span aria-hidden="true">→</span></button>
+    <div className="wallet-instructions"><strong>Deposit steps</strong><ol><li>Send exactly {requestAmount} {t('etb')} to the account above.</li><li>Copy the official confirmation SMS message received from your bank/Telebirr and paste it below.</li><li>The system automatically reads and verifies the reference ID and amount.</li><li>Once verified, your wallet is credited immediately! No screenshots or file uploads needed.</li></ol></div>
+    <form className="wallet-request-form" onSubmit={(event) => void submitDeposit(event)}>
+      <label className="wallet-field">Sender phone number
+        <input type="tel" inputMode="tel" autoComplete="tel" placeholder="09XX XXX XXX" maxLength={24} required value={senderPhone} onChange={(event) => setSenderPhone(event.target.value)}/>
+      </label>
+      <label className="wallet-field">Transaction reference
+        <input autoComplete="off" minLength={5} maxLength={80} placeholder="Transaction reference (auto-filled from SMS)" required value={transactionReference} onChange={(event) => setTransactionReference(event.target.value)}/>
+      </label>
+      <label className="wallet-field">Bank / Payment confirmation SMS text
+        <textarea
+          className="wallet-sms-textarea"
+          required
+          minLength={8}
+          maxLength={1000}
+          rows={4}
+          value={confirmationSms}
+          onChange={(event) => {
+            const text = event.target.value;
+            setConfirmationSms(text);
+            const parsed = parseTransactionSms(text, provider);
+            if (parsed?.reference && !transactionReference) {
+              setTransactionReference(parsed.reference);
+            }
+            if (parsed?.senderPhone && !senderPhone) {
+              setSenderPhone(parsed.senderPhone);
+            }
+          }}
+          placeholder="Paste the SMS you received from Telebirr, CBE, or your bank (screenshots not accepted)"
+        />
+      </label>
+      {extractedSms && (
+        <div className="wallet-sms-preview-card">
+          <div className="sms-preview-header">
+            <span className="sms-preview-badge">{extractedSms.isCrediblePaymentSms ? '✓ Payment SMS Detected' : 'SMS Detected'}</span>
+            {extractedSms.provider && <span className="sms-provider-tag">{extractedSms.provider.toUpperCase()}</span>}
+          </div>
+          <div className="sms-preview-fields">
+            {extractedSms.reference && <div className="sms-field-row"><span>Transaction ID:</span><strong>{extractedSms.reference}</strong></div>}
+            {extractedSms.amount !== null && <div className="sms-field-row"><span>Detected Amount:</span><strong className={extractedSms.amount === requestAmount ? 'amount-match' : 'amount-mismatch'}>{extractedSms.amount} ETB {extractedSms.amount === requestAmount ? '✓' : `(Requested: ${requestAmount} ETB)`}</strong></div>}
+            {extractedSms.dateTime && <div className="sms-field-row"><span>Date / Time:</span><span>{extractedSms.dateTime}</span></div>}
+            {extractedSms.status && <div className="sms-field-row"><span>Status:</span><span className={`status-pill ${extractedSms.status}`}>{extractedSms.status}</span></div>}
+          </div>
+        </div>
+      )}
+      <p className="wallet-pin-warning">♢ Never share your PIN or OTP.</p>
+      {message && <p className="wallet-form-message" role="alert">{message}</p>}
+      <button className="primary-button wide" type="submit" disabled={busy || !selectedProvider || confirmationSms.trim().length < 8}>
+        {busy ? 'Verifying payment…' : 'Submit for Automatic Verification'}
+        <span aria-hidden="true">→</span>
+      </button>
     </form>
   </section>;
 
