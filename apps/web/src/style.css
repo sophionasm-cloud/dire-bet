@@ -420,7 +420,7 @@
 .public-lobby-screen .public-lobby-intro{color:#b7c6da}
 .public-lobby-screen .demo-credit-balance{border-color:#594624;background:linear-gradient(120deg,#241c0f,#0c1625 78%)}
 .market-room-browser,.market-create-panel{border:1px solid #263a55;border-radius:18px;background:#091728e8;box-shadow:0 14px 34px #0003,inset 0 1px #e0f1ff0a}
-.market-room-browser{margin:14px 0 16px;padding:14px;min-height:130px}
+.market-room-browser{margin:8px 0 10px;padding:10px 12px;min-height:auto}
 .market-section-heading,.market-form-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .market-section-heading{margin-bottom:11px}.market-section-heading h2,.market-form-heading h2{margin:3px 0 0;color:#f3f7ff;font-size:16px}
 .market-section-heading h2 b{display:inline-grid;min-width:22px;height:22px;place-items:center;margin-left:4px;border-radius:7px;background:#163251;color:#ffca6a;font-size:11px}
@@ -438,24 +438,24 @@
 .market-join-button{min-width:76px;min-height:42px;padding:0 12px;border:1px solid #36c98f;border-radius:11px;background:linear-gradient(145deg,#2fd08e,#159d69);color:#042619;font-size:11px;font-weight:800;cursor:pointer}
 .market-join-button:hover{background:linear-gradient(145deg,#47e4a4,#20b97d)}.market-join-button:disabled{border-color:#425263;background:#273444;color:#aab6c4;cursor:not-allowed}
 .market-room-details{display:flex;flex-wrap:wrap;gap:4px 12px;margin:8px 0 0 50px;color:#98a9bd;font-size:9px}
-.market-empty.compact{min-height:106px;display:flex;justify-content:center;align-items:center;gap:11px;padding:17px;border:1px dashed #344965;border-radius:13px;background:#0b1929;text-align:left}
-.market-empty.compact>span{width:38px;height:38px;flex:none;background:#122a45;color:#8bc7ff}.market-empty.compact h2{font-size:13px}.market-empty.compact p{margin:0;font-size:10px}
-.market-create-panel{padding:15px}.market-form-heading{margin-bottom:12px}.market-form-heading h2{font-size:17px}
+.market-empty.compact{min-height:auto;display:flex;justify-content:center;align-items:center;gap:9px;padding:8px 12px;border:1px dashed #2e4158;border-radius:10px;background:#0a1626;text-align:left}
+.market-empty.compact>span{width:24px;height:24px;flex:none;border-radius:6px;background:#122a45;color:#8bc7ff;font-size:13px;display:grid;place-items:center}.market-empty.compact h2{font-size:11.5px;margin:0 0 1px;color:#e8f0fb}.market-empty.compact p{margin:0;font-size:9px;color:#8fa1b8}
+.market-create-panel{padding:11px 13px}.market-form-heading{margin-bottom:7px}.market-form-heading h2{font-size:15px}
 .market-capacity{border:1px solid #2d4562;background:#11253d;color:#c9daee}
-.market-option-field{min-width:0;margin:11px 0 13px;padding:0;border:0}.market-option-field legend,.market-color-field legend{margin-bottom:7px;color:#d9e4f2;font-size:11px;font-weight:700}
+.market-option-field{min-width:0;margin:7px 0 9px;padding:0;border:0}.market-option-field legend,.market-color-field legend{margin-bottom:5px;color:#d9e4f2;font-size:10.5px;font-weight:700}
 .market-crown-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-.market-crown-options button{min-height:54px;display:grid;align-content:center;justify-items:center;gap:3px;padding:5px;border:1px solid #354660;border-radius:11px;background:#111f31;color:#e4edf8;cursor:pointer}
+.market-crown-options button{min-height:45px;display:grid;align-content:center;justify-items:center;gap:2px;padding:4px;border:1px solid #354660;border-radius:10px;background:#111f31;color:#e4edf8;cursor:pointer}
 .market-crown-options button>span{display:flex;gap:3px;color:#ffc840;font-size:17px;line-height:1}.market-crown-options button small{color:#aebed1;font-size:9px}
 .market-crown-options button.selected,.market-entry-options button.selected,.market-color-field button.selected{border-color:#ffca3a;background:#272518;box-shadow:inset 0 0 0 1px #ffca3a50,0 0 13px #ffca3a15}
-.market-option-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:12px 0 7px;color:#ffda4d;font-size:11px}.market-option-heading small{color:#9fb0c5;font-size:9px}
+.market-option-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0 5px;color:#ffda4d;font-size:10.5px}.market-option-heading small{color:#9fb0c5;font-size:9px}
 .market-entry-options{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
 .market-entry-options button{min-width:0;min-height:43px;justify-items:center;padding:5px 2px;border-color:#35435a;border-radius:10px;background:linear-gradient(145deg,#1a2637,#111b2a);text-align:center}
 .market-entry-options button.selected{border-color:#ffca3a;background:#302918;box-shadow:inset 0 0 0 1px #ffca3a55}
 .market-entry-options button:disabled{opacity:.42;cursor:not-allowed}.market-entry-options strong{font-size:12px;color:#f2f5fb}
-.market-color-field{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:13px 0 5px}.market-color-field legend{grid-column:1/-1;width:auto;margin:0}
+.market-color-field{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:7px 0 5px}.market-color-field legend{grid-column:1/-1;width:auto;margin:0}
 .market-color-field button{min-width:0;min-height:43px;justify-content:center;gap:6px;padding:0 5px;border-color:#34465f;background:#111e30;font-size:9px;white-space:nowrap}
 .color-token.red-token{background:#f32c24}.color-token.yellow-token{background:#ffdb00}.color-token.green-token{background:#008c4b}.color-token.blue-token{background:#159deb}
-.market-settings-line{border:1px solid #273b55;background:#0d1a2a}.market-preview{border-color:#2d405b;background:#071321}
+.market-settings-line{margin:7px 0 10px;padding:8px 12px;border:1px solid #273b55;border-radius:10px;background:#0d1a2a}.market-preview{border-color:#2d405b;background:#071321}
 .market-create-button{border:1px solid #ffcf75!important;background:linear-gradient(145deg,#ffc25f,#f3922c)!important;color:#2b1905!important;box-shadow:0 0 18px #ffad4533!important}
 .market-create-button:hover{background:linear-gradient(145deg,#ffd27b,#f5a147)!important}.market-create-button:disabled{border-color:#435066!important;background:#273342!important;color:#aeb9c8!important}
 .public-lobby-screen button:focus-visible{outline:2px solid #ffd16d;outline-offset:2px}
