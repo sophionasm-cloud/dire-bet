@@ -56,11 +56,21 @@ function credits(tenths: number): number { return Math.round(tenths) / 10; }
 
 export class Matchmaker {
   private moneyActive = false;
+  private moneyActiveReal = false;
   constructor(private readonly state: DurableObjectState, private readonly env: MarketEnv) {}
+
+  private async updateMoneyStatus(): Promise<void> {
+    this.moneyActiveReal = await moneyActivationRecorded(this.env);
+    this.moneyActive = this.moneyActiveReal || this.env.SIMULATED_WALLET_ENABLED === 'true';
+  }
+
+  private walletKind(): 'real' | 'demo' {
+    return this.moneyActiveReal ? 'real' : 'demo';
+  }
 
   async fetch(request: Request): Promise<Response> {
     this.ensureSchema();
-    this.moneyActive = await moneyActivationRecorded(this.env);
+    await this.updateMoneyStatus();
     const url = new URL(request.url);
     const path = url.pathname;
     try {
@@ -96,7 +106,7 @@ export class Matchmaker {
 
   async alarm(): Promise<void> {
     this.ensureSchema();
-    this.moneyActive = await moneyActivationRecorded(this.env);
+    await this.updateMoneyStatus();
     const now = Date.now();
     const expired = this.state.storage.sql.exec<{ id: string; code: string }>(
       "SELECT id, code FROM public_rooms WHERE status = 'WAITING' AND expires_at <= ? ORDER BY expires_at LIMIT 100", now,
@@ -151,58 +161,61 @@ export class Matchmaker {
 
   private marketConfig(): MarketplaceSettings {
     const settings = this.settings();
-    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, realMoneyEnabled: this.moneyActive };
+    return { ...settings, standardAmounts: this.moneyActive ? settings.standardAmounts : [], customEnabled: this.moneyActive && settings.customEnabled, realMoneyEnabled: this.moneyActiveReal };
   }
 
   private async balance(userId: number): Promise<Response> {
     if (!Number.isSafeInteger(userId) || userId <= 0) return reply({ error: 'Player account is unavailable.' }, 400);
     if (!this.moneyActive) return reply({ error: 'Wallet services are unavailable until required approvals are recorded.' }, 403);
-    const eligibility = await moneyEligibilityError(this.env, userId);
-    if (eligibility) return reply({ error: eligibility }, 403);
-    const wallet = await this.env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = 'real'").bind(userId).first<{ balance_santim: number }>();
+    if (this.moneyActiveReal) {
+      const eligibility = await moneyEligibilityError(this.env, userId);
+      if (eligibility) return reply({ error: eligibility }, 403);
+    }
+    const kind = this.walletKind();
+    const wallet = await this.env.DB.prepare("SELECT balance_santim FROM wallets WHERE user_id = ? AND wallet_kind = ?").bind(userId, kind).first<{ balance_santim: number }>();
     return reply({ balanceSantim: wallet?.balance_santim || 0, balance: (wallet?.balance_santim || 0) / 100 });
   }
 
-  private async reserveWallet(userId: number, amountSantim: number, key: string, reference: string): Promise<boolean> {
+  private async reserveWallet(userId: number, amountSantim: number, key: string, reference: string, walletKind: 'real' | 'demo' = this.walletKind()): Promise<boolean> {
     const previous = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
-      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = ?`).bind(key, walletKind).first<{ amount_santim: number; user_id: number }>();
     if (previous) return previous.user_id === userId && previous.amount_santim === -amountSantim;
     try {
       const result = await this.env.DB.prepare(`INSERT INTO wallet_transactions
         (id, wallet_id, wallet_kind, category, amount_santim, balance_after_santim, idempotency_key, actor_type, actor_id, reference)
-        SELECT ?, id, 'real', 'match_entry', -?, balance_santim - ?, ?, 'user', ?, ?
-        FROM wallets WHERE user_id = ? AND wallet_kind = 'real' AND balance_santim >= ?`)
-        .bind(crypto.randomUUID(), amountSantim, amountSantim, key, String(userId), reference, userId, amountSantim).run();
+        SELECT ?, id, ?, 'match_entry', -?, balance_santim - ?, ?, 'user', ?, ?
+        FROM wallets WHERE user_id = ? AND wallet_kind = ? AND balance_santim >= ?`)
+        .bind(crypto.randomUUID(), walletKind, amountSantim, amountSantim, key, String(userId), reference, userId, walletKind, amountSantim).run();
       if (result.meta.changes === 1) return true;
     } catch { /* A concurrent request may have reserved these funds first. */ }
     const repeated = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
-      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = ?`).bind(key, walletKind).first<{ amount_santim: number; user_id: number }>();
     return Boolean(repeated && repeated.user_id === userId && repeated.amount_santim === -amountSantim);
   }
 
-  private async creditWallet(userId: number, amountSantim: number, category: 'match_payout' | 'refund', key: string, reference: string): Promise<boolean> {
+  private async creditWallet(userId: number, amountSantim: number, category: 'match_payout' | 'refund', key: string, reference: string, walletKind: 'real' | 'demo' = this.walletKind()): Promise<boolean> {
     const previous = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
-      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = ?`).bind(key, walletKind).first<{ amount_santim: number; user_id: number }>();
     if (previous) return previous.user_id === userId && previous.amount_santim === amountSantim;
     try {
       const result = await this.env.DB.prepare(`INSERT INTO wallet_transactions
         (id, wallet_id, wallet_kind, category, amount_santim, balance_after_santim, idempotency_key, actor_type, actor_id, reference)
-        SELECT ?, id, 'real', ?, ?, balance_santim + ?, ?, 'system', NULL, ?
-        FROM wallets WHERE user_id = ? AND wallet_kind = 'real'`)
-        .bind(crypto.randomUUID(), category, amountSantim, amountSantim, key, reference, userId).run();
+        SELECT ?, id, ?, ?, ?, balance_santim + ?, ?, 'system', NULL, ?
+        FROM wallets WHERE user_id = ? AND wallet_kind = ?`)
+        .bind(crypto.randomUUID(), walletKind, category, amountSantim, amountSantim, key, reference, userId, walletKind).run();
       if (result.meta.changes === 1) return true;
     } catch { /* The idempotency key can be written by a concurrent settlement. */ }
     const repeated = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
-      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(key).first<{ amount_santim: number; user_id: number }>();
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = ?`).bind(key, walletKind).first<{ amount_santim: number; user_id: number }>();
     return Boolean(repeated && repeated.user_id === userId && repeated.amount_santim === amountSantim);
   }
 
-  private async refundWallet(userId: number, amountSantim: number, holdKey: string, reference: string): Promise<boolean> {
+  private async refundWallet(userId: number, amountSantim: number, holdKey: string, reference: string, walletKind: 'real' | 'demo' = this.walletKind()): Promise<boolean> {
     const hold = await this.env.DB.prepare(`SELECT t.amount_santim, w.user_id FROM wallet_transactions t
-      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = 'real'`).bind(holdKey).first<{ amount_santim: number; user_id: number }>();
+      JOIN wallets w ON w.id = t.wallet_id WHERE t.idempotency_key = ? AND t.wallet_kind = ?`).bind(holdKey, walletKind).first<{ amount_santim: number; user_id: number }>();
     if (!hold) return true;
     if (hold.user_id !== userId || hold.amount_santim !== -amountSantim) return false;
-    return this.creditWallet(userId, amountSantim, 'refund', `room-refund:${holdKey}`, reference);
+    return this.creditWallet(userId, amountSantim, 'refund', `room-refund:${holdKey}`, reference, walletKind);
   }
 
   private async createRoom(request: Request): Promise<Response> {
@@ -222,8 +235,10 @@ export class Matchmaker {
     const userId = input.userId as number;
     if (entryAmount > 0) {
       if (!this.moneyActive) return reply({ error: 'Paid rooms are unavailable until required approvals are recorded.' }, 403);
-      const eligibility = await moneyEligibilityError(this.env, userId);
-      if (eligibility) return reply({ error: eligibility }, 403);
+      if (this.moneyActiveReal) {
+        const eligibility = await moneyEligibilityError(this.env, userId);
+        if (eligibility) return reply({ error: eligibility }, 403);
+      }
     }
     const displayName = input.displayName.slice(0, 32);
     const createdAt = Date.now();
@@ -250,7 +265,8 @@ export class Matchmaker {
     if (!transaction.created && room.game_ready !== 1) return reply({ error: 'Room setup is still in progress. Refresh in a moment.' }, 409);
     if (transaction.created && entryAmount > 0) {
       const holdKey = `public-room-entry:${room.code}:0`;
-      if (!(await this.reserveWallet(userId, entryAmount * 100, holdKey, room.code))) {
+      const roomWalletKind = (room.wallet_kind === 'real' || room.wallet_kind === 'demo') ? room.wallet_kind : this.walletKind();
+      if (!(await this.reserveWallet(userId, entryAmount * 100, holdKey, room.code, roomWalletKind))) {
         await this.cancelBySystem(room.id, 'INSUFFICIENT_WALLET_BALANCE', false);
         return reply({ error: 'Your available wallet balance is too low for this room.' }, 402);
       }
@@ -297,10 +313,12 @@ export class Matchmaker {
       return reply({ error: room.status === 'WAITING' ? 'This room has expired.' : 'This room is no longer available.' }, 409);
     }
     const userId = input.userId as number;
-    if (room.wallet_kind === 'real') {
+    if (room.wallet_kind === 'real' || room.wallet_kind === 'demo') {
       if (!this.moneyActive) return reply({ error: 'Paid rooms are unavailable until required approvals are recorded.' }, 403);
-      const eligibility = await moneyEligibilityError(this.env, userId);
-      if (eligibility) return reply({ error: eligibility }, 403);
+      if (this.moneyActiveReal) {
+        const eligibility = await moneyEligibilityError(this.env, userId);
+        if (eligibility) return reply({ error: eligibility }, 403);
+      }
     }
     const displayName = input.displayName.slice(0, 32);
     const joinedAt = Date.now();
