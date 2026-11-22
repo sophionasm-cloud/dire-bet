@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSettlement, DEFAULT_MARKETPLACE_SETTINGS, parseEntryChoice, parseLudoRoomOptions, validateMarketplaceSettings } from './marketplace';
+import {
+  calculateSettlement,
+  DEFAULT_MARKETPLACE_SETTINGS,
+  gameRoomWalletKind,
+  isCancelledOrExpiredRoom,
+  isFundedWalletKind,
+  parseEntryChoice,
+  parseLudoRoomOptions,
+  validateMarketplaceSettings,
+} from './marketplace';
 
 describe('public room entry rules', () => {
   it.each([10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000])('accepts standard entry %i ETB', (amount) => {
@@ -41,5 +50,24 @@ describe('public room entry rules', () => {
   it('ignores historical commission settings', () => {
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, commissionBps: 100 })).toEqual(DEFAULT_MARKETPLACE_SETTINGS);
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, standardAmounts: [10, 10] })).toBeNull();
+  });
+
+  it('maps demo rooms to free game_rooms rows while preserving real stakes', () => {
+    expect(gameRoomWalletKind('demo')).toBe('free');
+    expect(gameRoomWalletKind('free')).toBe('free');
+    expect(gameRoomWalletKind('real')).toBe('real');
+  });
+
+  it('treats both demo and real rooms as wallet-funded', () => {
+    expect(isFundedWalletKind('demo')).toBe(true);
+    expect(isFundedWalletKind('real')).toBe(true);
+    expect(isFundedWalletKind('free')).toBe(false);
+  });
+
+  it('only resets idempotency entries for cancelled or expired rooms', () => {
+    expect(isCancelledOrExpiredRoom('CANCELLED')).toBe(true);
+    expect(isCancelledOrExpiredRoom('EXPIRED')).toBe(true);
+    expect(isCancelledOrExpiredRoom('WAITING')).toBe(false);
+    expect(isCancelledOrExpiredRoom('IN_PROGRESS')).toBe(false);
   });
 });

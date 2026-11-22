@@ -1,6 +1,9 @@
 import {
   calculateSettlement,
   DEFAULT_MARKETPLACE_SETTINGS,
+  gameRoomWalletKind,
+  isCancelledOrExpiredRoom,
+  isFundedWalletKind,
   isMarketplaceGame,
   parseEntryChoice,
   parseLudoRoomOptions,
@@ -247,7 +250,7 @@ export class Matchmaker {
       const existing = this.state.storage.sql.exec<{ room_id: string }>('SELECT room_id FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey).toArray()[0];
       if (existing) {
         const existingRoom = this.roomRow(existing.room_id);
-        if (existingRoom && existingRoom.status !== 'CANCELLED' && existingRoom.status !== 'EXPIRED') {
+        if (existingRoom && !isCancelledOrExpiredRoom(existingRoom.status)) {
           return { roomId: existing.room_id, created: false };
         }
         this.state.storage.sql.exec('DELETE FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey);
@@ -267,14 +270,14 @@ export class Matchmaker {
     });
     const room = this.roomRow(transaction.roomId);
     if (!room) return reply({ error: 'Room request could not be found.' }, 503);
-    if (room.status === 'CANCELLED' || room.status === 'EXPIRED') {
+    if (isCancelledOrExpiredRoom(room.status)) {
       this.state.storage.sql.exec('DELETE FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey);
       return reply({ error: 'That room request could not be completed. Start a new request.' }, 409);
     }
     if (!transaction.created && room.game_ready !== 1) return reply({ error: 'Room setup is still in progress. Refresh in a moment.' }, 409);
     if (transaction.created && entryAmount > 0) {
       const holdKey = `public-room-entry:${room.code}:0`;
-      const roomWalletKind = (room.wallet_kind === 'real' || room.wallet_kind === 'demo') ? room.wallet_kind : this.walletKind();
+      const roomWalletKind = isFundedWalletKind(room.wallet_kind) ? room.wallet_kind : this.walletKind();
       if (!(await this.reserveWallet(userId, entryAmount * 100, holdKey, room.code, roomWalletKind))) {
         await this.cancelBySystem(room.id, 'INSUFFICIENT_WALLET_BALANCE', false);
         return reply({ error: 'Your available wallet balance is too low for this room.' }, 402);
@@ -284,7 +287,7 @@ export class Matchmaker {
       try {
         await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at, is_public, entry_amount_santim, wallet_kind)
           VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?, 1, ?, ?)`)
-          .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString(), entryAmount * 100, room.wallet_kind === 'real' ? 'real' : 'free').run();
+          .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString(), entryAmount * 100, gameRoomWalletKind(room.wallet_kind)).run();
       } catch {
         await this.cancelBySystem(room.id, 'GAME_ROOM_RECORD_FAILED', false);
         return reply({ error: 'Could not save the game room. Any held wallet funds were returned.' }, 503);
@@ -321,7 +324,7 @@ export class Matchmaker {
       return reply({ error: room.status === 'WAITING' ? 'This room has expired.' : 'This room is no longer available.' }, 409);
     }
     const userId = input.userId as number;
-    if (room.wallet_kind === 'real' || room.wallet_kind === 'demo') {
+    if (isFundedWalletKind(room.wallet_kind)) {
       if (!this.moneyActive) return reply({ error: 'Paid rooms are unavailable until required approvals are recorded.' }, 403);
       if (this.moneyActiveReal) {
         const eligibility = await moneyEligibilityError(this.env, userId);
@@ -334,7 +337,7 @@ export class Matchmaker {
       const current = this.roomRow(code);
       if (!current || current.status !== 'WAITING' || current.game_ready !== 1 || current.expires_at <= joinedAt || current.player_count >= current.capacity) return { ok: false as const, error: 'This room is full or no longer available.' };
       const seat = current.player_count;
-      const reservedUnits = (current.wallet_kind === 'real' || current.wallet_kind === 'demo') ? current.entry_credits * 100 : 0;
+      const reservedUnits = isFundedWalletKind(current.wallet_kind) ? current.entry_credits * 100 : 0;
       this.state.storage.sql.exec('INSERT INTO public_room_players (room_id, user_id, display_name, seat, reserved_units, joined_at) VALUES (?, ?, ?, ?, ?, ?)', code, userId, displayName, seat, reservedUnits, joinedAt);
       const playerCount = seat + 1;
       this.state.storage.sql.exec('UPDATE public_rooms SET player_count = ?, status = \'STARTING\' WHERE id = ? AND status = \'WAITING\'', playerCount, code);
@@ -342,7 +345,7 @@ export class Matchmaker {
       return { ok: true as const, full: playerCount >= current.capacity, seat, amountSantim: reservedUnits };
     });
     if (!result.ok) return reply({ error: result.error }, 409);
-    if ((room.wallet_kind === 'real' || room.wallet_kind === 'demo') && !(await this.reserveWallet(userId, result.amountSantim, `public-room-entry:${code}:${result.seat}`, code, room.wallet_kind))) {
+    if (isFundedWalletKind(room.wallet_kind) && !(await this.reserveWallet(userId, result.amountSantim, `public-room-entry:${code}:${result.seat}`, code, room.wallet_kind))) {
       this.state.storage.transactionSync(() => {
         this.state.storage.sql.exec('DELETE FROM public_room_players WHERE room_id = ? AND user_id = ? AND seat = ?', code, userId, result.seat);
         this.state.storage.sql.exec("UPDATE public_rooms SET player_count = player_count - 1, status = 'WAITING' WHERE id = ? AND status = 'STARTING'", code);
@@ -443,7 +446,7 @@ export class Matchmaker {
     } catch { return reply({ error: 'The match result is invalid.' }, 409); }
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', row.id).toArray();
     if (players.length !== row.capacity) return reply({ error: 'The completed match has an incomplete room.' }, 409);
-    const calculated = (row.wallet_kind === 'real' || row.wallet_kind === 'demo') ? calculateSettlement(row.entry_credits, players.length) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const calculated = isFundedWalletKind(row.wallet_kind) ? calculateSettlement(row.entry_credits, players.length) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     const locked = this.state.storage.transactionSync(() => {
       const current = this.roomRow(row.id);
       if (!current || current.status === 'CANCELLED' || current.status === 'EXPIRED') return 'closed';
@@ -459,10 +462,11 @@ export class Matchmaker {
       return reply({ settled: false, alreadySettled: true, room: this.roomView(row.id) });
     }
 
-    if (row.wallet_kind === 'real') {
+    const walletKind = isFundedWalletKind(row.wallet_kind) ? row.wallet_kind : null;
+    if (walletKind) {
       for (const player of players) {
         const hold = await this.env.DB.prepare(`SELECT amount_santim FROM wallet_transactions
-          WHERE idempotency_key = ? AND wallet_kind = 'real'`).bind(`public-room-entry:${row.code}:${player.seat}`).first<{ amount_santim: number }>();
+          WHERE idempotency_key = ? AND wallet_kind = ?`).bind(`public-room-entry:${row.code}:${player.seat}`, walletKind).first<{ amount_santim: number }>();
         if (!hold || hold.amount_santim !== -player.reserved_units || player.reserved_units !== row.entry_credits * 100) {
           return reply({ error: 'The entry-fund record is incomplete; settlement is held for reconciliation.' }, 503);
         }
@@ -472,7 +476,7 @@ export class Matchmaker {
         ? players.map((player) => ({ player, amount: Math.floor(payoutSantim / players.length) + (player.seat === 0 ? payoutSantim % players.length : 0) }))
         : players.map((player) => ({ player, amount: player.seat === winner ? payoutSantim : 0 }));
       for (const payout of payouts) {
-        if (payout.amount && !(await this.creditWallet(payout.player.user_id, payout.amount, 'match_payout', `public-room-payout:${row.code}:${payout.player.user_id}`, input.matchId))) {
+        if (payout.amount && !(await this.creditWallet(payout.player.user_id, payout.amount, 'match_payout', `public-room-payout:${row.code}:${payout.player.user_id}`, input.matchId, walletKind))) {
           return reply({ error: 'The result is verified, but its wallet payout is pending reconciliation.' }, 503);
         }
       }
@@ -643,7 +647,7 @@ export class Matchmaker {
     const row = this.roomRow(id);
     if (!row) return null;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', id).toArray();
-    const expected = (row.wallet_kind === 'real' || row.wallet_kind === 'demo') ? calculateSettlement(row.entry_credits, row.capacity) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const expected = isFundedWalletKind(row.wallet_kind) ? calculateSettlement(row.entry_credits, row.capacity) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     let options: Record<string, unknown> = {};
     try { options = JSON.parse(row.options_json) as Record<string, unknown>; } catch { /* Keep malformed stored options out of the response. */ }
     return {
@@ -683,13 +687,13 @@ export class Matchmaker {
     if (!room) return false;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? AND reserved_units > 0', roomId).toArray();
     for (const player of players) {
-      if ((room.wallet_kind === 'real' || room.wallet_kind === 'demo') && !(await this.refundWallet(player.user_id, player.reserved_units, `public-room-entry:${room.code}:${player.seat}`, room.code, room.wallet_kind))) {
+      if (isFundedWalletKind(room.wallet_kind) && !(await this.refundWallet(player.user_id, player.reserved_units, `public-room-entry:${room.code}:${player.seat}`, room.code, room.wallet_kind))) {
         this.recordEvent(roomId, null, 'WALLET_REFUND_PENDING', { userId: player.user_id, seat: player.seat });
         return false;
       }
       this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ? AND user_id = ? AND reserved_units = ?', roomId, player.user_id, player.reserved_units);
     }
-    if (players.length) this.recordEvent(roomId, null, (room.wallet_kind === 'real' || room.wallet_kind === 'demo') ? 'WALLET_FUNDS_RETURNED' : 'LEGACY_PREVIEW_ROOM_CLOSED', { players: players.length });
+    if (players.length) this.recordEvent(roomId, null, isFundedWalletKind(room.wallet_kind) ? 'WALLET_FUNDS_RETURNED' : 'LEGACY_PREVIEW_ROOM_CLOSED', { players: players.length });
     return true;
   }
 

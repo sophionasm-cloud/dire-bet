@@ -1,5 +1,18 @@
 export type EntryChoice = { kind: 'free' } | { kind: 'standard' | 'custom'; amount: number };
 export type LudoRoomOptions = { player0Color: 'red' | 'yellow' | 'green'; crownTarget: 1 | 2 | 4 };
+export type PublicWalletKind = 'demo' | 'real' | 'free';
+
+export function isFundedWalletKind(walletKind: string): walletKind is 'real' | 'demo' {
+  return walletKind === 'real' || walletKind === 'demo';
+}
+
+export function gameRoomWalletKind(walletKind: PublicWalletKind): 'free' | 'real' {
+  return walletKind === 'real' ? 'real' : 'free';
+}
+
+export function isCancelledOrExpiredRoom(status: string): boolean {
+  return status === 'CANCELLED' || status === 'EXPIRED';
+}
 export type MarketplaceSettings = {
   standardAmounts: number[];
   customEnabled: boolean;
