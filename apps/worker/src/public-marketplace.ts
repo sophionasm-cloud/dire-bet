@@ -261,7 +261,10 @@ export class Matchmaker {
     });
     const room = this.roomRow(transaction.roomId);
     if (!room) return reply({ error: 'Room request could not be found.' }, 503);
-    if (room.status === 'CANCELLED' || room.status === 'EXPIRED') return reply({ error: 'That room request could not be completed. Start a new request.' }, 409);
+    if (room.status === 'CANCELLED' || room.status === 'EXPIRED') {
+      this.state.storage.sql.exec('DELETE FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey);
+      return reply({ error: 'That room request could not be completed. Start a new request.' }, 409);
+    }
     if (!transaction.created && room.game_ready !== 1) return reply({ error: 'Room setup is still in progress. Refresh in a moment.' }, 409);
     if (transaction.created && entryAmount > 0) {
       const holdKey = `public-room-entry:${room.code}:0`;

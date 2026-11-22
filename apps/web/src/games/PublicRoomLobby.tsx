@@ -168,7 +168,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       requestKey.current = crypto.randomUUID();
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
+    } catch (cause) { requestKey.current = crypto.randomUUID(); setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
     finally { setBusy(false); }
   };
 
