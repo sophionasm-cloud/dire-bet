@@ -245,7 +245,13 @@ export class Matchmaker {
     const expiresAt = createdAt + settings.waitingSeconds * 1000;
     const transaction = this.state.storage.transactionSync(() => {
       const existing = this.state.storage.sql.exec<{ room_id: string }>('SELECT room_id FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey).toArray()[0];
-      if (existing) return { roomId: existing.room_id, created: false };
+      if (existing) {
+        const existingRoom = this.roomRow(existing.room_id);
+        if (existingRoom && existingRoom.status !== 'CANCELLED' && existingRoom.status !== 'EXPIRED') {
+          return { roomId: existing.room_id, created: false };
+        }
+        this.state.storage.sql.exec('DELETE FROM public_room_idempotency WHERE user_id = ? AND request_key = ?', userId, input.idempotencyKey);
+      }
       let code = roomCode();
       for (let attempt = 0; attempt < 8 && this.roomRow(code); attempt++) code = roomCode();
       const walletKind = entryAmount > 0 ? this.walletKind() : 'free';
@@ -278,7 +284,7 @@ export class Matchmaker {
       try {
         await this.env.DB.prepare(`INSERT INTO game_rooms (id, code, game_id, host_user_id, status, capacity, mode, expires_at, is_public, entry_amount_santim, wallet_kind)
           VALUES (?, ?, ?, ?, 'waiting', 2, 'free', ?, 1, ?, ?)`)
-          .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString(), entryAmount * 100, room.wallet_kind).run();
+          .bind(room.code, room.code, room.game_id, userId, new Date(room.expires_at).toISOString(), entryAmount * 100, room.wallet_kind === 'real' ? 'real' : 'free').run();
       } catch {
         await this.cancelBySystem(room.id, 'GAME_ROOM_RECORD_FAILED', false);
         return reply({ error: 'Could not save the game room. Any held wallet funds were returned.' }, 503);
@@ -638,14 +644,14 @@ export class Matchmaker {
     const row = this.roomRow(id);
     if (!row) return null;
     const players = this.state.storage.sql.exec<PlayerRow>('SELECT user_id, display_name, seat, reserved_units FROM public_room_players WHERE room_id = ? ORDER BY seat', id).toArray();
-    const expected = row.wallet_kind === 'real' ? calculateSettlement(row.entry_credits, row.capacity) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
+    const expected = (row.wallet_kind === 'real' || row.wallet_kind === 'demo') ? calculateSettlement(row.entry_credits, row.capacity) : { poolTenths: 0, payoutTenths: 0, perWinnerTenths: 0 };
     let options: Record<string, unknown> = {};
     try { options = JSON.parse(row.options_json) as Record<string, unknown>; } catch { /* Keep malformed stored options out of the response. */ }
     return {
       id: row.id, code: row.code, gameId: row.game_id, creatorName: row.creator_name,
       creatorAvatar: (row.creator_name.trim()[0] || 'P').toUpperCase(),
       players: players.map((player) => ({ name: player.display_name, avatar: (player.display_name.trim()[0] || 'P').toUpperCase(), seat: player.seat })),
-      playerCount: row.player_count, capacity: row.capacity, entryCredits: row.wallet_kind === 'demo' ? 0 : row.entry_credits,
+      playerCount: row.player_count, capacity: row.capacity, entryCredits: row.wallet_kind === 'free' ? 0 : row.entry_credits,
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),
       mode: row.game_id === 'ludo' ? `Classic · ${Number(options.crownTarget) || 4} ${Number(options.crownTarget) === 1 ? 'crown' : 'crowns'}` : row.game_id === 'poker' ? 'Heads-up' : row.game_id === 'checkers' ? 'American · two players' : 'Classic · two players',

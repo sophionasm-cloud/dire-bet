@@ -158,10 +158,12 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
     if (entry !== 'free' && (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum)))) { setMessage(t('marketAmountInvalid')); return; }
     setBusy(true); setMessage('');
+    const freshKey = crypto.randomUUID();
+    requestKey.current = freshKey;
     try {
       const response = await fetch('/api/public-rooms', {
         method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ gameId, entry: entry === 'free' ? { kind: 'free' } : { kind: entry === -1 ? 'custom' : 'standard', amount }, options: gameId === 'ludo' ? { player0Color, crownTarget } : {}, idempotencyKey: requestKey.current }),
+        body: JSON.stringify({ gameId, entry: entry === 'free' ? { kind: 'free' } : { kind: entry === -1 ? 'custom' : 'standard', amount }, options: gameId === 'ludo' ? { player0Color, crownTarget } : {}, idempotencyKey: freshKey }),
       });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
