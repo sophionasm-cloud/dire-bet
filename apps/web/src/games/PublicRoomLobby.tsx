@@ -23,7 +23,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [balance, setBalance] = useState<number | null>(null);
-  const [entry, setEntry] = useState<number | 'free'>('free');
+  const [entry, setEntry] = useState<number>(10);
   const [customAmount, setCustomAmount] = useState('150');
   const [crownTarget, setCrownTarget] = useState<1 | 2 | 4>(1);
   const [player0Color, setPlayer0Color] = useState<'yellow'|'green'>('yellow');
@@ -39,8 +39,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const settledRefresh = useRef('');
   const roomMutation = useRef(0);
   const cancelledRooms = useRef(new Set<string>());
-  const amount = entry === 'free' ? 0 : entry === -1 ? Number(customAmount) : entry;
-  const insufficient = Boolean(token && balance !== null && entry !== 'free' && amount > balance);
+  const amount = entry === -1 ? Number(customAmount) : entry;
+  const insufficient = Boolean(token && balance !== null && amount > balance);
   const title = gameTitle(gameId);
   const headers = useMemo<Record<string, string>>(() => { const value: Record<string, string> = {}; if (token) value.Authorization = `Bearer ${token}`; return value; }, [token]);
 
@@ -161,14 +161,14 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     try { sessionStorage.removeItem(`direbet.exited_${gameId}`); localStorage.removeItem(`direbet.exited_${gameId}`); } catch {}
     launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
-    if (entry !== 'free' && (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum)))) { setMessage(t('marketAmountInvalid')); return; }
+    if (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum))) { setMessage(t('marketAmountInvalid')); return; }
     creating.current = true;
     setBusy(true); setMessage('');
     try {
       const freshKey = crypto.randomUUID();
       const response = await fetch('/api/public-rooms', {
         method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ gameId, entry: entry === 'free' ? { kind: 'free' } : { kind: entry === -1 ? 'custom' : 'standard', amount }, options: gameId === 'ludo' ? { player0Color, crownTarget } : {}, idempotencyKey: freshKey }),
+        body: JSON.stringify({ gameId, entry: { kind: entry === -1 ? 'custom' : 'standard', amount }, options: gameId === 'ludo' ? { player0Color, crownTarget } : {}, idempotencyKey: freshKey }),
       });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
@@ -265,14 +265,14 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       <div className="market-form-heading"><div><span className="eyebrow">{t('marketCreateRoom')}</span><h2>{t('marketEntryAmount')}</h2></div><span className="market-capacity">2 {t('marketPlayersRequired')}</span></div>
       {gameId === 'ludo' && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
       <div className="market-option-heading"><strong>{t('marketEntryAmount')}</strong><small>{t('marketDemoCredits')}</small></div>
-      <div className="market-entry-options"><button type="button" aria-pressed={entry === 'free'} className={entry === 'free' ? 'selected' : ''} onClick={() => setEntry('free')}><strong>{t('marketFree')}</strong></button>{(settings.standardAmounts.length > 0 ? settings.standardAmounts : [10, 20, 30, 50, 100, 200, 500]).map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
+      <div className="market-entry-options">{(settings.standardAmounts.length > 0 ? settings.standardAmounts : [10, 20, 30, 50, 100, 200, 500]).map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
       {entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
       {gameId === 'ludo' && <fieldset className="market-color-field"><legend>{t('marketColor')}</legend><button type="button" aria-pressed={player0Color === 'yellow'} className={player0Color === 'yellow' ? 'selected' : ''} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><span>{t('marketYellow')}</span><b>VS</b><i className="color-token red-token"/><span>{t('marketRed')}</span></button><button type="button" aria-pressed={player0Color === 'green'} className={player0Color === 'green' ? 'selected' : ''} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><span>{t('marketGreen')}</span><b>VS</b><i className="color-token blue-token"/><span>{t('marketBlue')}</span></button></fieldset>}
       <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>
       
       {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
       {message && <p className="market-message" role="alert">{message}</p>}
-      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : entry === 'free' ? `${t('marketCreateAction')} (${t('marketFree')})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
+      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
       <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
     </div>
   </section>;
