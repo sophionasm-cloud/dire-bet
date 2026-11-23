@@ -195,6 +195,7 @@
   "marketConnected": "Live",
   "marketConnecting": "Connecting…",
   "marketOffline": "Reconnecting",
+  "privateRoomInviteConfirm": "Join private game room #{code}? You will enter the match immediately. Choose Cancel to browse public waiting rooms.",
   "marketLobbyIntro": "Browse rooms or create a two-player match. Free rooms are available while paid entries are locked.",
   "marketDemoBalance": "Available wallet balance",
   "marketCreditOnly": "Birr · available for play and withdrawal",

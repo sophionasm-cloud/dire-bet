@@ -195,6 +195,7 @@
   "marketConnected": "Walitti hidhame",
   "marketConnecting": "Walitti hidhaa jira…",
   "marketOffline": "Deebi'ee walitti hidhaa jira",
+  "privateRoomInviteConfirm": "Kutaa tapha dhuunfaa #{code} seenuu? Battalumatti tapha keessa seenta. Kutaa uummataa taphataan eegaa jiru ilaaluuf Haqi filadhu.",
   "marketLobbyIntro": "Kutaalee ilaali ykn tapha namoota lamaa uumi. Kutaaleen bilisaa hanga seensi kaffaltii hayyamamutti ni jiru.",
   "marketDemoBalance": "Haftee wallet",
   "marketCreditOnly": "Birr · taphaafii baasii irratti ni fayyada",

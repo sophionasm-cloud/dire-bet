@@ -195,6 +195,7 @@
   "marketConnected": "ተገናኝቷል",
   "marketConnecting": "በመገናኘት ላይ…",
   "marketOffline": "እንደገና በመገናኘት ላይ",
+  "privateRoomInviteConfirm": "ወደ የግል ጨዋታ ክፍል #{code} ይግቡ? ወዲያውኑ ወደ ጨዋታው ይገባሉ። የሕዝብ መጠበቂያ ክፍሎችን ለማየት ሰርዝን ይምረጡ።",
   "marketLobbyIntro": "ክፍሎችን ይመልከቱ ወይም ለሁለት ተጫዋቾች ጨዋታ ይፍጠሩ። የክፍያ ጨዋታዎች እስከሚፈቀዱ ድረስ ነፃ ክፍሎች ይገኛሉ።",
   "marketDemoBalance": "የኪስ ቦርሳ ቀሪ",
   "marketCreditOnly": "ብር · ለጨዋታና ለማውጣት የሚገኝ",

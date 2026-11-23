@@ -57,6 +57,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     let live = true;
     let socket: WebSocket | null = null;
     let poll = 0;
+    let retry = 0;
     const load = async () => {
       await loadRooms();
       if (!live) return;
@@ -86,39 +87,53 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
         if (response?.ok && live) setSettings(await response.json() as MarketplaceSettings);
       }
       if (!live) return;
-      const ticketResponse = token ? await fetch('/api/public-rooms/ws-ticket', { method: 'POST', headers }).catch(() => null) : null;
-      const ticketBody = ticketResponse?.ok ? await ticketResponse.json() as { ticket?: string } : null;
-      if (!live) return;
-      const address = new URL('/ws/public-rooms', location.href);
-      address.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      address.searchParams.set('gameId', gameId);
-      if (ticketBody?.ticket) address.searchParams.set('ticket', ticketBody.ticket);
-      socket = new WebSocket(address);
-      socket.onopen = () => { if (live) setConnection('connected'); };
-      socket.onmessage = (event) => {
-        try {
-          const snapshot = JSON.parse(String(event.data)) as MarketState;
-          if (snapshot.type !== 'market' || !live) return;
-          setRooms((snapshot.rooms || []).filter((room) => room.id !== snapshot.ownRoom?.id && !cancelledRooms.current.has(room.id)));
-          if (snapshot.ownRoom && !cancelledRooms.current.has(snapshot.ownRoom.id)) {
-            if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(snapshot.ownRoom.status)) {
-              setActiveRoom(null);
-            } else {
-              setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
-            }
-          } else {
-            setActiveRoom((current) => {
-              if (current && ['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING'].includes(current.status)) {
-                return current;
+      const connect = async () => {
+        if (!live) return;
+        setConnection('connecting');
+        const ticketResponse = token ? await fetch('/api/public-rooms/ws-ticket', { method: 'POST', headers }).catch(() => null) : null;
+        const ticketBody = ticketResponse?.ok ? await ticketResponse.json() as { ticket?: string } : null;
+        if (!live) return;
+        if (token && !ticketBody?.ticket) {
+          setConnection('offline');
+          retry = window.setTimeout(() => void connect(), 3000);
+          return;
+        }
+        const address = new URL('/ws/public-rooms', location.href);
+        address.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        address.searchParams.set('gameId', gameId);
+        if (ticketBody?.ticket) address.searchParams.set('ticket', ticketBody.ticket);
+        socket = new WebSocket(address);
+        socket.onopen = () => { if (live) setConnection('connected'); };
+        socket.onmessage = (event) => {
+          try {
+            const snapshot = JSON.parse(String(event.data)) as MarketState;
+            if (snapshot.type !== 'market' || !live) return;
+            setRooms((snapshot.rooms || []).filter((room) => room.id !== snapshot.ownRoom?.id && !cancelledRooms.current.has(room.id)));
+            if (snapshot.ownRoom && !cancelledRooms.current.has(snapshot.ownRoom.id)) {
+              if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(snapshot.ownRoom.status)) {
+                setActiveRoom(null);
+              } else {
+                setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
               }
-              return null;
-            });
-          }
-          setConnection('connected');
-        } catch { setConnection('offline'); }
+            } else {
+              setActiveRoom((current) => {
+                if (current && ['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING'].includes(current.status)) {
+                  return current;
+                }
+                return null;
+              });
+            }
+            setConnection('connected');
+          } catch { setConnection('offline'); }
+        };
+        socket.onclose = () => {
+          if (!live) return;
+          setConnection('offline');
+          retry = window.setTimeout(() => void connect(), 3000);
+        };
+        socket.onerror = () => { if (live) setConnection('offline'); };
       };
-      socket.onclose = () => { if (live) setConnection('offline'); };
-      socket.onerror = () => { if (live) setConnection('offline'); };
+      void connect();
       const pollMarket = async () => {
         void loadRooms();
         if (token) {
@@ -141,7 +156,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       poll = window.setInterval(() => void pollMarket(), 3000);
     };
     void load();
-    return () => { live = false; if (poll) window.clearInterval(poll); socket?.close(1000, 'Leaving public room list'); };
+    return () => { live = false; if (poll) window.clearInterval(poll); if (retry) window.clearTimeout(retry); socket?.close(1000, 'Leaving public room list'); };
   }, [gameId, token, headers, loadRooms]);
 
   useEffect(() => {

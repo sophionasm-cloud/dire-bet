@@ -74,8 +74,8 @@ describe('authoritative XO room', () => {
     expect(batches.some((batch) => batch.some((sql) => sql.includes('INSERT OR IGNORE INTO match_events')))).toBe(true);
   });
 
-  it('forfeits a Ludo match when the server turn deadline expires, exactly once', async () => {
-    const { room, records, batches } = createFixture();
+  it('automatically makes a legal Ludo turn when the server deadline expires, exactly once', async () => {
+    const { room, records, boundStatements } = createFixture();
     const code = 'TMR345';
     await room.fetch(request('/create', { code, gameId: 'ludo', userId: 81, displayName: 'Host', expiresAt: Date.now() + 60_000 }));
     await room.fetch(request('/join', { code, userId: 82, displayName: 'Friend' }));
@@ -84,15 +84,15 @@ describe('authoritative XO room', () => {
     expect(stored.game.turn).toBe(0);
     stored.turnDeadline = Date.now() - 1;
     await room.alarm();
-    const finished = records.get('room') as { status: string; terminal?: { winner: number | 'draw'; reason: string }; timeoutRecorded?: boolean };
-    expect(finished.status).toBe('finished');
-    expect(finished.terminal).toEqual({ winner: 1, reason: 'timeout' });
-    expect(finished.timeoutRecorded).toBe(true);
-    const timeoutEvents = () => batches.filter((batch) => batch.some((sql) => sql.includes('INSERT OR IGNORE INTO match_events')));
-    expect(timeoutEvents()).toHaveLength(1);
-    expect(batches.some((batch) => batch.some((sql) => sql.includes("status = 'completed'")))).toBe(true);
+    const resumed = records.get('room') as { status: string; terminal?: { winner: number | 'draw'; reason: string }; turnDeadline?: number };
+    expect(resumed.status).toBe('active');
+    expect(resumed.terminal).toBeUndefined();
+    expect(resumed.turnDeadline).toBeGreaterThan(Date.now());
+    const autoTurnEvents = () => boundStatements.filter((statement) => statement.sql.includes('INSERT OR IGNORE INTO match_events'));
+    expect(autoTurnEvents()).toHaveLength(1);
+    expect(JSON.parse(autoTurnEvents()[0].values[4] as string).action.type).toBe('auto-turn');
     await room.alarm();
-    expect(timeoutEvents()).toHaveLength(1);
+    expect(autoTurnEvents()).toHaveLength(1);
   });
 
   it.each([1, 2, 4] as const)('carries a %i-crown public-room target into the match engine', async (crownTarget) => {

@@ -181,6 +181,14 @@ function App() {
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
     if (!sessionToken || !code || roomConfig || !/^[23456789A-HJ-NP-Z]{6}$/.test(code)) return;
+    const search = new URLSearchParams(location.search);
+    search.delete('room');
+    history.replaceState(null, '', `${location.pathname}${search.toString() ? `?${search}` : ''}${location.hash}`);
+    if (!window.confirm(t('privateRoomInviteConfirm').replace('{code}', code))) {
+      setLobbyGameId('xo');
+      setPage('lobby');
+      return;
+    }
     let live = true;
     fetch(`/api/rooms/${code}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' })
       .then(async (response) => {
@@ -188,7 +196,7 @@ function App() {
         if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
         if (live) { setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' }); setPage('online'); history.replaceState(null, '', `${location.pathname}${location.hash}`); }
       })
-      .catch((cause) => { if (live) showUnavailable(cause instanceof Error ? cause.message : t('onlineDisconnected')); });
+      .catch((cause) => { if (live) { showUnavailable(cause instanceof Error ? cause.message : t('onlineDisconnected')); setLobbyGameId('xo'); setPage('lobby'); } });
     return () => { live = false; };
   }, [sessionToken, roomConfig, t]);
 

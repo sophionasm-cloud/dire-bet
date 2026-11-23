@@ -1,6 +1,6 @@
 import { PUBLIC_GAMES, TelegramAuthRequestSchema, parseTransactionSms, type GameId } from '@dire-bet/shared';
 import { applyXO, initXO, type Mark, type XOState } from '@dire-bet/engines/xo';
-import { initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
+import { initLudo, legalLudoActions, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyCheckerMove, newCheckersGame, type CheckersState } from '@dire-bet/engines/checkers';
 import { applyPokerAction, initTexasHoldem, viewPoker, type PokerAction, type PokerState } from '@dire-bet/engines/poker';
 import { Matchmaker } from './public-marketplace';
@@ -1565,8 +1565,8 @@ export class GameRoom {
     const playerIndex = room.players.findIndex((entry) => entry.id === userId);
     if (!player || playerIndex < 0) return this.sendError(socket, 'You are not seated in this room.');
     if (room.gameId === 'ludo' && room.status === 'active' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
-      await this.finishTurnTimeout(room);
-      return this.sendError(socket, 'The turn timer expired. The match has ended.');
+      await this.autoPlayLudoTimeout(room);
+      return this.sendError(socket, 'The turn timer expired. An automatic move was made.');
     }
     if (room.terminal) return this.sendError(socket, 'This match has finished.');
     const control = input.type === 'resign' || input.type === 'draw-offer' || input.type === 'draw-accept' || input.type === 'draw-decline';
@@ -1643,7 +1643,7 @@ export class GameRoom {
       return;
     }
     if (room.status === 'active' && room.gameId === 'ludo' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
-      await this.finishTurnTimeout(room);
+      await this.autoPlayLudoTimeout(room);
       return;
     }
     if (room.status === 'active' && room.players.some((player) => !player.online) && (!room.reconnectDeadline || room.reconnectDeadline <= Date.now())) {
@@ -1692,22 +1692,28 @@ export class GameRoom {
     await this.state.storage.setAlarm(Math.min(...deadlines));
   }
 
-  private async finishTurnTimeout(room: StoredRoom): Promise<boolean> {
+  private async autoPlayLudoTimeout(room: StoredRoom): Promise<boolean> {
     if (room.status !== 'active' || room.gameId !== 'ludo' || room.terminal || room.timeoutRecorded) return false;
     if (!room.turnDeadline || room.turnDeadline > Date.now()) return false;
-    const loserSeat = gameTurn(room);
-    if (loserSeat === null) return false;
-    const winner = loserSeat === 0 ? 1 : 0;
-    const previous = { status: room.status, terminal: room.terminal, timeoutRecorded: room.timeoutRecorded, turnDeadline: room.turnDeadline, sequence: room.sequence };
+    const seat = gameTurn(room);
+    if (seat === null) return false;
+    const previous = { game: room.game, status: room.status, terminal: room.terminal, timeoutRecorded: room.timeoutRecorded, turnDeadline: room.turnDeadline, sequence: room.sequence };
+    const game = room.game as LudoState;
+    const dice = game.dice === null ? secureInt(1, 6) : null;
+    const rolled = dice === null ? game : rollLudo(game, dice);
+    const token = legalLudoActions(rolled)[0];
+    room.game = token === undefined ? rolled : moveLudo(rolled, token);
     room.sequence++;
     room.timeoutRecorded = true;
-    room.terminal = { winner, reason: 'timeout' };
-    room.status = 'finished';
-    room.turnDeadline = undefined;
+    const completion = gameComplete(room);
+    if (completion.done) room.status = 'finished';
+    if (room.status === 'finished') room.turnDeadline = undefined;
+    else this.startTurnClock(room);
     try {
-      await this.recordMove(room, room.players[loserSeat]?.id ?? 0, { type: 'timeout' }, winner);
+      await this.recordMove(room, room.players[seat]?.id ?? 0, { type: 'auto-turn', ...(dice === null ? {} : { dice }), ...(token === undefined ? {} : { token }) }, completion.winner);
       await this.state.storage.put('room', room);
     } catch {
+      room.game = previous.game;
       room.status = previous.status;
       room.terminal = previous.terminal;
       room.timeoutRecorded = previous.timeoutRecorded;
@@ -1773,7 +1779,7 @@ export class GameRoom {
     if (room.status === 'active' && room.gameId === 'ludo' && !room.turnDeadline && !room.terminal) this.startTurnClock(room);
     await this.state.storage.put('room', room);
     if (room.status === 'active' && room.gameId === 'ludo' && room.turnDeadline && room.turnDeadline <= Date.now() && !room.terminal) {
-      if (!(await this.finishTurnTimeout(room))) this.broadcast(room);
+      if (!(await this.autoPlayLudoTimeout(room))) this.broadcast(room);
     } else {
       await this.scheduleRoomAlarm(room);
       this.broadcast(room);
