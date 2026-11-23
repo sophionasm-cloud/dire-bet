@@ -15,7 +15,7 @@ export function languageFromTelegram(code?: string): Language {
   if (code?.toLowerCase().startsWith('am')) return 'am';
   if (code?.toLowerCase().startsWith('so')) return 'so';
   if (code?.toLowerCase().startsWith('om')) return 'om';
-  return 'en';
+  return 'am';
 }
 
 export const languageNames: Record<Language, string> = {

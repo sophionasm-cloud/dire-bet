@@ -8,11 +8,11 @@ describe('translations', () => {
       expect(Object.keys(dictionaries[language]).sort()).toEqual(reference);
     }
   });
-  it('maps Telegram language codes and falls back to English', () => {
+  it('maps Telegram language codes and falls back to Amharic', () => {
     expect(languageFromTelegram('am')).toBe('am');
     expect(languageFromTelegram('so')).toBe('so');
     expect(languageFromTelegram('om')).toBe('om');
-    expect(languageFromTelegram('fr')).toBe('en');
+    expect(languageFromTelegram('fr')).toBe('am');
     expect(translate('en','testMode')).toBe('PAYMENTS LOCKED');
   });
 });

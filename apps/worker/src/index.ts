@@ -588,7 +588,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     const telegramId = message.from.id as number;
     const firstName = (message.from.first_name || 'Player').slice(0, 128);
     const username = message.from.username?.slice(0, 64) || null;
-    const language = ['am', 'so', 'om'].includes(message.from.language_code || '') ? message.from.language_code as string : 'en';
+    const language = ['am', 'so', 'om'].includes(message.from.language_code || '') ? message.from.language_code as string : 'am';
     const user = await env.DB.prepare(`INSERT INTO users (telegram_id, username, first_name, language, created_at, updated_at)
       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT(telegram_id) DO UPDATE SET username = COALESCE(excluded.username, users.username), first_name = excluded.first_name, updated_at = CURRENT_TIMESTAMP
@@ -601,7 +601,7 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
       ]);
     }
   }
-  const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
+  const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'am';
   const telegramId = Number.isSafeInteger(message.from?.id) && (message.from?.id || 0) > 0 ? message.from!.id! : null;
   const account = telegramId ? await env.DB.prepare(`SELECT u.id,
       EXISTS(SELECT 1 FROM user_contacts c WHERE c.user_id = u.id) AS phone_shared
@@ -729,7 +729,7 @@ async function authenticate(request: Request, env: Env): Promise<Response> {
   const username = typeof user.username === 'string' ? user.username.slice(0, 64) : null;
   const firstName = typeof user.first_name === 'string' ? user.first_name.slice(0, 128) : 'Player';
   const lastName = typeof user.last_name === 'string' ? user.last_name.slice(0, 128) : null;
-  const lang = typeof user.language_code === 'string' && ['am', 'so', 'om'].includes(user.language_code) ? user.language_code : 'en';
+  const lang = typeof user.language_code === 'string' && ['am', 'so', 'om'].includes(user.language_code) ? user.language_code : 'am';
   try {
     const result = await env.DB.prepare(`INSERT INTO users (telegram_id, username, first_name, last_name, language, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -801,7 +801,7 @@ async function authenticatePassword(request: Request, env: Env): Promise<Respons
 async function storeTelegramContact(message: { chat?: { id?: number }; from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; contact?: { user_id?: number; phone_number?: string; first_name?: string } }, env: Env, origin: string): Promise<void> {
   const telegramId = message.from?.id;
   const phone = message.contact?.phone_number?.trim();
-  const language = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'en';
+  const language = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'am';
   if (!env.SESSION_SECRET || !Number.isSafeInteger(telegramId) || telegramId! <= 0 || message.contact?.user_id !== telegramId || !phone || !/^[+\d().\s-]{7,24}$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15) {
     const prompts: Record<string, string> = {
       en: 'To register, use the Share contact button in this chat and share your own number.',

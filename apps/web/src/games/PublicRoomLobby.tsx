@@ -21,6 +21,7 @@ const defaultSettings: MarketplaceSettings = { standardAmounts: [10, 20, 30, 50,
 export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom, onPractice, onExit }: Props) {
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
+  const [pendingJoin, setPendingJoin] = useState<MarketplaceRoom | null>(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [balance, setBalance] = useState<number | null>(null);
   const [entry, setEntry] = useState<number>(10);
@@ -180,24 +181,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     window.dispatchEvent(new Event('direbet:wallet-changed'));
   }, [activeRoom]);
 
-  useEffect(() => {
-    if (!token || !activeRoom || !['IN_PROGRESS', 'SETTLING'].includes(activeRoom.status) || launching.current === activeRoom.id) return;
-    if (isExited(gameId, activeRoom.code)) return;
-    launching.current = activeRoom.id;
-    let live = true;
-    fetch(`/api/public-rooms/${activeRoom.code}/session`, { headers })
-      .then(async (response) => {
-        const result = await response.json() as ResponseBody;
-        if (!response.ok || !result.ticket || !result.code || !result.gameId) throw new Error(result.error || t('onlineDisconnected'));
-        if (live) onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId, publicRoom: result.room || activeRoom });
-      })
-      .catch((cause) => { launching.current = ''; if (live) setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); });
-    return () => { live = false; };
-  }, [activeRoom, gameId, headers, onRoom, t, token]);
-
   const create = async () => {
     if (creating.current) return;
-    try { sessionStorage.removeItem(`direbet.exited_${gameId}`); localStorage.removeItem(`direbet.exited_${gameId}`); } catch {}
     launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
     if (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum))) { setMessage(t('marketAmountInvalid')); return; }
@@ -219,11 +204,8 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   };
 
   const join = async (room: MarketplaceRoom) => {
-    try { sessionStorage.removeItem(`direbet.exited_${gameId}`); localStorage.removeItem(`direbet.exited_${gameId}`); } catch {}
     launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
-    const entryLabel = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('etb')}`;
-    if (!window.confirm(t('marketJoinConfirm').replace('{game}', gameTitle(room.gameId)).replace('{amount}', entryLabel))) return;
     setBusy(true); setMessage('');
     try {
       const response = await fetch(`/api/public-rooms/${room.code}/join`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
@@ -232,6 +214,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
+      setPendingJoin(null);
 
       if (result.ticket && result.code && result.gameId) {
         launching.current = result.room.id;
@@ -247,10 +230,25 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
             onRoom({ code: sessionResult.code, ticket: sessionResult.ticket, gameId: sessionResult.gameId, publicRoom: sessionResult.room || result.room });
             return;
           }
-        } catch { /* will fallback to useEffect */ }
+        } catch { /* The room card offers an explicit resume action. */ }
       }
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
     finally { setBusy(false); }
+  };
+
+  const resume = async () => {
+    if (!token || !activeRoom || launching.current === activeRoom.id) return;
+    launching.current = activeRoom.id;
+    setBusy(true); setMessage('');
+    try {
+      const response = await fetch(`/api/public-rooms/${activeRoom.code}/session`, { headers });
+      const result = await response.json() as ResponseBody;
+      if (!response.ok || !result.ticket || !result.code || !result.gameId) throw new Error(result.error || t('onlineDisconnected'));
+      onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId, publicRoom: result.room || activeRoom });
+    } catch (cause) {
+      launching.current = '';
+      setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected'));
+    } finally { setBusy(false); }
   };
 
   const cancel = async () => {
@@ -261,7 +259,6 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       const response = await fetch(`/api/public-rooms/${activeRoom.code}/cancel`, { method: 'POST', headers });
       const result = await response.json() as ResponseBody;
       if (!response.ok) throw new Error(result.error || t('onlineDisconnected'));
-      try { if (activeRoom?.code) { sessionStorage.setItem(`direbet.exited_${gameId}`, activeRoom.code); localStorage.setItem(`direbet.exited_${gameId}`, activeRoom.code); } } catch {}
       roomMutation.current += 1; cancelledRooms.current.add(activeRoom.id);
       setActiveRoom(null); setRooms((items) => items.filter((item) => item.id !== activeRoom.id));
       window.dispatchEvent(new Event('direbet:wallet-changed'));
@@ -314,7 +311,15 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
             </div>
           </article>
         )}
-        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => void join(room)} t={t}/>) : !activeRoom ? <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div> : null}
+        {activeRoom?.status === 'IN_PROGRESS' && <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
+          <div className="market-room-primary">
+            <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>🎮</span>
+            <div className="market-room-player"><strong>{t('marketYou')} (#{activeRoom.code})</strong><small style={{ color: '#ffc840' }}>{t('marketInProgress')}</small></div>
+            <div className="market-room-stake"><strong>{activeRoom.entryCredits === 0 ? t('marketFree') : formatCredits(activeRoom.entryCredits)}</strong><small>{activeRoom.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div>
+            <button className="market-join-button" disabled={busy || !token} onClick={() => void resume()}>{busy ? '…' : t('marketResumeMatch')}</button>
+          </div>
+        </article>}
+        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => { setMessage(''); setPendingJoin(room); }} t={t}/>) : <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div>}
       </div>
     </div>
     <div className="market-create-panel">
@@ -331,6 +336,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
       <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
     </div>
+    {pendingJoin && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && setPendingJoin(null)}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="market-join-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={busy} onClick={() => setPendingJoin(null)} aria-label={t('close')}><span aria-hidden="true">×</span></button><span className="eyebrow">{t('marketPublicRooms')}</span><h2 id="market-join-title">{t('joinRoom')}</h2><p>{t('marketJoinConfirm').replace('{game}', gameTitle(pendingJoin.gameId)).replace('{amount}', pendingJoin.entryCredits === 0 ? t('marketFree') : `${formatCredits(pendingJoin.entryCredits)} ${t('etb')}`)}</p>{message && <p className="auth-message" role="alert">{message}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setPendingJoin(null)}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={busy || !token} onClick={() => void join(pendingJoin)}>{busy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
   </section>;
 }
 
@@ -568,11 +574,6 @@ function WaitingRoom({
   );
 }
 
-function isExited(gameId: GameId, code: string): boolean {
-  try {
-    return sessionStorage.getItem(`direbet.exited_${gameId}`) === code || localStorage.getItem(`direbet.exited_${gameId}`) === code;
-  } catch { return false; }
-}
 function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }
 function gameSymbol(id: GameId): string { return id === 'ludo' ? '⚄' : id === 'checkers' ? '♛' : id === 'poker' ? '♠' : '× ○'; }
 function gameMode(id: GameId): string { return id === 'ludo' ? 'Classic · two players' : id === 'poker' ? 'Heads-up' : id === 'checkers' ? 'American · two players' : 'Classic 3 × 3'; }

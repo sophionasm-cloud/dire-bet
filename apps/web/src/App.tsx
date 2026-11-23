@@ -24,10 +24,10 @@ const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', 
 type PromoAction = 'browse' | 'ludo' | 'xo';
 type PromoSlide = { id: string; image: string; alt: string; kicker: string; titleKey: TranslationKey; copyKey: TranslationKey; ctaKey: TranslationKey; action: PromoAction };
 const promoSlides: PromoSlide[] = [
-  { id: 'brand', image: '/promotions/dash-brand.webp', alt: 'Two friends celebrating a win together on a smartphone', kicker: 'DIRE BET', titleKey: 'promoBrandTitle', copyKey: 'promoBrandCopy', ctaKey: 'promoBrandCta', action: 'browse' },
   { id: 'ludo', image: '/promotions/dash-ludo.webp', alt: 'Ludo board with colorful tokens and rolling dice', kicker: 'LUDO', titleKey: 'promoLudoTitle', copyKey: 'promoLudoCopy', ctaKey: 'promoLudoCta', action: 'ludo' },
   { id: 'xo', image: '/promotions/dash-xo.webp', alt: 'Two rivals facing off over a glowing XO grid', kicker: 'XO DUEL', titleKey: 'promoXoTitle', copyKey: 'promoXoCopy', ctaKey: 'promoXoCta', action: 'xo' },
-  { id: 'more', image: '/promotions/dash-more.webp', alt: 'Collection of Dire Bet games with dice, cards and tokens', kicker: 'DIRE BET', titleKey: 'promoMoreTitle', copyKey: 'promoMoreCopy', ctaKey: 'promoMoreCta', action: 'browse' },
+  { id: 'checkers', image: '/promotions/dash-checkers.webp', alt: 'Black and white checkers on a wooden board', kicker: 'CHECKERS', titleKey: 'promoCheckersTitle', copyKey: 'promoCheckersCopy', ctaKey: 'promoCheckersCta', action: 'browse' },
+  { id: 'more', image: '/promotions/dash-more.webp', alt: 'Golden trophy celebrating a Dire Bet win', kicker: 'DIRE BET', titleKey: 'promoMoreTitle', copyKey: 'promoMoreCopy', ctaKey: 'promoMoreCta', action: 'browse' },
 ];
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
@@ -94,9 +94,13 @@ function App() {
   const [loginPin, setLoginPin] = useState('');
   const [loginMessage, setLoginMessage] = useState('');
   const [roomConfig, setRoomConfig] = useState<RoomConfig | null>(null);
+  const [privateInviteCode, setPrivateInviteCode] = useState<string | null>(null);
+  const [privateInviteBusy, setPrivateInviteBusy] = useState(false);
+  const [privateInviteError, setPrivateInviteError] = useState('');
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
+  const [failedTelegramPhoto, setFailedTelegramPhoto] = useState('');
   const promoTouchStart = useRef<{ x: number; y: number } | null>(null);
   const bannerResume = useRef(0);
   const profileRef = useRef<HTMLDivElement | null>(null);
@@ -204,21 +208,9 @@ function App() {
     const search = new URLSearchParams(location.search);
     search.delete('room');
     history.replaceState(null, '', `${location.pathname}${search.toString() ? `?${search}` : ''}${location.hash}`);
-    if (!window.confirm(t('privateRoomInviteConfirm').replace('{code}', code))) {
-      setLobbyGameId('xo');
-      setPage('lobby');
-      return;
-    }
-    let live = true;
-    fetch(`/api/rooms/${code}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' })
-      .then(async (response) => {
-        const result = await response.json() as { code?: string; ticket?: string; gameId?: GameId; error?: string };
-        if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
-        if (live) { setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' }); setPage('online'); history.replaceState(null, '', `${location.pathname}${location.hash}`); }
-      })
-      .catch((cause) => { if (live) { showUnavailable(cause instanceof Error ? cause.message : t('onlineDisconnected')); setLobbyGameId('xo'); setPage('lobby'); } });
-    return () => { live = false; };
-  }, [sessionToken, roomConfig, t]);
+    setPrivateInviteCode(code);
+    setPrivateInviteError('');
+  }, [sessionToken, roomConfig]);
 
   useEffect(() => {
     const names = ['/admin', '/admin/'];
@@ -320,12 +312,9 @@ function App() {
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
   const enterOnlineRoom = useCallback((room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
   const exitOnlineRoom = useCallback(() => {
-    if (roomConfig?.code && roomConfig.gameId) {
-      try { sessionStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); localStorage.setItem(`direbet.exited_${roomConfig.gameId}`, roomConfig.code); } catch {}
-    }
     setRoomConfig(null);
     nav('home');
-  }, [roomConfig]);
+  }, []);
   const nav = (next: Page) => { setPage(next); setOverlay(null); setSelected(null); if (next !== 'online') setRoomConfig(null); };
   const signInWithWebLogin = async (event: FormEvent) => {
     event.preventDefault(); setLoginMessage('');
@@ -382,10 +371,37 @@ function App() {
     }
   };
 
+  const confirmPrivateInvite = async () => {
+    if (!sessionToken || !privateInviteCode || privateInviteBusy) return;
+    setPrivateInviteBusy(true);
+    setPrivateInviteError('');
+    try {
+      const response = await fetch(`/api/rooms/${privateInviteCode}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' });
+      const result = await response.json() as { code?: string; ticket?: string; gameId?: GameId; error?: string };
+      if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
+      setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' });
+      setPrivateInviteCode(null);
+      setPage('online');
+      history.replaceState(null, '', `${location.pathname}${location.hash}`);
+    } catch (cause) {
+      setPrivateInviteError(cause instanceof Error ? cause.message : t('onlineDisconnected'));
+    } finally {
+      setPrivateInviteBusy(false);
+    }
+  };
+
+  const closePrivateInvite = () => {
+    setPrivateInviteCode(null);
+    setPrivateInviteError('');
+    setLobbyGameId('xo');
+    setPage('lobby');
+  };
+
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp token={sessionToken} /></Suspense>;
 
-  const telegramPhoto = (window.Telegram?.WebApp?.initDataUnsafe?.user as { photo_url?: string } | undefined)?.photo_url;
+  const telegramPhoto = window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
+  const showTelegramPhoto = Boolean(telegramPhoto && failedTelegramPhoto !== telegramPhoto);
   const avatarInitial = (displayName.trim()[0] || 'P').toUpperCase();
   const accountStatus = sessionToken
     ? account ? (account.phoneShared ? t('contactLinked') : t('contactNotLinked')) : t('onlineConnecting')
@@ -399,12 +415,12 @@ function App() {
         <button type="button" className="dash-icon-btn bell-button" onClick={() => setOverlay('notifications')} aria-label={t('matches')}><Icon name="bell" size={18}/><span className="notification-dot"/></button>
         <div className="dash-profile" ref={profileRef}>
           <button type="button" className="dash-avatar" aria-expanded={profileOpen} aria-haspopup="menu" aria-label={t('profile')} onClick={() => setProfileOpen((open) => !open)}>
-            {telegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer"/> : <span>{avatarInitial}</span>}
+            {showTelegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer" onError={() => setFailedTelegramPhoto(telegramPhoto || '')}/> : <span>{avatarInitial}</span>}
             <i className="dash-avatar-dot" aria-hidden="true"/>
           </button>
           {profileOpen && <div className="dash-profile-menu" role="menu" aria-label={t('profile')}>
             <div className="dash-profile-head">
-              <span className="dash-avatar dash-avatar-lg" aria-hidden="true">{telegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer"/> : <span>{avatarInitial}</span>}</span>
+              <span className="dash-avatar dash-avatar-lg" aria-hidden="true">{showTelegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer" onError={() => setFailedTelegramPhoto(telegramPhoto || '')}/> : <span>{avatarInitial}</span>}</span>
               <div className="dash-profile-copy"><strong>{displayName}</strong><span>{accountStatus}</span></div>
             </div>
             <div className="dash-profile-divider" aria-hidden="true"/>
@@ -461,7 +477,7 @@ function App() {
       <section className="promo-carousel" aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }} onTouchStart={(event) => { const touch = event.touches[0]; promoTouchStart.current = { x: touch.clientX, y: touch.clientY }; }} onTouchEnd={(event) => { const start = promoTouchStart.current; const touch = event.changedTouches[0]; promoTouchStart.current = null; if (!start || !touch) return; const dx = touch.clientX - start.x; const dy = touch.clientY - start.y; if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.25) { setBanner((current) => (current + (dx < 0 ? 1 : promoSlides.length - 1)) % promoSlides.length); holdBanner(); } }} onTouchCancel={() => { promoTouchStart.current = null; }}>
         <div className="promo-window">
           <div className="promo-track" style={{ transform: `translateX(-${banner * 100}%)` }}>
-            {promoSlides.map((slide, index) => <div key={slide.id} className={`promo-slide ${banner === index ? 'is-active' : ''}`} role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${promoSlides.length}`} aria-hidden={banner !== index}>
+            {promoSlides.map((slide, index) => <div key={slide.id} className={`promo-slide promo-slide-${slide.id} ${banner === index ? 'is-active' : ''}`} role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${promoSlides.length}`} aria-hidden={banner !== index}>
               <img src={slide.image} alt={slide.alt} width={1500} height={600} loading={index === 0 ? 'eager' : 'lazy'} decoding="async" draggable={false}/>
               <span className="promo-shade" aria-hidden="true"/>
               <div className="promo-content">
@@ -528,6 +544,7 @@ function App() {
     {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : openPractice(selected.id as GameId)} />}
     {overlay && <OverlaySheet overlay={overlay} t={t} language={language} displayName={displayName} authenticated={Boolean(sessionToken)} phoneShared={account?.phoneShared ?? null} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
     {onboarding && <Onboarding step={onboardingStep} setStep={setOnboardingStep} language={language} setLanguage={setLanguage} t={t} onFinish={() => { localStorage.setItem('direbet.onboarded','true'); setOnboarding(false); }} />}
+    {privateInviteCode && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !privateInviteBusy && closePrivateInvite()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="private-invite-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="private-invite-title">{t('joinRoom')}</h2><p>{t('privateRoomInviteConfirm').replace('{code}', privateInviteCode)}</p>{privateInviteError && <p className="auth-message" role="alert">{privateInviteError}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={privateInviteBusy} onClick={() => void confirmPrivateInvite()}>{privateInviteBusy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
     {notice && <div role="status" className="toast">{notice}</div>}
   </main>;
 }
@@ -554,7 +571,7 @@ function GameSheet({ game, t, onClose, onRules, onPlay }: { game:Game; t:(key:Tr
 }
 
 function OverlaySheet({ overlay, t, language, displayName, authenticated, phoneShared, onLanguage, onClose, onNavigate, onNotice }: { overlay:Exclude<Overlay,null>; t:(key:TranslationKey)=>string; language:Language; displayName:string; authenticated:boolean; phoneShared:boolean|null; onLanguage:(language:Language)=>void; onClose:()=>void; onNavigate:(page:Page)=>void; onNotice:(message:string)=>void }) {
-  if (overlay === 'language') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="bottom-sheet language-sheet" role="dialog" aria-modal="true" aria-labelledby="language-title"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="language-title">{t('selectLanguage')}</h2>{(['en','am','so','om'] as Language[]).map((lang) => <button key={lang} className={`language-option ${language === lang ? 'chosen' : ''}`} onClick={() => onLanguage(lang)}><span className="language-code">{languageCodes[lang]}</span><strong>{languageNames[lang]}</strong>{language === lang && <span className="check-mark">✓</span>}</button>)}</section></div>;
+  if (overlay === 'language') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="bottom-sheet language-sheet" role="dialog" aria-modal="true" aria-labelledby="language-title"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="language-title">{t('selectLanguage')}</h2>{(['am','en','so','om'] as Language[]).map((lang) => <button key={lang} className={`language-option ${language === lang ? 'chosen' : ''}`} onClick={() => onLanguage(lang)}><span className="language-code">{languageCodes[lang]}</span><strong>{languageNames[lang]}</strong>{language === lang && <span className="check-mark">✓</span>}</button>)}</section></div>;
   if (overlay === 'menu') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><aside className="drawer" role="dialog" aria-modal="true"><div className="drawer-head"><a className="wordmark" href="/" onClick={(e) => e.preventDefault()}><span>DIRE</span><b>BET</b><i>✦</i></a><button className="icon-button" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button></div><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? phoneShared ? t('contactLinked') : phoneShared === false ? t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div>{(['wallet','matches','rank'] as Page[]).map((page) => <button key={page} className={`drawer-row ${page === 'wallet' ? 'wallet-drawer-row' : ''}`} onClick={() => onNavigate(page)}><Icon name={page}/><span>{t(page as TranslationKey)}</span><Icon name="chevron" size={17}/></button>)}<button className="drawer-row" onClick={() => { onClose(); onNotice(t('support')); }}><Icon name="question"/><span>{t('support')}</span><Icon name="chevron" size={17}/></button><button className="drawer-row" onClick={() => { onClose(); onNavigate('menu'); }}><Icon name="globe"/><span>{t('language')}</span><span className="drawer-current">{languageNames[language]}</span></button><div className="drawer-footer">DIRE BET · FREE PLAY</div></aside></div>;
   const isLegal = overlay === 'terms' || overlay === 'privacy';
   const title = overlay === 'support' ? t('support') : overlay === 'notifications' ? t('matches') : overlay === 'terms' ? t('terms') : overlay === 'privacy' ? t('privacy') : t('howToPlay');
@@ -565,7 +582,7 @@ function OverlaySheet({ overlay, t, language, displayName, authenticated, phoneS
 function Onboarding({ step, setStep, language, setLanguage, t, onFinish }: { step:number; setStep:(step:number)=>void; language:Language; setLanguage:(language:Language)=>void; t:(key:TranslationKey)=>string; onFinish:()=>void }) {
   const title = t((`onboardingTitle${step + 1}`) as TranslationKey);
   const body = t((`onboardingBody${step + 1}`) as TranslationKey);
-  return <div className="scrim onboarding-scrim"><section className="onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><button className="skip-button" onClick={onFinish}>{t('skip')}</button><div className="onboarding-art"><span className="onboard-orb"/><span className="onboard-x">×</span><span className="onboard-o">○</span><div className="onboard-die">✦</div></div><div className="onboard-dots"><span className={step === 0 ? 'active' : ''}/><span className={step === 1 ? 'active' : ''}/><span className={step === 2 ? 'active' : ''}/></div><h1 id="onboarding-title">{title}</h1><p>{body}</p>{step === 0 && <div className="onboarding-languages"><span>{t('selectLanguage')}</span>{(['en','am','so','om'] as Language[]).map((lang) => <button key={lang} className={language === lang ? 'chosen' : ''} onClick={() => setLanguage(lang)}>{languageCodes[lang]}</button>)}</div>}<button className="primary-button wide" onClick={() => step < 2 ? setStep(step + 1) : onFinish()}>{step < 2 ? t('continue') : t('startPlaying')}<span>{step < 2 ? '→' : '✦'}</span></button></section></div>;
+  return <div className="scrim onboarding-scrim"><section className="onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><button className="skip-button" onClick={onFinish}>{t('skip')}</button><div className="onboarding-art"><span className="onboard-orb"/><span className="onboard-x">×</span><span className="onboard-o">○</span><div className="onboard-die">✦</div></div><div className="onboard-dots"><span className={step === 0 ? 'active' : ''}/><span className={step === 1 ? 'active' : ''}/><span className={step === 2 ? 'active' : ''}/></div><h1 id="onboarding-title">{title}</h1><p>{body}</p>{step === 0 && <div className="onboarding-languages"><span>{t('selectLanguage')}</span>{(['am','en','so','om'] as Language[]).map((lang) => <button key={lang} className={language === lang ? 'chosen' : ''} onClick={() => setLanguage(lang)}>{languageCodes[lang]}</button>)}</div>}<button className="primary-button wide" onClick={() => step < 2 ? setStep(step + 1) : onFinish()}>{step < 2 ? t('continue') : t('startPlaying')}<span>{step < 2 ? '→' : '✦'}</span></button></section></div>;
 }
 
 export default App;

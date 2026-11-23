@@ -1626,22 +1626,22 @@
 
 .dash-auth-status{margin:0 0 12px;border-color:rgba(227,188,101,.2);background:linear-gradient(110deg,rgba(10,22,37,.8),rgba(16,19,23,.8));backdrop-filter:blur(12px)}
 
-.dash-wallet{position:relative;margin:0 0 16px;padding:15px 16px 14px;border:1px solid rgba(227,188,101,.26);border-radius:22px;overflow:hidden;isolation:isolate;background:radial-gradient(130% 180% at 100% -20%,rgba(13,104,187,.38),transparent 55%),radial-gradient(100% 140% at -10% 120%,rgba(255,169,77,.14),transparent 62%),linear-gradient(155deg,rgba(24,29,41,.96),rgba(8,10,15,.97));box-shadow:0 20px 46px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.09),inset 0 -1px 0 rgba(227,188,101,.08)}
+.dash-wallet{position:relative;margin:0 0 12px;padding:6px 12px;border:1px solid rgba(227,188,101,.26);border-radius:18px;overflow:hidden;isolation:isolate;background:radial-gradient(130% 180% at 100% -20%,rgba(13,104,187,.38),transparent 55%),radial-gradient(100% 140% at -10% 120%,rgba(255,169,77,.14),transparent 62%),linear-gradient(155deg,rgba(24,29,41,.96),rgba(8,10,15,.97));box-shadow:0 20px 46px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.09),inset 0 -1px 0 rgba(227,188,101,.08)}
 .dash-wallet::before{content:"";position:absolute;right:-70px;top:-110px;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(64,150,235,.24),transparent 66%);pointer-events:none;z-index:0}
 .dash-wallet::after{content:"";position:absolute;left:-60px;bottom:-120px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(240,199,102,.12),transparent 68%);pointer-events:none;z-index:0}
 .dash-wallet-glow{position:absolute;inset:0;pointer-events:none;background:linear-gradient(105deg,rgba(255,255,255,.06),transparent 26%,transparent 70%,rgba(255,255,255,.03));z-index:0}
 .dash-wallet-head,.dash-wallet-hint,.dash-wallet-actions{position:relative;z-index:1}
-.dash-wallet-head{display:flex;align-items:center;gap:12px;min-width:0}
-.dash-wallet-glyph{width:46px;height:46px;display:grid;place-items:center;flex:none;border:1px solid rgba(240,199,102,.4);border-radius:14px;background:linear-gradient(145deg,rgba(240,199,102,.18),rgba(13,104,187,.2));color:#f5d485;box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 18px rgba(0,0,0,.28)}
-.dash-wallet-glyph svg{width:24px;height:24px}
+.dash-wallet-head{display:flex;align-items:center;gap:8px;min-width:0}
+.dash-wallet-glyph{width:32px;height:32px;display:grid;place-items:center;flex:none;border:1px solid rgba(240,199,102,.4);border-radius:10px;background:linear-gradient(145deg,rgba(240,199,102,.18),rgba(13,104,187,.2));color:#f5d485;box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 18px rgba(0,0,0,.28)}
+.dash-wallet-glyph svg{width:20px;height:20px}
 .dash-wallet-meta{flex:1;min-width:0;display:grid;gap:2px}
-.dash-wallet-label{font-size:8.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#b7ad9c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dash-wallet-amount{display:flex;align-items:baseline;gap:6px;font-size:clamp(25px,7.8vw,32px);font-weight:650;line-height:1.08;letter-spacing:-.045em;color:#fff;text-shadow:0 3px 20px rgba(0,0,0,.45);font-variant-numeric:tabular-nums}
+.dash-wallet-label{font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#b7ad9c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dash-wallet-amount{display:flex;align-items:baseline;gap:5px;font-size:clamp(24px,6.5vw,29px);font-weight:650;line-height:1.02;letter-spacing:-.045em;color:#fff;text-shadow:0 3px 20px rgba(0,0,0,.45);font-variant-numeric:tabular-nums}
 .dash-wallet-amount small{font-size:10px;font-weight:800;letter-spacing:.1em;color:#e3bc65}
 .dash-wallet-brand{padding:4px 7px;border:1px solid rgba(227,188,101,.22);border-radius:100px;background:rgba(227,188,101,.06);color:#d8c091;font-size:6.5px;font-weight:800;letter-spacing:.12em;white-space:nowrap}
-.dash-wallet-hint{margin:7px 0 0 58px;color:#a49c8e;font-size:9px;line-height:1.3}
-.dash-wallet-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.075)}
-.dash-wallet-action{min-height:42px;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:12px;font-size:10.5px;font-weight:800;letter-spacing:.01em;cursor:pointer;transition:transform .17s,box-shadow .17s,filter .17s}
+.dash-wallet-hint{margin:4px 0 0 45px;color:#a49c8e;font-size:8.5px;line-height:1.3}
+.dash-wallet-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;padding-top:0;border-top:0}
+.dash-wallet-action{min-height:44px;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:12px;font-size:10.5px;font-weight:800;letter-spacing:.01em;cursor:pointer;transition:transform .17s,box-shadow .17s,filter .17s}
 .dash-wallet-action:active{transform:scale(.98)}
 .dash-wallet-action svg{width:16px;height:16px;flex:none}
 .dash-wallet-action.deposit{border:1px solid rgba(255,229,160,.55);background:linear-gradient(135deg,#f6cf78,#dca83f);color:#241703;box-shadow:0 9px 22px rgba(220,168,63,.24),inset 0 1px 0 rgba(255,255,255,.45)}
@@ -1655,8 +1655,8 @@
 .promo-slide{position:relative;flex:0 0 100%;min-width:0;height:100%;overflow:hidden}
 .promo-slide:not(.is-active){pointer-events:none}
 .promo-slide img{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;border:0;border-radius:0;user-select:none;-webkit-user-drag:none}
-.promo-shade{position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(90deg,rgba(3,6,12,.94) 0%,rgba(3,6,12,.8) 30%,rgba(3,6,12,.32) 58%,rgba(3,6,12,.02) 78%),linear-gradient(0deg,rgba(3,6,12,.58),transparent 48%)}
-.promo-content{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:5px;max-width:68%;padding:14px 16px}
+.promo-shade{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(90deg,rgba(3,6,12,.94) 0%,rgba(3,6,12,.8) 30%,rgba(3,6,12,.32) 58%,rgba(3,6,12,.02) 78%),linear-gradient(0deg,rgba(3,6,12,.58),transparent 48%)}
+.promo-content{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:5px;max-width:68%;padding:14px 16px}
 .promo-kicker{font-size:7.5px;font-weight:800;letter-spacing:.22em;color:#e9c470;text-transform:uppercase;text-shadow:0 1px 8px rgba(0,0,0,.5)}
 .promo-title{margin:0;font-size:clamp(16px,4.5cqw,25px);line-height:1.04;letter-spacing:-.03em;font-weight:650;color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.65)}
 .promo-copy{margin:0;max-width:27ch;font-size:clamp(8px,2.05cqw,10.5px);line-height:1.35;color:#cbd4e2;text-shadow:0 1px 8px rgba(0,0,0,.65)}
@@ -1664,7 +1664,7 @@
 .promo-cta:hover{filter:brightness(1.06)}
 .promo-cta:active{transform:scale(.97)}
 .promo-cta svg{width:12px;height:12px}
-.promo-watermark{position:absolute;right:9px;bottom:8px;z-index:3;display:flex;align-items:center;gap:2px;padding:3px 6px;border:1px solid rgba(227,188,101,.28);border-radius:100px;background:rgba(4,7,13,.72);backdrop-filter:blur(8px);color:#e8d4a4;font-size:6px;font-weight:800;letter-spacing:.12em;white-space:nowrap;pointer-events:none}
+.promo-watermark{position:absolute;right:9px;bottom:8px;z-index:4;display:flex;align-items:center;gap:2px;padding:3px 6px;border:1px solid rgba(227,188,101,.28);border-radius:100px;background:rgba(4,7,13,.72);backdrop-filter:blur(8px);color:#e8d4a4;font-size:6px;font-weight:800;letter-spacing:.12em;white-space:nowrap;pointer-events:none}
 .promo-dots{display:flex;justify-content:center;gap:2px;margin:5px 0 0}
 .promo-dots button{width:34px;height:26px;display:grid;place-items:center;padding:0;border:0;background:transparent;cursor:pointer}
 .promo-dots button::before{content:"";width:6px;height:6px;border-radius:10px;background:#5c6572;transition:width .2s,background .2s,box-shadow .2s}
@@ -1690,10 +1690,11 @@
   .dash-top-actions{gap:6px}
   .dash-icon-btn,.dash-avatar{width:39px;height:39px}
   .dash-profile-menu{right:-2px}
-  .dash-wallet{padding:13px 13px 12px;border-radius:19px}
-  .dash-wallet-glyph{width:42px;height:42px}
+  .dash-wallet{padding:7px 10px;border-radius:17px}
+  .dash-wallet-glyph{width:32px;height:32px;border-radius:10px}
+  .dash-wallet-glyph svg{width:18px;height:18px}
   .dash-wallet-brand{display:none}
-  .dash-wallet-hint{margin-left:54px}
+  .dash-wallet-hint{margin-left:40px}
   .promo-content{max-width:74%;padding:12px 13px}
   .promo-copy{display:none}
   .promo-title{font-size:16px}
