@@ -16,7 +16,7 @@ export type CheckersSnapshot = {
   matchId: string | null;
   terminal: CheckersTerminal;
   drawOfferBy: number | null;
-  publicRoom?: { id: string; entryCredits: number; options: Record<string, unknown> };
+  publicRoom?: { id: string; entryCredits: number; payoutCredits?: number; options: Record<string, unknown> };
 };
 
 type SoundKind = 'move' | 'capture' | 'king' | 'win' | 'lose' | 'draw';

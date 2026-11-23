@@ -18,7 +18,7 @@ type Props = { t: Translator; token: string | null };
 type RoomPlayer = { id: number; name: string; mark: 'X' | 'O' | null; online: boolean };
 type PokerPublic = ReturnType<typeof viewPoker>;
 type RoomGame = XOState | LudoState | CheckersState | PokerPublic;
-type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null; drawOfferBy?: number | null; turnDeadline?: number | null; serverTime?: number; publicRoom?: { id: string; entryCredits: number; options: Record<string, unknown> } };
+type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null; drawOfferBy?: number | null; turnDeadline?: number | null; serverTime?: number; publicRoom?: { id: string; entryCredits: number; payoutCredits?: number; options: Record<string, unknown> } };
 type ApiResult = { code?: string; ticket?: string; gameId?: GameId; error?: string };
 
 export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: RoomConfig) => void }) {

@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 type ProviderId = 'telebirr' | 'ebirr';
-type PaymentProvider = { provider: ProviderId; accountLabel: string; accountNumber: string; enabled: boolean; minimumAmount: number; maximumAmount: number };
-type PaymentRequest = { id: string; user_id: number; player: string; provider: ProviderId; amount: number; balance?: number; status: string; created_at: string; review_reason: string | null; simulationOnly?: boolean; provider_reference?: string | null; proof_method?: 'receipt' | 'sms'; confirmationSms?: string; senderPhone?: string; destinationPhone?: string; accountHolderName?: string; has_receipt?: number; has_sms?: number; receiptData?: string };
+type PaymentProvider = { provider: ProviderId; accountLabel: string; accountNumber: string; enabled: boolean; minimumAmount: number; maximumAmount: number; withdrawalMinimumAmount?: number; withdrawalMaximumAmount?: number };
+type PaymentRequest = {
+  id: string; user_id: number; player: string; provider: ProviderId; amount: number; balance?: number; status: string; created_at: string;
+  review_reason: string | null; simulationOnly?: boolean; provider_reference?: string | null; proof_method?: 'receipt' | 'sms';
+  confirmationSms?: string; confirmationSmsPreview?: string; senderPhone?: string; destinationPhone?: string; accountHolderName?: string;
+  has_receipt?: number; has_sms?: number; receiptData?: string; flags?: string[];
+};
 type ActivationStatus = { active: boolean; simulationEnabled?: boolean; configured: boolean; record: { minimum_age: number; approved_at: string } | null };
 type WalletSummary = { pendingDeposits: number; pendingWithdrawals: number; approvedWithdrawals: number; completedWithdrawals: number; totalWithdrawalAmount: number; simulationOnly?: boolean };
 type Props = { token: string | null };
@@ -33,6 +38,7 @@ export default function PaymentManagement({ token }: Props) {
   const [summary, setSummary] = useState<WalletSummary>({ pendingDeposits: 0, pendingWithdrawals: 0, approvedWithdrawals: 0, completedWithdrawals: 0, totalWithdrawalAmount: 0 });
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('dire-wallet-notification-sound') === 'true');
   const [detail, setDetail] = useState<PaymentRequest | null>(null);
+  const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -98,9 +104,9 @@ export default function PaymentManagement({ token }: Props) {
         method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ status, reason, paymentReference }),
       });
-      const result = await readJson<{ ok?: boolean; balanceChanged?: boolean; simulationOnly?: boolean }>(response);
+      const result = await readJson<{ ok?: boolean }>(response);
       if (!response.ok) throw new Error(result.error || 'The request could not be reviewed.');
-      setNotice(kind === 'deposits' && status === 'approved' ? 'Deposit verified and approved; the Birr wallet was credited.' : kind === 'withdrawals' && status === 'rejected' ? 'Withdrawal rejected; the reserved Birr was returned to the wallet.' : kind === 'withdrawals' && status === 'paid' ? 'Withdrawal marked complete with its transfer reference.' : kind === 'withdrawals' && status === 'approved' ? 'Withdrawal approved. Send the transfer, then mark it complete with its reference.' : `${kind === 'deposits' ? 'Deposit' : 'Withdrawal'} marked ${stateLabel(status)}.`);
+      setNotice(kind === 'deposits' && status === 'approved' ? 'Deposit approved; the Birr wallet was credited.' : kind === 'withdrawals' && status === 'rejected' ? 'Withdrawal rejected; the reserved Birr was returned to the wallet.' : kind === 'withdrawals' && status === 'paid' ? 'Withdrawal marked complete with its transfer reference.' : kind === 'withdrawals' && status === 'approved' ? 'Withdrawal approved. Send the transfer, then mark it complete with its reference.' : `${kind === 'deposits' ? 'Deposit' : 'Withdrawal'} marked ${stateLabel(status)}.`);
       setDetail(null); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'The request could not be reviewed.'); }
     finally { setBusy(false); }
@@ -137,7 +143,7 @@ export default function PaymentManagement({ token }: Props) {
         ageVerificationMethod: value('ageVerificationMethod'), responsiblePlayPolicy: value('responsiblePlayPolicy'),
         privacyReview: value('privacyReview'), minimumAge: Number(value('minimumAge')), ownerSignedAt: value('ownerSignedAt'),
       }) });
-      const data = await readJson<{ recorded?: boolean; active?: boolean }>(response);
+      const data = await readJson<{ recorded?: boolean }>(response);
       if (!response.ok || !data.recorded) throw new Error(data.error || 'Approval evidence could not be recorded.');
       setNotice('Approval evidence recorded. Live money remains locked until approved production settings are enabled.');
       await load();
@@ -145,7 +151,12 @@ export default function PaymentManagement({ token }: Props) {
     finally { setBusy(false); }
   };
 
-  const rows = section === 'deposits' ? deposits : withdrawals;
+  const rawRows = section === 'deposits' ? deposits : withdrawals;
+  const query = search.trim().toLowerCase();
+  const rows = useMemo(() => {
+    if (!query) return rawRows;
+    return rawRows.filter((row) => [row.id, row.player, String(row.user_id), row.provider, row.status, row.senderPhone, row.destinationPhone, row.provider_reference, row.accountHolderName, row.review_reason, ...(row.flags || [])].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [rawRows, query]);
   const counts = { deposits: deposits.filter((item) => ['pending', 'needs_info'].includes(item.status)).length, withdrawals: withdrawals.filter((item) => ['pending', 'reviewing'].includes(item.status)).length };
   const toggleSound = () => setSoundEnabled((enabled) => { localStorage.setItem('dire-wallet-notification-sound', String(!enabled)); return !enabled; });
 
@@ -189,21 +200,39 @@ export default function PaymentManagement({ token }: Props) {
         <label>Owner approval date<input name="ownerSignedAt" type="date" max={new Date().toISOString().slice(0, 10)} required/></label>
       </fieldset><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Recording…' : 'Record approval evidence'}</button></form>
     </> : <>
-      <div className="payment-list-heading"><div><span className="staff-label">{section === 'deposits' ? 'DEPOSIT REQUESTS' : 'WITHDRAWAL REQUESTS'}</span><p>{rows.length} requests · newest first</p></div><button className="staff-link-button" onClick={() => void load()}>Refresh</button></div>
-      {rows.length === 0 ? <div className="room-admin-state">No {section === 'deposits' ? 'deposit' : 'withdrawal'} requests yet.</div> : <div className="payment-request-list">{rows.map((row) => <article key={row.id} className="payment-request-card">
-        <div className="payment-request-main"><div><small>{row.id} · {row.created_at}</small><h3>{row.amount.toLocaleString()} Birr</h3><span>{row.player} · User ID {row.user_id} · {row.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</span></div><span className={`room-admin-status ${row.status}`}>{stateLabel(row.status)}</span></div>
-        <div className="payment-request-meta"><span>{section === 'deposits' ? 'Sender' : 'Recipient'}: {section === 'deposits' ? row.senderPhone || 'Open details' : row.destinationPhone || 'Open details'}</span>{section === 'withdrawals' && <span>Current balance: {(row.balance || 0).toLocaleString()} Birr</span>}{row.provider_reference && <span>Reference: {row.provider_reference}</span>}</div>
+      <div className="payment-list-heading"><div><span className="staff-label">{section === 'deposits' ? 'DEPOSIT REQUESTS' : 'WITHDRAWAL REQUESTS'}</span><p>{rows.length} requests · newest first</p></div><div className="payment-list-controls"><input className="payment-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search user, ID, phone, reference" aria-label="Search payment requests"/><button className="staff-link-button" onClick={() => void load()}>Refresh</button></div></div>
+      {rows.length === 0 ? <div className="room-admin-state">No matching {section === 'deposits' ? 'deposit' : 'withdrawal'} requests.</div> : <div className="payment-request-list">{rows.map((row) => <article key={row.id} className="payment-request-card">
+        <div className="payment-request-main"><div><small>{row.id} · {new Date(row.created_at).toLocaleString()}</small><h3>{row.amount.toLocaleString()} Birr</h3><span>{row.player || 'User'} · User ID {row.user_id ?? '—'} · {row.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</span></div><span className={`room-admin-status ${row.status || 'pending'}`}>{stateLabel(row.status || 'pending')}</span></div>
+        <div className="payment-request-meta">
+          {section === 'deposits' ? <span>Sender: {row.senderPhone || 'Not provided'}</span> : <span>Recipient: {row.destinationPhone || 'Not provided'}</span>}
+          {section === 'withdrawals' && <span>Current balance: {(row.balance || 0).toLocaleString()} Birr</span>}
+          {row.provider_reference && <span>Reference: {row.provider_reference}</span>}
+          {section === 'deposits' && row.confirmationSmsPreview && <span className="payment-sms-preview">SMS: {row.confirmationSmsPreview}</span>}
+        </div>
+        {row.flags && row.flags.length > 0 && <div className="payment-flags">{row.flags.map((flag) => <span key={flag} className={`payment-flag payment-flag-${flag}`}>{flag.replaceAll('_', ' ')}</span>)}</div>}
         <button className="room-admin-view" onClick={() => void openDetail(row, section)}>View request</button>
       </article>)}</div>}
     </>}
     {detail && <div className="room-detail-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(null); }}><aside className="room-detail-panel payment-detail-panel" role="dialog" aria-modal="true" aria-label="Payment request details">
       <header><div><span className="staff-label">REQUEST DETAILS</span><h3>{detail.id}</h3></div><button className="staff-link-button" onClick={() => setDetail(null)}>Close</button></header>
-      <dl className="payment-detail-grid"><div><dt>Player</dt><dd>{detail.player}</dd></div><div><dt>User ID</dt><dd>{detail.user_id}</dd></div><div><dt>Method</dt><dd>{detail.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</dd></div><div><dt>Amount</dt><dd>{detail.amount} Birr</dd></div>{detail.balance !== undefined && <div><dt>Current wallet balance</dt><dd>{detail.balance} Birr</dd></div>}<div><dt>Status</dt><dd>{stateLabel(detail.status)}</dd></div><div><dt>{detail.senderPhone !== undefined ? 'Sender phone' : 'Recipient account'}</dt><dd>{detail.senderPhone ?? detail.destinationPhone ?? 'Not available'}</dd></div>{detail.accountHolderName && <div><dt>Account holder</dt><dd>{detail.accountHolderName}</dd></div>}{detail.provider_reference && <div><dt>Transaction reference</dt><dd>{detail.provider_reference}</dd></div>}<div><dt>Submitted</dt><dd>{detail.created_at}</dd></div></dl>
-      {detail.receiptData && <figure className="payment-receipt"><img src={detail.receiptData} alt="Uploaded payment receipt"/><figcaption>Payment receipt for manual verification</figcaption></figure>}
-      {detail.confirmationSms && <p className="payment-safety-note"><strong>Payment confirmation SMS</strong><span>{detail.confirmationSms}</span></p>}
+      <dl className="payment-detail-grid">
+        <div><dt>Player</dt><dd>{detail.player || 'User'}</dd></div>
+        <div><dt>User ID</dt><dd>{detail.user_id ?? '—'}</dd></div>
+        <div><dt>Method</dt><dd>{detail.provider === 'telebirr' ? 'Telebirr' : 'eBirr'}</dd></div>
+        <div><dt>Amount</dt><dd>{detail.amount} Birr</dd></div>
+        {detail.balance !== undefined && <div><dt>Current wallet balance</dt><dd>{detail.balance} Birr</dd></div>}
+        <div><dt>Status</dt><dd>{stateLabel(detail.status || 'pending')}</dd></div>
+        <div><dt>{section === 'deposits' ? 'Sender phone' : 'Recipient phone'}</dt><dd>{(section === 'deposits' ? detail.senderPhone : detail.destinationPhone) || 'Not provided'}</dd></div>
+        {detail.accountHolderName && <div><dt>Account holder</dt><dd>{detail.accountHolderName}</dd></div>}
+        <div><dt>Transaction reference</dt><dd>{detail.provider_reference || 'Not found'}</dd></div>
+        <div><dt>Submitted</dt><dd>{detail.created_at ? new Date(detail.created_at).toLocaleString() : '—'}</dd></div>
+      </dl>
+      {detail.flags && detail.flags.length > 0 && <div className="payment-flags payment-flags-detail">{detail.flags.map((flag) => <span key={flag} className={`payment-flag payment-flag-${flag}`}>{flag.replaceAll('_', ' ')}</span>)}</div>}
+      {detail.receiptData && <figure className="payment-receipt"><img src={detail.receiptData} alt="Uploaded payment receipt"/><figcaption>Payment receipt</figcaption></figure>}
+      {detail.confirmationSms && <div className="payment-safety-note payment-sms-full"><strong>Payment SMS</strong><pre>{detail.confirmationSms}</pre></div>}
       {detail.review_reason && <p className="payment-safety-note"><strong>Review note</strong><span>{detail.review_reason}</span></p>}
       {section === 'withdrawals' && detail.status === 'approved' ? <div className="payment-review-actions"><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'paid')}>Mark payout complete</button></div> : detail.status === 'pending' || detail.status === 'needs_info' || detail.status === 'reviewing' ? <div className="payment-review-actions">
-        {section === 'deposits' ? <><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'needs_info')}>Request more info</button><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'rejected')}>Reject</button><button className="primary-button" disabled={busy || (detail.proof_method === 'sms' ? !detail.confirmationSms : !detail.receiptData) || !detail.provider_reference} onClick={() => void review('deposits', detail, 'approved')}>Verify & approve</button></> : <><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'reviewing')}>Mark reviewing</button><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'rejected')}>Reject and return funds</button><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'approved')}>Approve payout</button></>}
+        {section === 'deposits' ? <><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'needs_info')}>Request more info</button><button className="secondary-button" disabled={busy} onClick={() => void review('deposits', detail, 'rejected')}>Reject</button><button className="primary-button" disabled={busy || (!detail.confirmationSms && !detail.receiptData && !detail.has_sms && !detail.has_receipt)} onClick={() => void review('deposits', detail, 'approved')}>Verify &amp; approve</button></> : <><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'reviewing')}>Mark reviewing</button><button className="secondary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'rejected')}>Reject and return funds</button><button className="primary-button" disabled={busy} onClick={() => void review('withdrawals', detail, 'approved')}>Approve payout</button></>}
       </div> : <p className="payment-safety-note"><strong>{detail.status === 'paid' ? 'Completed' : 'Already reviewed'}</strong><span>{detail.status === 'paid' ? 'The administrator recorded the manual payout transfer reference.' : detail.status === 'approved' && section === 'withdrawals' ? 'The payout is approved and awaiting the manual transfer.' : detail.status === 'approved' ? 'The payment was verified and the wallet credited.' : 'Review actions are locked after this final decision.'}</span></p>}
     </aside></div>}
   </section>;

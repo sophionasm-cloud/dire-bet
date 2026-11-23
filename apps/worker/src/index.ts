@@ -851,8 +851,31 @@ function validPaymentPhone(value: unknown): string | null {
   return /^[+\d().\s-]{7,24}$/.test(phone) && digits.length >= 9 && digits.length <= 15 ? phone : null;
 }
 
+function validEthiopianPhone(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const digits = value.trim().replace(/[^\d+]/g, '');
+  if (/^\+251[79]\d{8}$/.test(digits)) return `0${digits.slice(4)}`;
+  if (/^251[79]\d{8}$/.test(digits)) return `0${digits.slice(3)}`;
+  if (/^0[79]\d{8}$/.test(digits)) return digits;
+  return null;
+}
+
 function validRequestAmount(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) >= 50 && (value as number) <= 10_000 ? value as number : null;
+}
+
+async function smsSha256(value: string): Promise<string> {
+  const normalized = value.trim().replace(/\s+/g, ' ').toLowerCase();
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(normalized)));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function reviewFlags(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string').slice(0, 8) : [];
+  } catch { return []; }
 }
 
 function validIdempotencyKey(value: unknown): string | null {
@@ -943,14 +966,20 @@ async function walletMode(env: Env): Promise<'real' | 'simulation' | null> {
 
 async function publicPaymentSettings(env: Env): Promise<Response> {
   const mode = await walletMode(env);
-  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim
+  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim,
+    withdrawal_minimum_santim, withdrawal_maximum_santim
     FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
       provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null;
+      withdrawal_minimum_santim: number | null; withdrawal_maximum_santim: number | null;
     }>();
   return json({ moneyEnabled: mode === 'real', simulationOnly: mode === 'simulation', providers: result.results.map((row) => ({
     provider: row.provider, accountLabel: mode && row.enabled === 1 ? row.account_label || '' : '',
     accountNumber: mode && row.enabled === 1 ? row.account_number || '' : '',
-    enabled: mode !== null && row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+    enabled: mode !== null && row.enabled === 1,
+    minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100),
+    maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+    withdrawalMinimumAmount: Math.ceil((row.withdrawal_minimum_santim || 10000) / 100),
+    withdrawalMaximumAmount: Math.floor((row.withdrawal_maximum_santim || 1_000_000) / 100),
   })) });
 }
 
@@ -968,10 +997,10 @@ async function playerWalletBalance(env: Env, userId: number): Promise<Response> 
 
 async function playerWalletRequests(env: Env, userId: number): Promise<Response> {
   const mode = await walletMode(env);
-  if (!mode) return json({ deposits: [], withdrawals: [] });
+  if (!mode) return json({ deposits: [], withdrawals: [], lastWithdrawalPhone: null });
   const walletKind = mode === 'real' ? 'real' : 'demo';
   const simulationOnly = mode === 'simulation' ? 1 : 0;
-  const [deposits, withdrawals] = await Promise.all([
+  const [deposits, withdrawals, lastWithdrawal] = await Promise.all([
     env.DB.prepare(`SELECT id, provider, amount_santim, provider_reference, status, review_reason, created_at, reviewed_at
       FROM deposit_requests WHERE user_id = ? AND wallet_kind = ? AND simulation_only = ? ORDER BY created_at DESC LIMIT 30`).bind(userId, walletKind, simulationOnly).all<{
         id: string; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
@@ -980,8 +1009,20 @@ async function playerWalletRequests(env: Env, userId: number): Promise<Response>
       FROM withdrawal_requests WHERE user_id = ? AND wallet_kind = ? AND simulation_only = ? ORDER BY created_at DESC LIMIT 30`).bind(userId, walletKind, simulationOnly).all<{
         id: string; provider: PaymentProvider; amount_santim: number; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
       }>(),
+    env.DB.prepare(`SELECT destination_phone_ciphertext FROM withdrawal_requests
+      WHERE user_id = ? AND wallet_kind = ? AND simulation_only = ? AND destination_phone_ciphertext IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`).bind(userId, walletKind, simulationOnly).first<{ destination_phone_ciphertext: string }>(),
   ]);
-  return json({ simulationOnly: mode === 'simulation', deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })), withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })) });
+  let lastWithdrawalPhone: string | null = null;
+  try {
+    if (lastWithdrawal?.destination_phone_ciphertext) lastWithdrawalPhone = await decryptContact(lastWithdrawal.destination_phone_ciphertext, env.SESSION_SECRET || '');
+  } catch { /* The saved number is optional; the form stays editable. */ }
+  return json({
+    simulationOnly: mode === 'simulation',
+    deposits: deposits.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })),
+    withdrawals: withdrawals.results.map((row) => ({ ...row, amount: row.amount_santim / 100 })),
+    lastWithdrawalPhone,
+  });
 }
 
 async function createRealDeposit(request: Request, env: Env, userId: number): Promise<Response> {
@@ -992,56 +1033,41 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
     const eligibility = await moneyEligibilityError(env, userId);
     if (eligibility) return json({ error: eligibility }, 403);
   }
-  if (request.headers.get('content-length') && Number(request.headers.get('content-length')) > 3_200_000) return json({ error: 'Receipt must be 2 MB or smaller.' }, 413);
   if (!(await allowRateLimit(env, `wallet:${userId}`, 'deposit-request', 5, 3600))) return json({ error: 'Too many requests. Try again later.' }, 429);
-  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; proofMethod?: unknown; confirmationSms?: unknown; receiptData?: unknown; idempotencyKey?: unknown } | null;
+  const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; senderPhone?: unknown; transactionReference?: unknown; confirmationSms?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
   const amount = validRequestAmount(input?.amount);
   const confirmationSms = typeof input?.confirmationSms === 'string' ? input.confirmationSms.trim() : '';
-  const extractedSms = confirmationSms ? parseTransactionSms(confirmationSms, provider) : null;
-  let senderPhone = validPaymentPhone(input?.senderPhone);
-  if (!senderPhone && extractedSms?.senderPhone) {
-    senderPhone = validPaymentPhone(extractedSms.senderPhone);
-  }
-  let reference = typeof input?.transactionReference === 'string' ? input.transactionReference.trim() : '';
-  if (!reference && extractedSms?.reference) {
-    reference = extractedSms.reference;
-  }
-  const proofMethod = input?.proofMethod || (confirmationSms ? 'sms' : 'receipt');
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
-  if (!input || !provider || !amount || !senderPhone || reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference) || !['receipt', 'sms'].includes(String(proofMethod)) || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, sender number and transaction reference.' }, 400);
+  if (!input || !provider || !amount || !idempotencyKey) return json({ error: 'Check the payment method and whole-birr amount.' }, 400);
+  if (confirmationSms.length < 8) return json({ error: 'Paste the payment confirmation SMS.' }, 400);
   if (confirmationSms.length > 1000) return json({ error: 'The confirmation SMS must be 1,000 characters or fewer.' }, 400);
-  if (proofMethod === 'receipt' ? confirmationSms.length > 0 : confirmationSms.length < 8) return json({ error: 'Choose exactly one proof option: a receipt photo or the payment confirmation SMS.' }, 400);
+
+  const extractedSms = parseTransactionSms(confirmationSms, provider);
+  const senderPhone = validPaymentPhone(input.senderPhone) || validPaymentPhone(extractedSms?.senderPhone) || null;
+  const typedReference = typeof input.transactionReference === 'string' ? input.transactionReference.trim() : '';
+  const reference = typedReference || extractedSms?.reference || null;
+  if (reference && (reference.length < 5 || reference.length > 80 || !/^[\p{L}\p{N}._/-]+$/u.test(reference))) {
+    return json({ error: 'The transaction reference could not be read. Paste the full SMS and try again.' }, 400);
+  }
+
   const settings = await env.DB.prepare('SELECT account_number, enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
   if (!settings || settings.enabled !== 1 || !settings.account_number) return json({ error: 'That payment method is not available.' }, 409);
   if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
+
   const old = await env.DB.prepare('SELECT id, user_id, status FROM deposit_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
   if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
-  let receiptType: 'image/png' | 'image/jpeg' | null = null;
-  let receiptBase64: string | null = null;
-  let receiptSha256: string | null = null;
-  if (input.receiptData !== undefined && input.receiptData !== null && input.receiptData !== '') {
-    if (typeof input.receiptData !== 'string' || input.receiptData.length > 2_850_000) return json({ error: 'Receipt must be a PNG or JPG no larger than 2 MB.' }, 413);
-    const match = input.receiptData.match(/^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
-    if (!match) return json({ error: 'Choose a PNG or JPG receipt.' }, 400);
-    const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
-    const png = bytes.byteLength >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
-    const jpeg = bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    if (bytes.byteLength > 2 * 1024 * 1024 || !(png || jpeg)) return json({ error: 'Choose a valid PNG or JPG up to 2 MB.' }, 400);
-    receiptType = png ? 'image/png' : 'image/jpeg';
-    receiptBase64 = match[2];
-    receiptSha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+  const smsHash = await smsSha256(confirmationSms);
+  const duplicateSms = await env.DB.prepare('SELECT id FROM deposit_requests WHERE sms_sha256 = ?').bind(smsHash).first<{ id: string }>();
+  if (duplicateSms) return json({ error: 'That payment SMS was already submitted.' }, 409);
+  if (reference) {
+    const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
+    if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
   }
-  if (proofMethod === 'receipt' ? !receiptBase64 || !receiptType : Boolean(receiptBase64 || receiptType)) return json({ error: 'Choose exactly one proof option: a receipt photo or the payment confirmation SMS.' }, 400);
-  if (receiptSha256 && await env.DB.prepare('SELECT id FROM deposit_requests WHERE receipt_sha256 = ?').bind(receiptSha256).first()) return json({ error: 'That receipt was already submitted.' }, 409);
-  const existingRef = await env.DB.prepare('SELECT id FROM deposit_requests WHERE provider = ? AND provider_reference = ?').bind(provider, reference).first();
-  if (existingRef) return json({ error: 'That transaction reference was already submitted.' }, 409);
 
   const walletKind = mode === 'real' ? 'real' : 'demo';
-  const simulationOnly = mode === 'simulation' ? 1 : 0;
-
-  // Verify transaction details against duplicate check and authoritative source
-  const verification = proofMethod === 'sms'
+  const verification = reference
     ? await verifyDepositTransaction(env, {
         provider,
         reference,
@@ -1050,28 +1076,29 @@ async function createRealDeposit(request: Request, env: Env, userId: number): Pr
         walletKind,
         simulationOnly: mode === 'simulation',
       })
-    : { verified: false, autoApprove: false, status: 'pending' as const, reason: 'Manual review required for receipt' };
-
+    : { verified: false, autoApprove: false, status: 'pending' as const, reason: 'No transaction reference was found in the SMS; queued for manual admin review.' };
   if (verification.duplicate) return json({ error: verification.error || 'That transaction reference was already submitted.' }, 409);
 
-  const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
-  const senderCiphertext = await encryptContact(senderPhone, env.SESSION_SECRET || '');
-  const smsCiphertext = proofMethod === 'sms' ? await encryptContact(confirmationSms, env.SESSION_SECRET || '') : null;
-  const statements = [env.DB.prepare(`INSERT INTO deposit_requests
-    (id, user_id, wallet_kind, simulation_only, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext, receipt_sha256)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`)
-    .bind(id, userId, walletKind, simulationOnly, provider, amount * 100, reference, idempotencyKey, senderCiphertext, proofMethod, smsCiphertext, receiptSha256)];
-  if (receiptBase64 && receiptType) {
-    const encryptedReceipt = await encryptContact(receiptBase64, env.SESSION_SECRET || '');
-    statements.push(env.DB.prepare(`INSERT INTO receipt_blobs (id, deposit_request_id, content_type, encrypted_blob, retention_until)
-      VALUES (?, ?, ?, ?, ?)`)
-      .bind(crypto.randomUUID(), id, receiptType, enc.encode(encryptedReceipt), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()));
+  const flags: string[] = [];
+  if (!extractedSms) flags.push('unreadable_sms');
+  else {
+    if (extractedSms.amountSantim !== null && extractedSms.amountSantim !== amount * 100) flags.push('amount_mismatch');
+    if (extractedSms.status === 'failed') flags.push('failed_sms');
+    if (!extractedSms.isCrediblePaymentSms) flags.push('unverified_sms');
   }
+
+  const id = `DP-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
+  const senderCiphertext = senderPhone ? await encryptContact(senderPhone, env.SESSION_SECRET || '') : null;
+  const smsCiphertext = await encryptContact(confirmationSms, env.SESSION_SECRET || '');
+  const statements = [env.DB.prepare(`INSERT INTO deposit_requests
+    (id, user_id, wallet_kind, simulation_only, provider, amount_santim, provider_reference, status, idempotency_key, sender_phone_ciphertext, proof_method, confirmation_sms_ciphertext, sms_sha256, review_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'sms', ?, ?, ?)`)
+    .bind(id, userId, walletKind, mode === 'simulation' ? 1 : 0, provider, amount * 100, reference, idempotencyKey, senderCiphertext, smsCiphertext, smsHash, flags.length ? JSON.stringify(flags) : null)];
   if (verification.autoApprove) {
     statements.push(env.DB.prepare(`UPDATE deposit_requests SET status = 'approved', reviewed_by = 'system:auto-verified', reviewed_at = CURRENT_TIMESTAMP, review_reason = ? WHERE id = ? AND status = 'pending'`).bind(verification.reason, id));
   }
   try { await env.DB.batch(statements); }
-  catch { return json({ error: 'That request could not be saved. Check whether its receipt or transaction reference was already used.' }, 409); }
+  catch { return json({ error: 'That request could not be saved. Check whether its payment SMS was already used.' }, 409); }
   return json({ requestId: id, status: verification.autoApprove ? 'approved' : 'pending', verified: verification.autoApprove, autoApproved: verification.autoApprove, simulationOnly: mode === 'simulation' }, 201);
 }
 
@@ -1087,18 +1114,23 @@ async function createRealWithdrawal(request: Request, env: Env, userId: number):
   const input = await request.json().catch(() => null) as { provider?: unknown; amount?: unknown; destinationPhone?: unknown; accountHolderName?: unknown; idempotencyKey?: unknown } | null;
   const provider = paymentProvider(input?.provider);
   const amount = validRequestAmount(input?.amount);
-  const destination = validPaymentPhone(input?.destinationPhone);
-  const accountHolder = typeof input?.accountHolderName === 'string' ? input.accountHolderName.trim() : '';
+  const destination = validEthiopianPhone(input?.destinationPhone);
+  const accountHolderText = typeof input?.accountHolderName === 'string' ? input.accountHolderName.trim() : '';
+  const accountHolder = accountHolderText.length >= 2 && accountHolderText.length <= 100 ? accountHolderText : null;
   const idempotencyKey = validIdempotencyKey(input?.idempotencyKey);
-  if (!input || !provider || !amount || !destination || accountHolder.length < 2 || accountHolder.length > 100 || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount, phone number and account name.' }, 400);
-  const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{ enabled: number; minimum_santim: number | null; maximum_santim: number | null }>();
+  if (!input || !provider || !amount || !destination || !idempotencyKey) return json({ error: 'Check the payment method, whole-birr amount and phone number.' }, 400);
+  const settings = await env.DB.prepare('SELECT enabled, minimum_santim, maximum_santim, withdrawal_minimum_santim, withdrawal_maximum_santim FROM payment_settings WHERE provider = ?').bind(provider).first<{
+    enabled: number; minimum_santim: number | null; maximum_santim: number | null; withdrawal_minimum_santim: number | null; withdrawal_maximum_santim: number | null;
+  }>();
   if (!settings || settings.enabled !== 1) return json({ error: 'That withdrawal method is not available.' }, 409);
-  if (amount * 100 < (settings.minimum_santim || 5000) || amount * 100 > (settings.maximum_santim || 1_000_000)) return json({ error: 'The amount is outside the configured request range.' }, 400);
+  const minimumSantim = settings.withdrawal_minimum_santim || 10000;
+  const maximumSantim = settings.withdrawal_maximum_santim || 1_000_000;
+  if (amount * 100 < minimumSantim || amount * 100 > maximumSantim) return json({ error: `Enter a withdrawal amount from ${Math.ceil(minimumSantim / 100)} to ${Math.floor(maximumSantim / 100)} Birr.` }, 400);
   const old = await env.DB.prepare('SELECT id, user_id, status FROM withdrawal_requests WHERE idempotency_key = ?').bind(idempotencyKey).first<{ id: string; user_id: number; status: string }>();
   if (old) return old.user_id === userId ? json({ requestId: old.id, status: old.status, repeated: true }) : json({ error: 'Request key was already used.' }, 409);
   const id = `WD-${Date.now().toString(36).toUpperCase()}-${randomCode(4)}`;
   const phoneCiphertext = await encryptContact(destination, env.SESSION_SECRET || '');
-  const nameCiphertext = await encryptContact(accountHolder, env.SESSION_SECRET || '');
+  const nameCiphertext = accountHolder ? await encryptContact(accountHolder, env.SESSION_SECRET || '') : null;
   const walletKind = mode === 'real' ? 'real' : 'demo';
   const simulationOnly = mode === 'simulation' ? 1 : 0;
   try {
@@ -1117,17 +1149,23 @@ async function adminWalletList(env: Env, adminId: number, kind: 'deposits' | 'wi
   const simulationOnly = mode === 'simulation' ? 1 : 0;
   if (kind === 'deposits') {
     const rows = await env.DB.prepare(`SELECT d.id, d.user_id, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-      d.simulation_only, u.first_name, u.username, u.web_username, d.proof_method, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt,
+      d.simulation_only, u.first_name, u.username, u.web_username, d.proof_method, d.review_flags, EXISTS(SELECT 1 FROM receipt_blobs b WHERE b.deposit_request_id = d.id) AS has_receipt,
       CASE WHEN d.confirmation_sms_ciphertext IS NOT NULL THEN 1 ELSE 0 END AS has_sms
       FROM deposit_requests d JOIN users u ON u.id = d.user_id WHERE d.wallet_kind = ? AND d.simulation_only = ? ORDER BY d.created_at DESC LIMIT 100`).bind(walletKind, simulationOnly).all<{
         id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-        simulation_only: number; first_name: string; username: string | null; web_username: string | null; proof_method: 'receipt' | 'sms'; has_receipt: number; has_sms: number;
+        simulation_only: number; first_name: string; username: string | null; web_username: string | null; proof_method: 'receipt' | 'sms'; review_flags: string | null; has_receipt: number; has_sms: number;
       }>();
     const details = await Promise.all(rows.results.map(async (row) => {
-      const phone = await env.DB.prepare('SELECT sender_phone_ciphertext FROM deposit_requests WHERE id = ?').bind(row.id).first<{ sender_phone_ciphertext: string | null }>();
-      let senderPhone = '';
-      try { if (phone?.sender_phone_ciphertext) senderPhone = await decryptContact(phone.sender_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
-      return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, simulationOnly: row.simulation_only === 1 };
+      const protectedFields = await env.DB.prepare('SELECT sender_phone_ciphertext, confirmation_sms_ciphertext FROM deposit_requests WHERE id = ?').bind(row.id).first<{ sender_phone_ciphertext: string | null; confirmation_sms_ciphertext: string | null }>();
+      let senderPhone = ''; let confirmationSmsPreview = '';
+      try { if (protectedFields?.sender_phone_ciphertext) senderPhone = await decryptContact(protectedFields.sender_phone_ciphertext, env.SESSION_SECRET || ''); } catch { /* The request remains visible without its protected field. */ }
+      try {
+        if (protectedFields?.confirmation_sms_ciphertext) {
+          const sms = await decryptContact(protectedFields.confirmation_sms_ciphertext, env.SESSION_SECRET || '');
+          confirmationSmsPreview = sms.length > 140 ? `${sms.slice(0, 140)}…` : sms;
+        }
+      } catch { /* The request remains visible without its protected field. */ }
+      return { ...row, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, confirmationSmsPreview, flags: reviewFlags(row.review_flags), simulationOnly: row.simulation_only === 1 };
     }));
     return json({ requests: details, count: details.length, simulationOnly: mode === 'simulation' });
   }
@@ -1215,11 +1253,18 @@ async function reviewWalletRequest(request: Request, env: Env, adminId: number, 
 }
 
 async function adminPaymentSettings(env: Env): Promise<Response> {
-  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim, updated_at
+  const result = await env.DB.prepare(`SELECT provider, account_label, account_number, enabled, minimum_santim, maximum_santim,
+    withdrawal_minimum_santim, withdrawal_maximum_santim, updated_at
     FROM payment_settings WHERE provider IN ('telebirr','ebirr') ORDER BY provider`).all<{
-      provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null; updated_at: string;
+      provider: PaymentProvider; account_label: string | null; account_number: string | null; enabled: number; minimum_santim: number | null; maximum_santim: number | null;
+      withdrawal_minimum_santim: number | null; withdrawal_maximum_santim: number | null; updated_at: string;
     }>();
-  return json({ simulationEnabled: env.SIMULATED_WALLET_ENABLED === 'true', providers: result.results.map((row) => ({ provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.account_number || '', enabled: row.enabled === 1, minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100), updatedAt: row.updated_at })) });
+  return json({ simulationEnabled: env.SIMULATED_WALLET_ENABLED === 'true', providers: result.results.map((row) => ({
+    provider: row.provider, accountLabel: row.account_label || '', accountNumber: row.account_number || '', enabled: row.enabled === 1,
+    minimumAmount: Math.ceil((row.minimum_santim || 5000) / 100), maximumAmount: Math.floor((row.maximum_santim || 1_000_000) / 100),
+    withdrawalMinimumAmount: Math.ceil((row.withdrawal_minimum_santim || 10000) / 100), withdrawalMaximumAmount: Math.floor((row.withdrawal_maximum_santim || 1_000_000) / 100),
+    updatedAt: row.updated_at,
+  })) });
 }
 
 async function updateAdminPaymentSettings(request: Request, env: Env, adminId: number): Promise<Response> {
@@ -1378,13 +1423,13 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
       const simulationOnly = mode === 'simulation' ? 1 : 0;
       if (detail[1] === 'deposits') {
         const row = await env.DB.prepare(`SELECT d.id, d.user_id, d.wallet_kind, d.simulation_only, d.provider, d.amount_santim, d.provider_reference, d.status, d.review_reason, d.created_at, d.reviewed_at,
-          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext, d.proof_method, d.confirmation_sms_ciphertext FROM deposit_requests d JOIN users u ON u.id = d.user_id
+          u.first_name, u.username, u.web_username, d.sender_phone_ciphertext, d.proof_method, d.confirmation_sms_ciphertext, d.review_flags FROM deposit_requests d JOIN users u ON u.id = d.user_id
           WHERE d.id = ? AND d.wallet_kind = ? AND d.simulation_only = ?`).bind(detail[2], walletKind, simulationOnly).first<{
             id: string; user_id: number; provider: PaymentProvider; amount_santim: number; provider_reference: string | null; status: string; review_reason: string | null; created_at: string; reviewed_at: string | null;
-            wallet_kind: string; simulation_only: number; first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null; proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null;
+            wallet_kind: string; simulation_only: number; first_name: string; username: string | null; web_username: string | null; sender_phone_ciphertext: string | null; proof_method: 'receipt' | 'sms'; confirmation_sms_ciphertext: string | null; review_flags: string | null;
           }>();
         if (!row) return json({ error: 'Request not found.' }, 404);
-        const { sender_phone_ciphertext: senderPhoneCiphertext, confirmation_sms_ciphertext: confirmationSmsCiphertext, ...safeRow } = row;
+        const { sender_phone_ciphertext: senderPhoneCiphertext, confirmation_sms_ciphertext: confirmationSmsCiphertext, review_flags: reviewFlagsJson, ...safeRow } = row;
         const blob = await env.DB.prepare('SELECT content_type, encrypted_blob FROM receipt_blobs WHERE deposit_request_id = ?').bind(row.id).first<{ content_type: 'image/png' | 'image/jpeg'; encrypted_blob: ArrayBuffer }>();
         let senderPhone = ''; let receiptData = ''; let confirmationSms = '';
         try { if (senderPhoneCiphertext) senderPhone = await decryptContact(senderPhoneCiphertext, env.SESSION_SECRET || ''); } catch { /* Leave protected data blank if it cannot be decrypted. */ }
@@ -1396,7 +1441,7 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
             receiptData = `data:${blob.content_type};base64,${await decryptContact(encrypted, env.SESSION_SECRET || '')}`;
           }
         } catch { /* Leave the receipt unavailable rather than exposing encrypted bytes. */ }
-        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData, confirmationSms, simulationOnly: row.simulation_only === 1 } });
+        return json({ request: { ...safeRow, player: row.web_username || (row.username ? `@${row.username}` : row.first_name), amount: row.amount_santim / 100, senderPhone, receiptData, confirmationSms, flags: reviewFlags(reviewFlagsJson), simulationOnly: row.simulation_only === 1 } });
       }
       const row = await env.DB.prepare(`SELECT w.id, w.user_id, w.simulation_only, w.provider, w.amount_santim, w.status, w.review_reason, w.created_at, w.reviewed_at,
         w.destination_phone_ciphertext, w.account_holder_ciphertext, COALESCE(wallet.balance_santim, 0) AS balance_santim,

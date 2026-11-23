@@ -43,3 +43,47 @@
 .status-pill.unknown{background:#2a2b2e;color:#9ca3af}
 .wallet-sms-textarea{width:100%;min-height:85px;padding:9px;border:1px solid #373432;border-radius:9px;background:#080808;color:#f6f0e7;font-size:11px;line-height:1.45;resize:vertical;box-sizing:border-box}
 .wallet-sms-textarea:focus{border-color:#c38838;outline:2px solid #f6ae4933;outline-offset:0}
+
+/* Simple deposit/withdraw flow */
+.wallet-simple-card{display:grid;gap:14px;padding:16px;border:1px solid #3a3328;border-radius:16px;background:linear-gradient(160deg,#161310,#0e0d0c)}
+.wallet-provider-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.wallet-provider-switch button{min-height:48px;display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid #3f3a33;border-radius:11px;background:#11100f;color:#d9d0c4;font-size:14px;font-weight:600;cursor:pointer}
+.wallet-provider-switch button.selected{border-color:#f0a343;background:#22170d;color:#ffc46c;box-shadow:inset 0 0 0 1px #f0a34355}
+.wallet-provider-switch button:disabled{opacity:.45;cursor:not-allowed}
+.wallet-provider-switch .wallet-provider-mark{width:28px;height:28px;font-size:15px}
+.wallet-receiving-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px solid #4a3d29;border-radius:12px;background:#14110d}
+.wallet-receiving-row>div{display:grid;gap:4px;min-width:0}
+.wallet-receiving-row span{color:#b8a992;font-size:12px}
+.wallet-receiving-row strong{font-size:20px;letter-spacing:.02em;color:#fff;overflow-wrap:anywhere}
+.wallet-receiving-row small{color:#9f9588;font-size:12px}
+.wallet-copy-button{min-height:44px;flex:none;display:inline-flex;align-items:center;gap:6px;padding:0 12px;border:1px solid #5a4a34;border-radius:10px;background:#1d1812;color:#f2c06d;font-size:14px;font-weight:600;cursor:pointer}
+.wallet-copy-button svg{width:18px;height:18px}
+.wallet-copy-button:disabled{opacity:.45;cursor:not-allowed}
+.wallet-simple-field{display:grid;gap:6px;color:#ddd4c8;font-size:14px;font-weight:600}
+.wallet-simple-field input,.wallet-simple-field textarea{width:100%;min-height:48px;padding:12px;border:1px solid #433d36;border-radius:10px;background:#090909;color:#f6f0e7;font-size:16px;line-height:1.4}
+.wallet-simple-field textarea{resize:vertical;min-height:110px}
+.wallet-simple-field input:focus,.wallet-simple-field textarea:focus{border-color:#c38838;outline:2px solid #f6ae4933;outline-offset:0}
+.wallet-simple-field input[aria-invalid="true"],.wallet-simple-field textarea[aria-invalid="true"]{border-color:#8a4a3f}
+.wallet-field-error{color:#ffb3a3;font-size:12px;font-weight:500;line-height:1.4}
+.wallet-balance-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1px solid #3a342b;border-radius:12px;background:#141210}
+.wallet-balance-strip span{color:#b7aca0;font-size:13px}
+.wallet-balance-strip strong{color:#ffd089;font-size:16px}
+.wallet-simple-note{margin:0;color:#b3a999;font-size:13px;line-height:1.45;text-align:center}
+.wallet-submit-button{min-height:52px;font-size:16px}
+.wallet-success-screen{align-items:center;justify-content:center;text-align:center;min-height:60vh}
+.wallet-success-mark{width:72px;height:72px;display:grid;place-items:center;border-radius:50%;background:#1f3a28;color:#65d48b;font-size:36px;font-weight:700;margin:0 auto 8px}
+.wallet-success-copy{color:#d5ccbf;font-size:16px;line-height:1.5;max-width:320px;margin:0 auto 8px}
+
+/* Admin payment search/flags */
+.payment-list-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.payment-search{min-height:40px;min-width:180px;flex:1;padding:0 12px;border:1px solid #3b3731;border-radius:9px;background:#0d0c0b;color:#f3ede4;font-size:16px}
+.payment-search:focus{border-color:#c38838;outline:2px solid #f6ae4933;outline-offset:0}
+.payment-flags{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.payment-flag{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;background:#3b241f;color:#ffb8a8;font-size:11px;font-weight:600;text-transform:capitalize}
+.payment-flag-amount_mismatch{background:#3d3118;color:#ffd27a}
+.payment-flag-unreadable_sms,.payment-flag-unverified_sms{background:#33263f;color:#d8b8ff}
+.payment-sms-preview{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cfc4b4}
+.payment-sms-full pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;color:#e8dfd2;font-size:13px;line-height:1.5}
+.payment-flags-detail{margin:0 0 12px}
+@media(max-width:520px){.wallet-receiving-row{flex-direction:column;align-items:stretch}.wallet-copy-button{justify-content:center}.payment-list-controls{width:100%}.payment-search{width:100%}}
+.wallet-submit-button:disabled{opacity:.5;filter:saturate(.6)}

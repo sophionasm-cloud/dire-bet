@@ -192,8 +192,8 @@ describe('wallet proof and agent signup credit', () => {
     }), walletEnv(captured, { activated:true }));
   }
 
-  it('saves an SMS-only deposit proof and rejects a submission with both proof types', async () => {
-    const input = { provider:'telebirr', amount:100, senderPhone:'0912345678', transactionReference:'PAY12345', proofMethod:'sms', confirmationSms:'Payment received successfully', idempotencyKey:'deposit-sms-test-0001' };
+  it('requires the payment SMS and ignores old receipt-only submissions', async () => {
+    const input = { provider:'telebirr', amount:100, confirmationSms:'Dear customer, ETB 100 was paid. Trans ID: PAY12345 completed', idempotencyKey:'deposit-sms-test-0001' };
     const stored: { sql: string; values: unknown[] }[] = [];
     const accepted = await deposit(input, stored);
     expect(accepted.status).toBe(201);
@@ -201,8 +201,8 @@ describe('wallet proof and agent signup credit', () => {
     expect(stored.some((statement) => statement.sql.includes('INSERT INTO receipt_blobs'))).toBe(false);
 
     const rejectedStatements: { sql: string; values: unknown[] }[] = [];
-    const both = await deposit({ ...input, receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dZ8AAAAASUVORK5CYII=' }, rejectedStatements);
-    expect(both.status).toBe(400);
+    const receiptOnly = await deposit({ ...input, confirmationSms: undefined, receiptData:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dZ8AAAAASUVORK5CYII=' }, rejectedStatements);
+    expect(receiptOnly.status).toBe(400);
     expect(rejectedStatements).toHaveLength(0);
   });
 
@@ -219,8 +219,6 @@ describe('wallet proof and agent signup credit', () => {
   });
 
   describe('simulated wallet requests', () => {
-  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/dZ8AAAAASUVORK5CYII=';
-
   it('keeps simulation balance and deposits out of the real wallet', async () => {
     const statements: { sql: string; values: unknown[] }[] = [];
     const authorization = `Bearer ${await signedSession(secret, 71)}`;
@@ -229,7 +227,7 @@ describe('wallet proof and agent signup credit', () => {
 
     const response = await worker.fetch(new Request('https://dire-bet.test/api/wallet/deposits', {
       method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' },
-      body:JSON.stringify({ provider:'telebirr', amount:100, senderPhone:'0912345678', transactionReference:'SIM12345', proofMethod:'receipt', receiptData:image, idempotencyKey:'simulation-deposit-test-01' }),
+      body:JSON.stringify({ provider:'telebirr', amount:100, confirmationSms:'unparseable payment note with enough characters 12345', idempotencyKey:'simulation-deposit-test-01' }),
     }), walletEnv(statements, { simulated:true }));
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({ status:'pending', simulationOnly:true });
@@ -242,7 +240,7 @@ describe('wallet proof and agent signup credit', () => {
     const authorization = `Bearer ${await signedSession(secret, 71)}`;
     const withdrawal = await worker.fetch(new Request('https://dire-bet.test/api/wallet/withdrawals', {
       method:'POST', headers:{ Authorization:authorization, Origin:'https://dire-bet.test', 'Content-Type':'application/json' },
-      body:JSON.stringify({ provider:'ebirr', amount:50, destinationPhone:'0912345678', accountHolderName:'Test Player', idempotencyKey:'simulation-withdrawal-test-01' }),
+      body:JSON.stringify({ provider:'ebirr', amount:100, destinationPhone:'0912345678', idempotencyKey:'simulation-withdrawal-test-01' }),
     }), walletEnv(statements, { simulated:true }));
     expect(withdrawal.status).toBe(201);
     expect(await withdrawal.json()).toMatchObject({ status:'pending', simulationOnly:true });
@@ -441,3 +439,4 @@ describe('Telegram setup recovery', () => {
     }
   });
 });
+
