@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { botMove, initXO, applyXO, type XOState } from '@dire-bet/engines/xo';
 import { PUBLIC_GAMES, type GameId } from '@dire-bet/shared';
 import { languageNames, translate, type Language, type TranslationKey } from './i18n';
@@ -7,7 +7,7 @@ import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeG
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby from './games/PublicRoomLobby';
 import WalletApp from './wallet/WalletApp';
-import DireBetPoster from './DireBetPoster';
+import DashboardWalletCard from './DashboardWalletCard';
 import WalletBalancePill from './WalletBalancePill';
 import { clearAuth, installAuthFetch, isSignedOut, onAuthChange, readAccessToken, readRefreshToken, refreshSession, storeAuth } from './authClient';
 
@@ -21,13 +21,14 @@ type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'ru
 type Account = { webUsername: string | null; phoneShared: boolean };
 
 const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', om: 'OM' };
-const bannerSlides: { image: string; alt: string; poster?: boolean; ratio: number }[] = [
-  { image: '/promotions/dire-bet-poster-bg.jpg', alt: 'Dire Bet friends playing together poster with Ludo, checkers and XO artwork', poster: true, ratio: 727 / 1600 },
-  { image: '/promotions/amharic-games.png', alt: 'Dire Bet Amharic gaming poster with players, cards, numbers and trophies', ratio: 543 / 1280 },
-  { image: '/promotions/community-games.png', alt: 'Dire Bet poster showing multiple games and people playing together', ratio: 698 / 1280 },
-  { image: '/promotions/blue-games.png', alt: 'Blue Dire Bet game poster featuring XO, Ludo, Bingo and Spin', ratio: 543 / 1280 },
+type PromoAction = 'browse' | 'ludo' | 'xo';
+type PromoSlide = { id: string; image: string; alt: string; kicker: string; titleKey: TranslationKey; copyKey: TranslationKey; ctaKey: TranslationKey; action: PromoAction };
+const promoSlides: PromoSlide[] = [
+  { id: 'brand', image: '/promotions/dash-brand.webp', alt: 'Two friends celebrating a win together on a smartphone', kicker: 'DIRE BET', titleKey: 'promoBrandTitle', copyKey: 'promoBrandCopy', ctaKey: 'promoBrandCta', action: 'browse' },
+  { id: 'ludo', image: '/promotions/dash-ludo.webp', alt: 'Ludo board with colorful tokens and rolling dice', kicker: 'LUDO', titleKey: 'promoLudoTitle', copyKey: 'promoLudoCopy', ctaKey: 'promoLudoCta', action: 'ludo' },
+  { id: 'xo', image: '/promotions/dash-xo.webp', alt: 'Two rivals facing off over a glowing XO grid', kicker: 'XO DUEL', titleKey: 'promoXoTitle', copyKey: 'promoXoCopy', ctaKey: 'promoXoCta', action: 'xo' },
+  { id: 'more', image: '/promotions/dash-more.webp', alt: 'Collection of Dire Bet games with dice, cards and tokens', kicker: 'DIRE BET', titleKey: 'promoMoreTitle', copyKey: 'promoMoreCopy', ctaKey: 'promoMoreCta', action: 'browse' },
 ];
-const posterHeadline = translate('am', 'tagline');
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const };
   const paths: Record<string, ReactNode> = {
@@ -38,13 +39,14 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>,
     globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></>,
     bell: <><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></>,
-    search: <><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></>,
     close: <><path d="m6 6 12 12M18 6 6 18"/></>,
     chevron: <path d="m9 18 6-6-6-6"/>,
     person: <><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></>,
     question: <><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 1 1 4.7 1.5c-1.2 1.1-2.2 1.6-2.2 3.1M12 17.5h.01"/></>,
     back: <><path d="m14 5-7 7 7 7M7 12h13"/></>,
     copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>,
+    settings: <><circle cx="12" cy="12" r="3.1"/><path d="M12 2.6v2.3M12 19.1v2.3M2.6 12h2.3M19.1 12h2.3M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6"/></>,
+    logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></>,
   };
   return <svg {...common}>{paths[name] || paths.question}</svg>;
 }
@@ -73,7 +75,6 @@ function App() {
   const [onboarding, setOnboarding] = useState(() => !telegramMiniApp && !localStorage.getItem('direbet.onboarded') && requestedPage !== 'account' && requestedPage !== 'login');
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [category, setCategory] = useState<Category>('all');
-  const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Game | null>(null);
   const [lobbyGameId, setLobbyGameId] = useState<GameId>('ludo');
   const [banner, setBanner] = useState(0);
@@ -95,7 +96,10 @@ function App() {
   const [roomConfig, setRoomConfig] = useState<RoomConfig | null>(null);
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
+  const [profileOpen, setProfileOpen] = useState(false);
   const promoTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const bannerResume = useRef(0);
+  const profileRef = useRef<HTMLDivElement | null>(null);
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
   const telegramAuthPending = Boolean(telegramMiniApp && !sessionToken && !telegramAuthError);
 
@@ -112,6 +116,22 @@ function App() {
     setSessionToken(payload.token);
     if (payload.user?.displayName) setDisplayName(payload.user.displayName);
   }), []);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (profileRef.current && !profileRef.current.contains(event.target as Node)) setProfileOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setProfileOpen(false); };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [profileOpen]);
+
+  useEffect(() => () => window.clearTimeout(bannerResume.current), []);
 
   useEffect(() => {
     const check = () => {
@@ -234,24 +254,22 @@ function App() {
   }, [page]);
 
   useEffect(() => {
-    if (reduceEffects || bannerPaused) return;
+    if (page !== 'home' || reduceEffects || bannerPaused) return;
     let timer = 0;
     const stop = () => { if (timer) window.clearInterval(timer); timer = 0; };
     const start = () => {
       stop();
-      if (!document.hidden) timer = window.setInterval(() => setBanner((current) => (current + 1) % bannerSlides.length), 7200);
+      if (!document.hidden) timer = window.setInterval(() => setBanner((current) => (current + 1) % promoSlides.length), 6000);
     };
     const onVisibilityChange = () => document.hidden ? stop() : start();
     start();
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => { stop(); document.removeEventListener('visibilitychange', onVisibilityChange); };
-  }, [reduceEffects, bannerPaused]);
+  }, [page, reduceEffects, bannerPaused]);
 
   const filteredGames = useMemo(() => PUBLIC_GAMES.filter((game) => {
-    const matchesSearch = `${game.title} ${game.id}`.toLowerCase().includes(query.toLowerCase());
-    const matchesCategory = category === 'all' || game.category === category;
-    return matchesSearch && matchesCategory;
-  }), [category, query]);
+    return category === 'all' || game.category === category;
+  }), [category]);
 
   const openXo = () => {
     setSelected(null); setXo(initXO()); setRound(0); setPage('xo');
@@ -269,6 +287,23 @@ function App() {
     setSelected(null);
     setLobbyGameId(game.id);
     setPage('lobby');
+  };
+  const holdBanner = () => {
+    setBannerPaused(true);
+    window.clearTimeout(bannerResume.current);
+    bannerResume.current = window.setTimeout(() => setBannerPaused(false), 7000);
+  };
+  const closeProfile = () => setProfileOpen(false);
+  const scrollToGames = () => {
+    document.getElementById('choose-game')?.scrollIntoView({ behavior: reduceEffects ? 'auto' : 'smooth', block: 'start' });
+  };
+  const runPromoAction = (action: PromoAction) => {
+    holdBanner();
+    if (action === 'browse') { scrollToGames(); return; }
+    setSelected(null);
+    setLobbyGameId(action);
+    setPage('lobby');
+    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');
   };
   const quickMove = (index: number) => {
     if (xo.turn !== 'X' || xo.winner || xo.board[index]) return;
@@ -350,8 +385,64 @@ function App() {
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp token={sessionToken} /></Suspense>;
 
+  const telegramPhoto = (window.Telegram?.WebApp?.initDataUnsafe?.user as { photo_url?: string } | undefined)?.photo_url;
+  const avatarInitial = (displayName.trim()[0] || 'P').toUpperCase();
+  const accountStatus = sessionToken
+    ? account ? (account.phoneShared ? t('contactLinked') : t('contactNotLinked')) : t('onlineConnecting')
+    : t('guestPlayer');
+
   return <main className="player-shell">
-    <header className="topbar">
+    {page === 'home' ? <header className="dash-topbar">
+      <button type="button" className="dash-icon-btn" onClick={() => setOverlay('menu')} aria-label={t('menu')}><Icon name="menu" size={20}/></button>
+      <a className="dash-wordmark" href="/" onClick={(e) => { e.preventDefault(); nav('home'); }} aria-label="DIRE BET home"><span>DIRE</span><b>BET</b><i>✦</i></a>
+      <div className="dash-top-actions">
+        <button type="button" className="dash-icon-btn bell-button" onClick={() => setOverlay('notifications')} aria-label={t('matches')}><Icon name="bell" size={18}/><span className="notification-dot"/></button>
+        <div className="dash-profile" ref={profileRef}>
+          <button type="button" className="dash-avatar" aria-expanded={profileOpen} aria-haspopup="menu" aria-label={t('profile')} onClick={() => setProfileOpen((open) => !open)}>
+            {telegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer"/> : <span>{avatarInitial}</span>}
+            <i className="dash-avatar-dot" aria-hidden="true"/>
+          </button>
+          {profileOpen && <div className="dash-profile-menu" role="menu" aria-label={t('profile')}>
+            <div className="dash-profile-head">
+              <span className="dash-avatar dash-avatar-lg" aria-hidden="true">{telegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer"/> : <span>{avatarInitial}</span>}</span>
+              <div className="dash-profile-copy"><strong>{displayName}</strong><span>{accountStatus}</span></div>
+            </div>
+            <div className="dash-profile-divider" aria-hidden="true"/>
+            <button type="button" className="dash-profile-row" role="menuitem" onClick={() => { closeProfile(); nav('account'); }}>
+              <span className="dash-profile-row-icon"><Icon name="person" size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{t('profile')}</strong><small>{t('playerProfile')}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+            <button type="button" className="dash-profile-row" role="menuitem" onClick={() => { closeProfile(); nav('wallet'); }}>
+              <span className="dash-profile-row-icon wallet"><Icon name="wallet" size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{t('wallet')}</strong><small>{t('availableBalance')}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+            <button type="button" className="dash-profile-row" role="menuitem" onClick={() => { closeProfile(); nav('matches'); }}>
+              <span className="dash-profile-row-icon"><Icon name="matches" size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{t('activityHistory')}</strong><small>{t('transactionHistory')}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+            <button type="button" className="dash-profile-row" role="menuitem" onClick={() => { closeProfile(); nav('menu'); }}>
+              <span className="dash-profile-row-icon"><Icon name="settings" size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{t('settings')}</strong><small>{languageNames[language]}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+            <button type="button" className="dash-profile-row" role="menuitem" onClick={() => { closeProfile(); setOverlay('support'); }}>
+              <span className="dash-profile-row-icon"><Icon name="question" size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{t('helpSupport')}</strong><small>{t('support')}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+            <div className="dash-profile-divider" aria-hidden="true"/>
+            <button type="button" className={`dash-profile-row ${sessionToken ? 'danger' : 'signin'}`} role="menuitem" onClick={() => { closeProfile(); if (sessionToken) void signOutWeb(); else nav('login'); }}>
+              <span className="dash-profile-row-icon"><Icon name={sessionToken ? 'logout' : 'person'} size={17}/></span>
+              <span className="dash-profile-row-copy"><strong>{sessionToken ? t('logout') : t('signIn')}</strong><small>{sessionToken ? t('account') : t('webLogin')}</small></span>
+              <Icon name="chevron" size={15}/>
+            </button>
+          </div>}
+        </div>
+      </div>
+    </header> : <header className="topbar">
       <div className="topbar-brand">
         <a className="wordmark" href="/" onClick={(e) => { e.preventDefault(); nav('home'); }} aria-label="DIRE BET home"><span>DIRE</span><b>BET</b><i>✦</i></a>
         <WalletBalancePill token={sessionToken} pending={telegramAuthPending} onOpen={() => nav('wallet')} />
@@ -361,19 +452,32 @@ function App() {
         <button className="icon-button bell-button" onClick={() => setOverlay('notifications')} aria-label={t('matches')}><Icon name="bell" size={18}/><span className="notification-dot" /></button>
         <button className="icon-button menu-trigger" onClick={() => setOverlay('menu')} aria-label={t('menu')}><Icon name="menu" size={21}/></button>
       </div>
-    </header>
+    </header>}
 
     {page === 'home' && <section className="screen home-screen">
-      {sessionToken ? <div className="profile-welcome"><div className="profile-avatar">{displayName.slice(0, 1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting')}</span></div><button className="profile-open" onClick={() => nav('account')}>{t('account')}</button></div> : telegramMiniApp ? <div className="telegram-auth-status" role="status"><span>{telegramAuthPending ? t('onlineConnecting') : t('telegramAuthFailed')}</span>{!telegramAuthPending && <button type="button" onClick={retryTelegramAuthentication}>{t('retryTelegramAuth')}</button>}</div> : <div className="guest-banner"><div><strong>{t('guestTitle')}</strong><span>{t('guestDescription')}</span></div><div className="guest-actions"><a href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer" className="guest-link">{t('openTelegram')}<Icon name="chevron" size={15}/></a><button className="guest-login" onClick={() => nav('login')}>{t('webLogin')}</button></div></div>}
-      <section className="promo-carousel" aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }} onTouchStart={(event) => { const touch = event.touches[0]; promoTouchStart.current = { x: touch.clientX, y: touch.clientY }; }} onTouchEnd={(event) => { const start = promoTouchStart.current; const touch = event.changedTouches[0]; promoTouchStart.current = null; if (!start || !touch) return; const dx = touch.clientX - start.x; const dy = touch.clientY - start.y; if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) setBanner((current) => (current + (dx < 0 ? 1 : bannerSlides.length - 1)) % bannerSlides.length); }} onTouchCancel={() => { promoTouchStart.current = null; }}>
-        <div className="promo-window" style={{ '--promo-ratio': bannerSlides[banner].ratio } as CSSProperties}><div className="promo-track" style={{ transform: `translateX(-${banner * 100}%)` }}>
-          {bannerSlides.map((slide, index) => <div key={slide.image} className="promo-slide" role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${bannerSlides.length}`} aria-hidden={banner !== index}>{slide.poster ? <DireBetPoster headline={posterHeadline} quickLabel={t('quickPlay')} onQuickPlay={openXo} active={banner === index}/> : <img src={slide.image} alt={slide.alt} draggable={false} decoding="async" />}</div>)}
-        </div></div>
-        <div className="promo-dots" role="group" aria-label={t('chooseGame')}>{bannerSlides.map((slide, index) => <button key={slide.image} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => setBanner(index)} />)}</div>
+      {telegramMiniApp && !sessionToken && <div className="telegram-auth-status dash-auth-status" role="status"><span>{telegramAuthPending ? t('onlineConnecting') : t('telegramAuthFailed')}</span>{!telegramAuthPending && <button type="button" onClick={retryTelegramAuthentication}>{t('retryTelegramAuth')}</button>}</div>}
+      <DashboardWalletCard token={sessionToken} pending={telegramAuthPending} t={t} onOpen={() => nav('wallet')} />
+
+      <section className="promo-carousel" aria-label={t('tagline')} aria-roledescription="carousel" onMouseEnter={() => setBannerPaused(true)} onMouseLeave={() => setBannerPaused(false)} onFocusCapture={() => setBannerPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBannerPaused(false); }} onTouchStart={(event) => { const touch = event.touches[0]; promoTouchStart.current = { x: touch.clientX, y: touch.clientY }; }} onTouchEnd={(event) => { const start = promoTouchStart.current; const touch = event.changedTouches[0]; promoTouchStart.current = null; if (!start || !touch) return; const dx = touch.clientX - start.x; const dy = touch.clientY - start.y; if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.25) { setBanner((current) => (current + (dx < 0 ? 1 : promoSlides.length - 1)) % promoSlides.length); holdBanner(); } }} onTouchCancel={() => { promoTouchStart.current = null; }}>
+        <div className="promo-window">
+          <div className="promo-track" style={{ transform: `translateX(-${banner * 100}%)` }}>
+            {promoSlides.map((slide, index) => <div key={slide.id} className={`promo-slide ${banner === index ? 'is-active' : ''}`} role="group" aria-roledescription="slide" aria-label={`${index + 1} / ${promoSlides.length}`} aria-hidden={banner !== index}>
+              <img src={slide.image} alt={slide.alt} width={1500} height={600} loading={index === 0 ? 'eager' : 'lazy'} decoding="async" draggable={false}/>
+              <span className="promo-shade" aria-hidden="true"/>
+              <div className="promo-content">
+                <span className="promo-kicker">{slide.kicker}</span>
+                <h3 className="promo-title">{t(slide.titleKey)}</h3>
+                <p className="promo-copy">{t(slide.copyKey)}</p>
+                <button type="button" className="promo-cta" tabIndex={banner === index ? 0 : -1} onClick={() => runPromoAction(slide.action)}>{t(slide.ctaKey)}<Icon name="chevron" size={13}/></button>
+              </div>
+              <span className="promo-watermark" aria-hidden="true">DIRE BET ✦</span>
+            </div>)}
+          </div>
+        </div>
+        <div className="promo-dots" role="group" aria-label={t('chooseGame')}>{promoSlides.map((slide, index) => <button key={slide.id} type="button" aria-label={t('showBanner').replace('{number}', String(index + 1))} aria-pressed={banner === index} className={banner === index ? 'active' : ''} onClick={() => { setBanner(index); holdBanner(); }} />)}</div>
       </section>
 
-      <div className="section-head"><div><span className="eyebrow">{t('tagline')}</span><h2>{t('chooseGame')}</h2></div><button className="text-button" onClick={() => setOverlay('menu')}>{t('seeAll')}<Icon name="chevron" size={15}/></button></div>
-      <label className="search-box"><Icon name="search" size={18}/><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('searchGames')} aria-label={t('searchGames')}/><kbd>⌘ K</kbd></label>
+      <div className="section-head dash-section-head" id="choose-game"><div><span className="eyebrow">{t('tagline')}</span><h2>{t('chooseGame')}</h2></div><button className="text-button" onClick={() => setOverlay('menu')}>{t('seeAll')}<Icon name="chevron" size={15}/></button></div>
       <div className="category-row" role="tablist" aria-label={t('chooseGame')}>
         {(['all','board','cards','quick'] as Category[]).map((item) => <button key={item} role="tab" aria-selected={category === item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{t(({ all:'categoryAll', board:'categoryBoard', cards:'categoryCards', quick:'categoryQuick' } as const)[item])}</button>)}
       </div>

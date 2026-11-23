@@ -514,11 +514,12 @@ export class Matchmaker {
       const current = this.roomRow(row.id);
       if (!current || current.status === 'COMPLETED') return false;
       if (current.status !== 'SETTLING') return false;
-      this.state.storage.sql.exec(`UPDATE public_rooms SET status = 'COMPLETED', pool_tenths = ?, fee_tenths = 0,
+      const feeTenths = calculated.poolTenths - calculated.payoutTenths;
+      this.state.storage.sql.exec(`UPDATE public_rooms SET status = 'COMPLETED', pool_tenths = ?, fee_tenths = ?,
         payout_tenths = ?, winner = ?, settled_at = ? WHERE id = ? AND status = 'SETTLING'`,
-        calculated.poolTenths, calculated.payoutTenths, winner === 'draw' ? -1 : winner, Date.now(), row.id);
+        calculated.poolTenths, feeTenths, calculated.payoutTenths, winner === 'draw' ? -1 : winner, Date.now(), row.id);
       this.state.storage.sql.exec('UPDATE public_room_players SET reserved_units = 0 WHERE room_id = ?', row.id);
-      this.recordEvent(row.id, null, 'MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, payoutTenths: calculated.payoutTenths, walletKind: row.wallet_kind });
+      this.recordEvent(row.id, null, 'MATCH_SETTLED', { winner, poolTenths: calculated.poolTenths, payoutTenths: calculated.payoutTenths, feeTenths, walletKind: row.wallet_kind });
       return true;
     });
     if (!settled && this.roomRow(row.id)?.status !== 'COMPLETED') return reply({ error: 'Settlement is pending reconciliation.' }, 503);

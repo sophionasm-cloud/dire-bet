@@ -67,7 +67,9 @@ export function calculateSettlement(entryAmount: number, playerCount: number): S
   if (!Number.isSafeInteger(entryAmount) || entryAmount < 0) throw new Error('Entry amount must be a non-negative whole number.');
   if (!Number.isSafeInteger(playerCount) || playerCount < 2 || playerCount > 9) throw new Error('Player count must be between two and nine.');
   const poolTenths = entryAmount * playerCount * 10;
-  return { poolTenths, payoutTenths: poolTenths, perWinnerTenths: Math.floor(poolTenths / playerCount) };
+  const feeTenths = Math.floor(poolTenths * 0.10);
+  const payoutTenths = poolTenths - feeTenths;
+  return { poolTenths, payoutTenths, perWinnerTenths: Math.floor(payoutTenths / playerCount) };
 }
 
 export function validateMarketplaceSettings(input: unknown): MarketplaceSettings | null {

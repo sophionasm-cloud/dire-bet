@@ -9,6 +9,7 @@ import type { RoomConfig } from './marketplaceTypes';
 import { TraditionalLudoBoard, type LudoBoardColor } from './TraditionalLudoBoard';
 import { LudoDie, useLudoTurnClock } from './LudoDie';
 import { CheckersRoom, type CheckersSnapshot } from './CheckersRoom';
+import { MatchResultModal } from './MatchResultModal';
 
 export type { RoomConfig } from './marketplaceTypes';
 
@@ -107,6 +108,39 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   const result = snapshot ? resultCopy(snapshot.gameId, snapshot.game, snapshot.seat, snapshot.you, t, snapshot.terminal) : '';
   const statusText = snapshot?.status === 'waiting' ? t('waitingForPlayer') : snapshot?.status === 'active' ? (isMyTurn(snapshot) ? t('yourTurn') : t('opponent')) : '';
   const clockGame = snapshot?.gameId === 'ludo' ? snapshot.game as LudoState : null;
+  const outcome = useMemo(() => {
+    if (!snapshot) return null;
+    if (snapshot.terminal) {
+      if (snapshot.terminal.winner === 'draw') return { isWinner: false, isDraw: true };
+      return { isWinner: snapshot.terminal.winner === snapshot.seat, isDraw: false };
+    }
+    if (snapshot.gameId === 'xo') {
+      const winner = (snapshot.game as XOState).winner;
+      if (winner === 'draw') return { isWinner: false, isDraw: true };
+      if (winner) return { isWinner: winner === snapshot.you, isDraw: false };
+      return null;
+    }
+    if (snapshot.gameId === 'ludo') {
+      const winner = (snapshot.game as LudoState).winner;
+      if (winner !== null && winner !== undefined) return { isWinner: winner === snapshot.seat, isDraw: false };
+      return null;
+    }
+    if (snapshot.gameId === 'checkers') {
+      const winner = (snapshot.game as CheckersState).winner;
+      if (winner !== null && winner !== undefined) return { isWinner: winner === snapshot.seat, isDraw: false };
+      return null;
+    }
+    const pokerWinner = (snapshot.game as PokerPublic).winner;
+    if (pokerWinner === 'split') return { isWinner: false, isDraw: true };
+    if (pokerWinner !== null && pokerWinner !== undefined) return { isWinner: pokerWinner === snapshot.seat, isDraw: false };
+    return null;
+  }, [snapshot]);
+
+  const currentUserName = snapshot?.players[snapshot.seat]?.name || t('you');
+  const entryCredits = snapshot?.publicRoom?.entryCredits || room.publicRoom?.entryCredits || 0;
+  const payoutCredits = snapshot?.publicRoom?.payoutCredits || room.publicRoom?.payoutCredits || (entryCredits > 0 ? Math.round(entryCredits * 2 * 0.9) : 0);
+  const isMatchFinished = snapshot?.status === 'finished' && outcome !== null;
+
   const turnSeconds = useLudoTurnClock(
     clockGame ? `${clockGame.turn}-${clockGame.lastEvent}-${clockGame.lastMove?.player ?? ''}-${clockGame.lastMove?.token ?? ''}` : 'inactive',
     snapshot?.turnDeadline ?? null,
@@ -142,12 +176,22 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
         {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} crownTarget={state.crownTarget ?? 4} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>) }
         <div className="ludo-board-stage">
           {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
-          {snapshot.status === 'finished' && <div className="ludo-result-banner"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
+          
           {snapshot.status === 'cancelled' && <p className="online-error" role="alert">{t('onlineDisconnected')}</p>}
         </div>
       </div>
       {error && <p className="online-error" role="status">{error}</p>}
       {connection === 'disconnected' && <button className="secondary-button wide ludo-reconnect" onClick={() => void reconnect()}>{t('reconnect')}<span>↻</span></button>}
+          <MatchResultModal
+        isOpen={Boolean(isMatchFinished && outcome)}
+        isWinner={Boolean(outcome?.isWinner)}
+        isDraw={Boolean(outcome?.isDraw)}
+        playerName={currentUserName}
+        entryCredits={entryCredits}
+        payoutCredits={payoutCredits}
+        onExit={onExit}
+        t={t}
+      />
     </section>;
   }
   return <section className="screen online-room-screen">
@@ -162,11 +206,21 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       {snapshot.gameId === 'ludo' && <OnlineLudo game={snapshot.game as LudoState} seat={snapshot.seat} playerZeroColor={roomLudoColor(snapshot.publicRoom?.options.player0Color)} t={t} send={send} />}
       {snapshot.gameId === 'poker' && <OnlinePoker game={snapshot.game as PokerPublic} seat={snapshot.seat} t={t} send={send} />}
     </>}
-    {snapshot?.status === 'finished' && <div className="practice-result"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
+    
     {snapshot?.status === 'cancelled' && <p className="online-error">{t('onlineDisconnected')}</p>}
     {connection === 'disconnected' && <button className="secondary-button wide" onClick={() => void reconnect()}>{t('reconnect')}<span>↻</span></button>}
     {error && <p className="online-error" role="status">{error}</p>}
     {gameComplete && !result && <p className="online-error">{t('matchFinished')}</p>}
+    <MatchResultModal
+      isOpen={Boolean(isMatchFinished && outcome)}
+      isWinner={Boolean(outcome?.isWinner)}
+      isDraw={Boolean(outcome?.isDraw)}
+      playerName={currentUserName}
+      entryCredits={entryCredits}
+      payoutCredits={payoutCredits}
+      onExit={onExit}
+      t={t}
+    />
   </section>;
 }
 

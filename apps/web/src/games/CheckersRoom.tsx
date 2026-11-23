@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { applyCheckerMove, botCheckerMove, legalCheckerMoves, newCheckersGame, type CheckerPlayer, type CheckersState } from '@dire-bet/engines/checkers';
 import type { TranslationKey } from '../i18n';
+import { MatchResultModal } from './MatchResultModal';
 import type { RoomConfig } from './marketplaceTypes';
 
 export type CheckersTranslator = (key: TranslationKey) => string;
@@ -328,7 +329,16 @@ export function CheckersRoom({ snapshot, room, connection, error, t, send, onRec
         <CheckersBoard game={game} seat={seat} enabled={active} onMove={(from, to) => send({ type: 'move', from, to })} />
         {snapshot === null && <div className="checkers-waiting-card" role="status"><span>{t('onlineConnecting')}</span><strong>#{room.code}</strong></div>}
         {snapshot?.status === 'waiting' && <div className="checkers-waiting-card" role="status"><span>{t('waitingForPlayer')}</span><strong>#{snapshot.code}</strong><div><button type="button" onClick={onCopy}>{t('copyCode')}</button><button type="button" onClick={onShare}>{t('shareInvite')}</button></div><small>{t('freeRoomNotice')}</small></div>}
-        {status === 'finished' && result && <div className="checkers-result-banner"><strong>{result}</strong><span>{t('matchFinished')}</span></div>}
+        <MatchResultModal
+          isOpen={status === 'finished' && Boolean(terminal || game.winner !== null)}
+          isWinner={Boolean((terminal && terminal.winner === seat) || (!terminal && game.winner === seat))}
+          isDraw={Boolean(terminal?.winner === 'draw')}
+          playerName={snapshot?.players[seat]?.name || t('you')}
+          entryCredits={snapshot?.publicRoom?.entryCredits || 0}
+          payoutCredits={snapshot?.publicRoom?.payoutCredits || ((snapshot?.publicRoom?.entryCredits || 0) > 0 ? Math.round((snapshot?.publicRoom?.entryCredits || 0) * 2 * 0.9) : 0)}
+          onExit={onExit}
+          t={t}
+        />
       </div>
       <CheckersPlayerPanel player={bottomPlayer} seat={0} color="ivory" own={seat === 0} active={active && game.turn === 0} pieces={ivory.pieces} kings={ivory.kings} seconds={turnSeconds} t={t} />
       <CheckersActionBar t={t} sound={sound} onSound={toggleSound} drawOfferBy={drawOfferBy} seat={seat} active={active} onOfferDraw={() => send({ type: 'draw-offer' })} onAcceptDraw={() => send({ type: 'draw-accept' })} onDeclineDraw={() => send({ type: 'draw-decline' })} onResign={() => { if (window.confirm(t('checkersResignConfirm'))) send({ type: 'resign' }); }} />

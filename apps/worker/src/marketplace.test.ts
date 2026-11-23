@@ -46,7 +46,8 @@ describe('public room entry rules', () => {
   });
 
   it('calculates real money in ETB tenths and santim conversion units', () => {
-    expect(calculateSettlement(50, 2)).toEqual({ poolTenths: 1000, payoutTenths: 1000, perWinnerTenths: 500 });
+    expect(calculateSettlement(50, 2)).toEqual({ poolTenths: 1000, payoutTenths: 900, perWinnerTenths: 450 });
+    expect(calculateSettlement(100, 2)).toEqual({ poolTenths: 2000, payoutTenths: 1800, perWinnerTenths: 900 });
   });
 
   it('ignores historical commission settings', () => {
