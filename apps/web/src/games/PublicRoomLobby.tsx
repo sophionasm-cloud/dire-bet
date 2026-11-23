@@ -107,14 +107,38 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
               setActiveRoom((current) => !current || current.id === snapshot.ownRoom?.id ? snapshot.ownRoom : current);
             }
           } else {
-            setActiveRoom(null);
+            setActiveRoom((current) => {
+              if (current && ['WAITING', 'FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING'].includes(current.status)) {
+                return current;
+              }
+              return null;
+            });
           }
           setConnection('connected');
         } catch { setConnection('offline'); }
       };
       socket.onclose = () => { if (live) setConnection('offline'); };
       socket.onerror = () => { if (live) setConnection('offline'); };
-      poll = window.setInterval(() => void loadRooms(), 5000);
+      const pollMarket = async () => {
+        void loadRooms();
+        if (token) {
+          try {
+            const res = await fetch(`/api/public-rooms/mine?gameId=${gameId}`, { headers });
+            if (res.ok) {
+              const data = await res.json() as { room?: MarketplaceRoom | null };
+              const mine = data.room;
+              if (mine && !cancelledRooms.current.has(mine.id)) {
+                if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(mine.status)) {
+                  setActiveRoom(null);
+                } else {
+                  setActiveRoom((current) => !current || current.id === mine.id ? mine : current);
+                }
+              }
+            }
+          } catch {}
+        }
+      };
+      poll = window.setInterval(() => void pollMarket(), 3000);
     };
     void load();
     return () => { live = false; if (poll) window.clearInterval(poll); socket?.close(1000, 'Leaving public room list'); };
@@ -154,7 +178,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       })
       .catch((cause) => { launching.current = ''; if (live) setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); });
     return () => { live = false; };
-  }, [activeRoom, headers, onRoom, t, token]);
+  }, [activeRoom, gameId, headers, onRoom, t, token]);
 
   const create = async () => {
     if (creating.current) return;
@@ -193,6 +217,23 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
       roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
+
+      if (result.ticket && result.code && result.gameId) {
+        launching.current = result.room.id;
+        onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId, publicRoom: result.room });
+        return;
+      }
+      if (['IN_PROGRESS', 'STARTING', 'SETTLING'].includes(result.room.status)) {
+        try {
+          const sessionRes = await fetch(`/api/public-rooms/${result.room.code}/session`, { headers });
+          const sessionResult = await sessionRes.json() as ResponseBody;
+          if (sessionRes.ok && sessionResult.ticket && sessionResult.code && sessionResult.gameId) {
+            launching.current = result.room.id;
+            onRoom({ code: sessionResult.code, ticket: sessionResult.ticket, gameId: sessionResult.gameId, publicRoom: sessionResult.room || result.room });
+            return;
+          }
+        } catch { /* will fallback to useEffect */ }
+      }
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
     finally { setBusy(false); }
   };

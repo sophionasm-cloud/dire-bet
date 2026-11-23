@@ -364,7 +364,14 @@ async function handlePublicMarketplace(request: Request, env: Env): Promise<Resp
       if (!(await allowRoomAction(env, userId, 'public-join'))) return json({ error: 'Too many room attempts. Try again shortly.' }, 429);
       const displayName = await gameDisplayName(env, userId);
       if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
-      return publicMarketplace(env).fetch(`https://market/join/${code}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId, displayName }) });
+      const joinResponse = await publicMarketplace(env).fetch(`https://market/join/${code}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId, displayName }) });
+            if (!joinResponse.ok) return joinResponse;
+            const joinData = await joinResponse.json() as { room?: { id: string; code: string; gameId: GameId; status: string }; balance?: number; balanceSantim?: number };
+            if (joinData?.room && ['IN_PROGRESS', 'SETTLING', 'STARTING'].includes(joinData.room.status)) {
+              const ticket = await issueRoomTicket(userId, displayName, code, env.SESSION_SECRET || '');
+              return json({ ...joinData, ticket, code, gameId: joinData.room.gameId }, 201);
+            }
+            return json(joinData, 201);
     }
     if (action === 'cancel' && request.method === 'POST') {
       const userId = await readSession(request, env.SESSION_SECRET);
