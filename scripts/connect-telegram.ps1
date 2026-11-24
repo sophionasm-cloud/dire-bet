@@ -76,8 +76,18 @@ try {
 
   $setupKey = New-SecretValue
   Set-WranglerSecretFromInput -Name 'SETUP_KEY' -Value $setupKey
-  $response = Invoke-RestMethod -Method Post -Uri "$workerOrigin/telegram/setup" `
-    -Headers @{ Authorization = "Bearer $setupKey" } -ContentType 'application/json' -Body '{}'
+  $response = $null
+  for ($attempt = 0; $attempt -lt 6; $attempt++) {
+    try {
+      $response = Invoke-RestMethod -Method Post -Uri "$workerOrigin/telegram/setup" `
+        -Headers @{ Authorization = "Bearer $setupKey" } -ContentType 'application/json' -Body '{}'
+      break
+    } catch {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+      if ($statusCode -ne 401 -or $attempt -eq 5) { throw }
+      Start-Sleep -Seconds 5
+    }
+  }
   if (-not $response.ok) { throw 'The Telegram setup endpoint did not return success.' }
   Write-Host 'Telegram bot connection is current. Its /start button and menu open DIRE BET.'
 } catch {
