@@ -63,14 +63,17 @@ function posterSrc(id: string): string {
 }
 
 function App() {
-  const requestedPage = new URLSearchParams(location.search).get('page');
+  const requestedParams = new URLSearchParams(location.search);
+  const requestedPage = requestedParams.get('page');
+  const initialPage: Page = requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu' ? requestedPage : 'home';
   const telegramInitData = window.Telegram?.WebApp?.initData || '';
   const telegramMiniApp = Boolean(telegramInitData);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = localStorage.getItem('direbet.language') as Language | null;
     return saved && ['en','am','so','om'].includes(saved) ? saved : 'am';
   });
-  const [page, setPage] = useState<Page>(() => !telegramMiniApp && (requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu') ? requestedPage : 'home');
+  const [page, setPage] = useState<Page>(() => initialPage);
+  const [walletInitialView, setWalletInitialView] = useState<'deposit' | undefined>(() => requestedParams.get('view') === 'deposit' ? 'deposit' : undefined);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [onboarding, setOnboarding] = useState(() => !telegramMiniApp && !localStorage.getItem('direbet.onboarded') && requestedPage !== 'account' && requestedPage !== 'login');
   const [onboardingStep, setOnboardingStep] = useState(0);
@@ -169,14 +172,15 @@ function App() {
         setSessionToken(data.token);
         setDisplayName(data.user.displayName || 'Player');
         setTelegramAuthError(false);
-        setPage('home');
+        setPage((current) => current === 'home' ? initialPage : current);
         const search = new URLSearchParams(location.search);
         search.delete('page');
+        search.delete('view');
         history.replaceState(null, '', `${location.pathname}${search.toString() ? `?${search}` : ''}${location.hash}`);
       })
       .catch(() => { if (live) { setDisplayName('Guest'); setTelegramAuthError(true); } });
     return () => { live = false; };
-  }, [telegramInitData, telegramAuthAttempt, sessionToken]);
+  }, [telegramInitData, telegramAuthAttempt, sessionToken, initialPage]);
 
   useEffect(() => {
     if (!sessionToken) { setAccount(null); return; }
@@ -531,7 +535,7 @@ function App() {
     {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={exitOnlineRoom} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
-    {page === 'wallet' && <WalletApp t={t} token={sessionToken} onSupport={() => setOverlay('support')} />}
+    {page === 'wallet' && <WalletApp t={t} token={sessionToken} initialView={walletInitialView} onInitialViewConsumed={() => setWalletInitialView(undefined)} onSupport={() => setOverlay('support')} />}
     {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}
     {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
     {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}

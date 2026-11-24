@@ -9,7 +9,8 @@
     "BOT_USERNAME": "Dire_Bet_bot",
     "REAL_MONEY_ENABLED": "false",
     "DEMO_MODE": "false",
-    "SIMULATED_WALLET_ENABLED": "true"
+    "SIMULATED_WALLET_ENABLED": "true",
+    "TELEGRAM_CHANNEL_URL": ""
   },
   "assets": {
     "directory": "./apps/web/dist",

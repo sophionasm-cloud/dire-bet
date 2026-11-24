@@ -24,6 +24,7 @@ interface Env {
   SIMULATED_WALLET_ENABLED: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  TELEGRAM_CHANNEL_URL?: string;
   SESSION_SECRET?: string;
   SETUP_KEY?: string;
   SUPER_ADMIN_TELEGRAM_ID?: string;
@@ -545,24 +546,247 @@ async function telegramApi<T>(token: string, method: string, body: unknown): Pro
   return result.result as T;
 }
 
-const welcome: Record<string, string> = {
-  en: 'Welcome to DIRE BET. Play free practice games with friends.',
-  am: 'ወደ DIRE BET እንኳን በደህና መጡ። ከጓደኞችዎ ጋር በነፃ ይጫወቱ።',
-  so: 'Ku soo dhowow DIRE BET. Saaxiibbadaa kula ciyaar bilaash.',
-  om: 'Baga DIRE BET dhuftan. Hiriyoota waliin bilisaan taphadhaa.',
+type BotLanguage = 'en' | 'am' | 'so' | 'om';
+
+const botLanguages = new Set<string>(['en', 'am', 'so', 'om']);
+
+function botLanguage(code?: string): BotLanguage {
+  return code && botLanguages.has(code) ? code as BotLanguage : 'am';
+}
+
+const welcome: Record<BotLanguage, string> = {
+  en: `🎮 <b>DIRE BET</b>
+<i>Play together. Win together.</i>
+
+<b>XO · Ludo · Checkers · Texas Hold'em</b>
+
+✅ Free practice against the bot
+👥 Private rooms with friends
+💰 Simple wallet for your balance
+
+Play your favorite game in seconds.`,
+  am: `🎮 <b>DIRE BET</b>
+<i>አብረን እንጫወት። አብረን እናሸንፍ።</i>
+
+<b>XO · ሉዶ · ቼከርስ · ቴክሳስ ሆልድኤም</b>
+
+✅ ከቦት ጋር በነፃ ልምምድ
+👥 ከጓደኞች ጋር የግል ክፍሎች
+💰 ለቀሪ ሂሳብዎ ቀላል ዋሌት
+
+የሚወዱትን ጨዋታ በሰከንዶች ይጀምሩ።`,
+  so: `🎮 <b>DIRE BET</b>
+<i>Wada ciyaar. Wada guulayso.</i>
+
+<b>XO · Ludo · Checkers · Texas Hold'em</b>
+
+✅ Tababar bilaash ah oo ka dhan ah bot
+👥 Qolal gaar ah oo saaxiibbo la wadaago
+💰 Jeeb fudud oo loogu talagalay hadhaagaaga
+
+Ciyaarta aad jeceshahay ku bilow ilbiriqsiyo gudahood.`,
+  om: `🎮 <b>DIRE BET</b>
+<i>Waliin taphadhu. Waliin mo'adhu.</i>
+
+<b>XO · Ludo · Checkers · Texas Hold'em</b>
+
+✅ Bot waliin shaakala bilisaa
+👥 Hiriyoota waliin kutaa dhuunfaa
+💰 Haftee keetiif wallet salphaa
+
+Tapha jaallattu sekondoota keessatti jalqabi.`,
 };
-const welcomeBack: Record<string, string> = {
-  en: 'Welcome back to DIRE BET. Your account is ready.',
-  am: 'ወደ DIRE BET እንደገና እንኳን በደህና መጡ። መለያዎ ዝግጁ ነው።',
-  so: 'Ku soo dhawow DIRE BET. Akoonkaaga waa diyaar.',
-  om: 'Baga gara DIRE BET deebitan. Herregni kee qophaa’eera.',
+const welcomeBack: Record<BotLanguage, string> = {
+  en: `👋 <b>Welcome back to DIRE BET</b>
+<i>Play together. Win together.</i>
+
+Ready for another round? Choose a game below.`,
+  am: `👋 <b>ወደ DIRE BET እንደገና እንኳን በደህና መጡ</b>
+<i>አብረን እንጫወት። አብረን እናሸንፍ።</i>
+
+ለሌላ ዙር ዝግጁ ነዎት? ከታች ጨዋታ ይምረጡ።`,
+  so: `👋 <b>Ku soo dhawow DIRE BET</b>
+<i>Wada ciyaar. Wada guulayso.</i>
+
+Diyaar u tahay wareeg kale? Ciyaar hoos ka dooro.`,
+  om: `👋 <b>Baga gara DIRE BET deebitan</b>
+<i>Waliin taphadhu. Waliin mo'adhu.</i>
+
+Yaada biraaaf qophii? Tapha gadii irraa filadhu.`,
 };
-const menuPrompt: Record<string, string> = {
-  en: 'Use the menu below to play or open your wallet.',
-  am: 'ከታች ያለውን ምናሌ ተጠቅመው ይጫወቱ ወይም ዋሌትዎን ይክፈቱ።',
-  so: 'Isticmaal menu-ga hoose si aad u ciyaarto ama u furto jeebkaaga.',
-  om: 'Menuu gadii fayyadamuun taphadhu yookaan wallet kee bani.',
+const menuPrompt: Record<BotLanguage, string> = {
+  en: 'Use the menu below to play, open your wallet, or add funds.',
+  am: 'ከታች ያለውን ምናሌ ተጠቅመው ይጫወቱ፣ ዋሌትዎን ይክፈቱ ወይም ገንዘብ ያስገቡ።',
+  so: 'Isticmaal menu-ga hoose si aad u ciyaarto, u furto jeebkaaga, ama lacag u dhigato.',
+  om: 'Menuu gadii fayyadamuun taphadhu, wallet kee bani, yookaan maallaqa galchi.',
 };
+const registrationText: Record<BotLanguage, string> = {
+  en: `📱 <b>One quick step</b>
+Share your contact to create your player account. Your number is used only to link your account.
+
+Optional web login: choose a username and 8-digit PIN after sharing.`,
+  am: `📱 <b>አንድ ፈጣን እርምጃ</b>
+የተጫዋች መለያዎን ለመፍጠር እውቂያዎን ያጋሩ። ቁጥርዎ መለያዎን ለማገናኘት ብቻ ይጠቀማል።
+
+አማራጭ የድር መግቢያ፦ ካጋሩ በኋላ የተጠቃሚ ስምና 8 አሃዝ PIN ይምረጡ።`,
+  so: `📱 <b>Tallaabo degdeg ah</b>
+La wadaag xiriirkaaga si aad u abuurto akoonkaaga ciyaartoyga. Lambarkaaga waxaa loo isticmaalaa oo keliya in lagu xidho akoonkaaga.
+
+Gelitaan web ikhtiyaari: ka dib markaad wadaagto, dooro magac isticmaale iyo PIN 8-god ah.`,
+  om: `📱 <b>Tarkaanfii saffisaa</b>
+Herrega taphataa uumuuuf quunnamtii kee qoodi. Lakkoofsi kee herrega kee walitti hidhuuf qofa fayyadama.
+
+Seensa weebii filannoo: erga qoodde booda maqaa fayyadamaa fi PIN lakkoofsa 8 filadhu.`,
+};
+const botText: Record<string, Record<BotLanguage, string>> = {
+  play: {
+    en: `🎮 <b>Ready to play?</b>\nChoose a game, warm up against the bot, or open a private room with friends.`,
+    am: `🎮 <b>ለመጫወት ዝግጁ ነዎት?</b>\nጨዋታ ይምረጡ፣ ከቦት ጋር ይለማመዱ ወይም ከጓደኞች ጋር የግል ክፍል ይክፈቱ።`,
+    so: `🎮 <b>Diyaar ma u tahay inaad ciyaarto?</b>\nDooro ciyaar, la tababar bot, ama qol gaar ah u fur saaxiibbadaa.`,
+    om: `🎮 <b>Taphachuuf qophii dhaa?</b>\nTapha filadhu, bot waliin shaakali, yookaan hiriyoota waliin kutaa dhuunfaa bani.`,
+  },
+  games: {
+    en: `🎮 <b>Games on DIRE BET</b>\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nPlay free practice against the bot or open a private room with friends.`,
+    am: `🎮 <b>በ DIRE BET ያሉ ጨዋታዎች</b>\n\n🎯 XO\n🎲 ሉዶ\n♟️ ቼከርስ\n🃏 ቴክሳስ ሆልድኤም\n\nከቦት ጋር በነፃ ይለማመዱ ወይም ከጓደኞች ጋር የግል ክፍል ይክፈቱ።`,
+    so: `🎮 <b>Ciyaaraha DIRE BET</b>\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nTababar bilaash ah la ciyaar bot ama qol gaar ah u fur saaxiibbadaa.`,
+    om: `🎮 <b>Taphoota DIRE BET</b>\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nBot waliin shaakala bilisaa taphadhu yookaan hiriyoota waliin kutaa dhuunfaa bani.`,
+  },
+  wallet: {
+    en: `💰 <b>Your wallet</b>\nView your balance and follow deposit or withdrawal requests in one place.\n\n<i>Free-play balance only. Live cash payments are disabled.</i>`,
+    am: `💰 <b>ዋሌትዎ</b>\nቀሪ ሂሳብዎን ይመልከቱ እና የተቀማጭ ወይም የማውጣት ጥያቄዎችን በአንድ ቦታ ይከታተሉ።\n\n<i>ለነፃ ጨዋታ ቀሪ ብቻ። ቀጥታ የገንዘብ ክፍያዎች ተዘግተዋል።</i>`,
+    so: `💰 <b>Jeebkaaga</b>\nEeg hadhaagaaga oo la soco codsiyada dhigashada ama bixitaanka meel qudha.\n\n<i>Hadhaaga ciyaar bilaash oo keliya. Lacag-bixin toos ah waa xiran tahay.</i>`,
+    om: `💰 <b>Wallet kee</b>\nHaftee kee ilaali, gaaffii kuusaa yookaan baasii iddoo tokkotti hordofi.\n\n<i>Haftee taphannaa bilisaa qofa. Kaffaltiin maallaqaa kallattii cufaa jira.</i>`,
+  },
+  deposit: {
+    en: `💳 <b>Add funds</b>\nSubmit your Telebirr or eBirr payment SMS and our team will verify it before credit.\n\n<i>Free-play mode: do not send real money.</i>`,
+    am: `💳 <b>ገንዘብ ማስገባት</b>\nየ Telebirr ወይም eBirr የክፍያ SMS ያስገቡ፤ ቡድናችን ከማስተላለፉ በፊት ያረጋግጣል።\n\n<i>የነፃ ጨዋታ ሁነታ፦ እውነተኛ ገንዘብ አይላኩ።</i>`,
+    so: `💳 <b>Lacag dhigasho</b>\nGeli SMS-ka lacag-bixinta Telebirr ama eBirr, kooxdayaduna way hubin doontaa ka hor inta aan la xisaabin.\n\n<i>Habka ciyaar bilaash: ha dirin lacag dhab ah.</i>`,
+    om: `💳 <b>Maallaqa galchi</b>\nSMS kaffaltii Telebirr yookaan eBirr galchi; gareen keenya dura galmee mirkaneessa.\n\n<i>Haala taphannaa bilisaa: maallaqa dhugaa hin ergin.</i>`,
+  },
+  channel: {
+    en: `📢 <b>DIRE BET official channel</b>\nNews, promotions and new game announcements.`,
+    am: `📢 <b>የ DIRE BET ኦፊሴላዊ ቻናል</b>\nዜናዎች፣ ማስተዋወቂያዎች እና አዲስ የጨዋታ ማስታወቂያዎች።`,
+    so: `📢 <b>Kanaalka rasmiga ah ee DIRE BET</b>\nWarar, xayaysiisyo iyo ogeysiisyo ciyaar cusub.`,
+    om: `📢 <b>Chaanaalii mootummaa DIRE BET</b>\nOduu, beeksisa fi beeksisa taphoota haaraa.`,
+  },
+  channelMissing: {
+    en: `📢 <b>DIRE BET official channel</b>\nOur channel is being prepared. Please check back soon.`,
+    am: `📢 <b>የ DIRE BET ኦፊሴላዊ ቻናል</b>\nቻናላችን በዝግጅት ላይ ነው። እባክዎ በቅርቡ ይመልከቱ።`,
+    so: `📢 <b>Kanaalka rasmiga ah ee DIRE BET</b>\nKanaalkayaga waa la diyaarinayaa. Fadlan dib u soo eeg dhawaan.`,
+    om: `📢 <b>Chaanaalii mootummaa DIRE BET</b>\nChaanaalli keenya qophaa'aa jira. Maaloo dhiyootti deebi'ii ilaali.`,
+  },
+  account: {
+    en: `🔐 <b>Web login</b>\nShare your contact with the bot, then set an optional username and 8-digit PIN to sign in from a browser.`,
+    am: `🔐 <b>የድር መግቢያ</b>\nእውቂያዎን ከቦት ጋር ያጋሩ፣ ከዚያ ከአሳሽ ለመግባት አማራጭ የተጠቃሚ ስምና 8 አሃዝ PIN ያዘጋጁ።`,
+    so: `🔐 <b>Gelitaanka webka</b>\nLa wadaag bot-ka xiriirkaaga, kadib samee magac isticmaale iyo PIN 8-god ah oo ikhtiyaari ah si aad browserka uga soo gasho.`,
+    om: `🔐 <b>Seensa weebii</b>\nQuunnamtii kee bot waliin qoodi, achiis maqaa fayyadamaa fi PIN lakkoofsa 8 filannoo ta'een browser irraa seenuuf qopheessi.`,
+  },
+  profile: {
+    en: 'Your profile is inside DIRE BET. Open the app and tap your avatar to view your account.',
+    am: 'መገለጫዎ በ DIRE BET ውስጥ ነው። መተግበሪያውን ከፍተው መለያዎን ለማየት ባለቀለሙን ምስልዎን ይንኩ።',
+    so: 'Astaantaada waxay ku taal DIRE BET gudaheed. Fur app-ka oo taabo sawirkaaga si aad u aragto akoonkaaga.',
+    om: 'Profaayiliin kee DIRE BET keessatti jira. Appii baniitii suuraa kee tuqiitii herrega kee ilaali.',
+  },
+  help: {
+    en: `❓ <b>Need help?</b>\nTap Play to enjoy free practice and private rooms. For wallet or account help, open DIRE BET and tap Support.`,
+    am: `❓ <b>እርዳታ ይፈልጋሉ?</b>\nበነፃ ልምምድና የግል ክፍሎች ለመደሰት መጫወትን ይንኩ። ለዋሌት ወይም ለመለያ እርዳታ DIRE BET ን ከፍተው ድጋፍን ይንኩ።`,
+    so: `❓ <b>Caawimaad ma u baahan tahay?</b>\nTaabo Ciyaar si aad u hesho tababar bilaash ah iyo qolal gaar ah. Caawimaad jeeb ama akoon, fur DIRE BET oo taabo Taageero.`,
+    om: `❓ <b>Gargaarsa barbaaddaa?</b>\nShaakala bilisaa fi kutaa dhuunfaa argachuuf Taphadhu tuqi. Gargaarsa wallet yookaan herregaaf, DIRE BET baniitii Deeggarsa tuqi.`,
+  },
+  contactRequired: {
+    en: 'To register, use the Share contact button in this chat and share your own number.',
+    am: 'ለመመዝገብ በዚህ ውይይት ያለውን እውቂያ አጋራ ቁልፍ ተጠቅመው የራስዎን ቁጥር ያጋሩ።',
+    so: 'Si aad isu diiwaangeliso, taabo La wadaag xiriirka oo la wadaag lambarkaaga.',
+    om: 'Galmaa’uuf, Quunnamtii qoodi jedhu tuqiitii lakkoofsa bilbilaa kee qoodi.',
+  },
+  contactLinked: {
+    en: `✅ <b>Contact linked</b>\nYour player account is ready. Set an optional username and 8-digit PIN for web login, or open DIRE BET and start playing.`,
+    am: `✅ <b>እውቂያ ተገናኝቷል</b>\nየተጫዋች መለያዎ ዝግጁ ነው። አማራጭ የተጠቃሚ ስምና 8 አሃዝ PIN ለድር መግቢያ ያዘጋጁ፣ ወይም DIRE BET ን ከፍተው ይጫወቱ።`,
+    so: `✅ <b>Xiriirka waa la xidhay</b>\nAkoonkaaga ciyaartoyga waa diyaar. Samee magac isticmaale iyo PIN 8-god ah oo ikhtiyaari ah gelitaanka web, ama fur DIRE BET oo bilow ciyaar.`,
+    om: `✅ <b>Quunnamtiin walitti hidhame</b>\nHerregni taphataa kee qophaa'eera. Maqaa fayyadamaa fi PIN lakkoofsa 8 filannoo ta'een seensa weebiif qopheessi, yookaan DIRE BET baniitii taphadhu.`,
+  },
+  promo: {
+    en: `<b>DIRE BET</b> — Play together. Win together.\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nFree practice, private rooms and a simple wallet. Bring a friend and start a game.\n\n👉 Tap Play Now to open DIRE BET.`,
+    am: `<b>DIRE BET</b> — አብረን እንጫወት። አብረን እናሸንፍ።\n\n🎯 XO\n🎲 ሉዶ\n♟️ ቼከርስ\n🃏 ቴክሳስ ሆልድኤም\n\nበነፃ ልምምድ፣ የግል ክፍሎች እና ቀላል ዋሌት። ጓደኛዎን ይዘው ጨዋታ ይጀምሩ።\n\n👉 DIRE BET ን ለመክፈት Play Now ን ይንኩ።`,
+    so: `<b>DIRE BET</b> — Wada ciyaar. Wada guulayso.\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nTababar bilaash, qolal gaar ah iyo jeeb fudud. Saaxiib keen oo ciyaar bilow.\n\n👉 Taabo Play Now si aad u furto DIRE BET.`,
+    om: `<b>DIRE BET</b> — Waliin taphadhu. Waliin mo'adhu.\n\n🎯 XO\n🎲 Ludo\n♟️ Checkers\n🃏 Texas Hold'em\n\nShaakala bilisaa, kutaa dhuunfaa fi wallet salphaa. Hiriyyaa fidiitii tapha jalqabi.\n\n👉 DIRE BET banuuf Play Now tuqi.`,
+  },
+  ownerOnly: {
+    en: 'This command is available only to the DIRE BET owner.',
+    am: 'ይህ ትዕዛዝ ለ DIRE BET ባለቤት ብቻ ነው።',
+    so: 'Amarkan waxaa loo heli karaa oo keliya milkiilaha DIRE BET.',
+    om: 'Ajajni kun abbootii DIRE BET qofaaf jira.',
+  },
+  roomReady: {
+    en: `Room <code>{code}</code> is ready. Tap Play to join your friends.`,
+    am: `ክፍል <code>{code}</code> ዝግጁ ነው። ጓደኞችዎን ለመቀላቀል መጫወትን ይንኩ።`,
+    so: `Qolka <code>{code}</code> waa diyaar. Taabo Ciyaar si aad ugu biirto saaxiibbadaa.`,
+    om: `Kutaan <code>{code}</code> qophaa'eera. Hiriyoota kee walitti makamuuf Taphadhu tuqi.`,
+  },
+  promoLinked: {
+    en: `Promo code <code>{code}</code> is linked to your account.`,
+    am: `የማስተዋወቂያ ኮድ <code>{code}</code> ከመለያዎ ጋር ተገናኝቷል።`,
+    so: `Koodhka xayaysiiska <code>{code}</code> waa lagu xidhay akoonkaaga.`,
+    om: `Koodii beeksisaa <code>{code}</code> herrega kee waliin hidhameera.`,
+  },
+  fallback: {
+    en: 'Choose an option below or use /help to see what the bot can do.',
+    am: 'ከታች አንድ አማራጭ ይምረጡ ወይም ቦቱ ምን ማድረግ እንደሚችል ለማየት /help ይጠቀሙ።',
+    so: 'Dooro ikhtiyaar hoose ama isticmaal /help si aad u aragto waxa bot-ku qaban karo.',
+    om: `Filannoo gadii filadhu yookaan /help fayyadamuun waan botni hojjechuu danda'u ilaali.`,
+  },
+};
+
+const botMenuLabels: Record<BotLanguage, { play: string; wallet: string; deposit: string; channel: string; contact: string }> = {
+  en: { play: '🎮 Play', wallet: '💰 Wallet', deposit: '💳 Deposit', channel: '📢 Channel', contact: '📱 Share contact' },
+  am: { play: '🎮 መጫወት', wallet: '💰 ዋሌት', deposit: '💳 ማስገባት', channel: '📢 ቻናል', contact: '📱 እውቂያ አጋራ' },
+  so: { play: '🎮 Ciyaar', wallet: '💰 Jeebka', deposit: '💳 Dhigasho', channel: '📢 Kanaalka', contact: '📱 Xiriir qood' },
+  om: { play: '🎮 Taphadhu', wallet: '💰 Wallet', deposit: '💳 Galchi', channel: '📢 Chaanaalii', contact: '📱 Quunnamtii qoodi' },
+};
+
+const botButtons: Record<BotLanguage, { play: string; wallet: string; deposit: string; login: string; channel: string }> = {
+  en: { play: '🎮 Play now', wallet: '💰 Open wallet', deposit: '💳 Open deposit', login: '🔐 Set up web login', channel: '📢 Open channel' },
+  am: { play: '🎮 አሁን ተጫወት', wallet: '💰 ዋሌት ክፈት', deposit: '💳 ማስገቢያ ክፈት', login: '🔐 የድር መግቢያ አዘጋጅ', channel: '📢 ቻናሉን ክፈት' },
+  so: { play: '🎮 Hadda ciyaar', wallet: '💰 Fur jeebka', deposit: '💳 Fur dhigashada', login: '🔐 Samee gelitaan web', channel: '📢 Fur kanaalka' },
+  om: { play: '🎮 Amma taphadhu', wallet: '💰 Wallet bani', deposit: '💳 Galchaa bani', login: '🔐 Seensa weebii qopheessi', channel: '📢 Chaanaalii bani' },
+};
+
+const botProfileDescription = `DIRE BET — Play together. Win together.
+
+Enjoy XO, Ludo, Checkers and Texas Hold'em with friends. Free practice, private rooms and a simple wallet for your balance.
+
+Free-play balance only; live cash payments are disabled.`;
+const botProfileShortDescription = `Play XO, Ludo, Checkers and Texas Hold'em with friends. Free practice, private rooms and a simple wallet.`;
+
+function telegramChannelUrl(value?: string): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  if (/^@[A-Za-z0-9_]{4,}$/.test(raw)) return `https://t.me/${raw.slice(1)}`;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:') return null;
+    if (url.hostname !== 't.me' && url.hostname !== 'telegram.me') return null;
+    return url.toString();
+  } catch { return null; }
+}
+
+function botMenuKeyboard(base: string, lang: BotLanguage, hasContact: boolean, playUrl = base) {
+  const labels = botMenuLabels[lang];
+  return {
+    keyboard: [
+      [{ text: labels.play, web_app: { url: playUrl } }],
+      [
+        { text: labels.wallet, web_app: { url: `${base}/?page=wallet` } },
+        { text: labels.deposit, web_app: { url: `${base}/?page=wallet&view=deposit` } },
+      ],
+      [{ text: labels.channel }],
+      ...(hasContact ? [] : [[{ text: labels.contact, request_contact: true }]]),
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: 'Choose an option',
+  };
+}
 
 async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) return json({ error: 'Bot is not configured' }, 503);
@@ -601,87 +825,132 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
       ]);
     }
   }
-  const lang = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'am';
+  const lang = botLanguage(message.from?.language_code);
   const telegramId = Number.isSafeInteger(message.from?.id) && (message.from?.id || 0) > 0 ? message.from!.id! : null;
   const account = telegramId ? await env.DB.prepare(`SELECT u.id,
       EXISTS(SELECT 1 FROM user_contacts c WHERE c.user_id = u.id) AS phone_shared
     FROM users u WHERE u.telegram_id = ?`).bind(telegramId).first<{ id: number; phone_shared: number }>() : null;
   const hasContact = account?.phone_shared === 1;
   const base = new URL(request.url).origin;
+  const chatId = message.chat!.id;
   const isOwner = Boolean(env.SUPER_ADMIN_TELEGRAM_ID && message.from && String(message.from.id) === env.SUPER_ADMIN_TELEGRAM_ID);
-  const gameList: Record<string, string> = {
-    en: 'Free practice vs a bot: XO, Ludo, Checkers and Texas Hold’em. Create a private online room for any of the four games.',
-    am: 'በነፃ ከቦት ጋር ይለማመዱ፦ XO፣ Ludo፣ Checkers እና Texas Hold’em። ከአራቱ ጨዋታዎች ለማንኛውም የግል ኦንላይን ክፍል ይፍጠሩ።',
-    so: 'Tababar bilaash ah la ciyaar bot: XO, Ludo, Checkers iyo Texas Hold’em. U samee qol gaar ah mid kasta oo ka mid ah afarta ciyaarood.',
-    om: 'Shaakala bilisaa bot waliin: XO, Ludo, Checkers fi Texas Hold’em. Tapha afran keessaa kamiyyuu irratti kutaa dhuunfaa uumi.',
-  };
-  const responses: Record<string, string> = {
-    '/start': hasContact ? welcomeBack[lang] : welcome[lang],
-    '/play': hasContact ? welcomeBack[lang] : welcome[lang],
-    '/games': gameList[lang],
-    '/profile': 'Open DIRE BET to view your player profile.',
-    '/account': hasContact
-      ? 'Open Account in DIRE BET to update your optional web username and 8-digit PIN.'
-      : 'Share your contact with this bot, then open Account in DIRE BET to set an optional web username and 8-digit PIN.',
-    '/wallet': 'Wallet payments are locked until required approvals are recorded. Do not send funds.',
-    '/leaderboard': 'The public leaderboard is not available yet.',
-    '/help': 'DIRE BET free play is available. Wallet payments remain locked pending required approvals. Use /support for help.',
-    '/support': 'Support tickets are not available yet. Please check back later.',
-    '/stop': 'Promotional messages are not sent in this preview.',
-  };
+  const channelUrl = telegramChannelUrl(env.TELEGRAM_CHANNEL_URL);
+  const channelLabels = new Set(Object.values(botMenuLabels).map((labels) => labels.channel));
+  const send = (text: string, reply_markup?: unknown) => telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN!, 'sendMessage', {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    ...(reply_markup ? { reply_markup } : {}),
+  });
+  const webAppButton = (label: string, path: string) => ({
+    inline_keyboard: [[{ text: label, web_app: { url: `${base}${path}` } }]],
+  });
+  const menu = (playUrl = base) => botMenuKeyboard(base, lang, hasContact, playUrl);
+  const ownerButton = isOwner ? [{ text: 'Owner dashboard', web_app: { url: `${base}/admin` } }] : [];
+
+  if (command === '/channel' || channelLabels.has(message.text.trim())) {
+    await send(
+      channelUrl ? botText.channel[lang] : botText.channelMissing[lang],
+      channelUrl ? { inline_keyboard: [[{ text: botButtons[lang].channel, url: channelUrl }]] } : undefined,
+    );
+    return json({ ok: true });
+  }
+
+  if (command === '/promo') {
+    if (!isOwner) {
+      await send(botText.ownerOnly[lang]);
+      return json({ ok: true });
+    }
+    const promoMarkup = { inline_keyboard: [[{ text: 'Play Now', url: `https://t.me/${(env.BOT_USERNAME || 'Dire_Bet_bot').replace(/^@/, '')}` }]] };
+    try {
+      await telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN, 'sendPhoto', {
+        chat_id: chatId,
+        photo: `${base}/promotions/play-together.png`,
+        caption: botText.promo[lang],
+        parse_mode: 'HTML',
+        reply_markup: promoMarkup,
+      });
+    } catch {
+      await send(botText.promo[lang], promoMarkup);
+    }
+    return json({ ok: true });
+  }
+
   if (command === '/admin') {
-    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: isOwner ? 'Owner access verified. Open the dashboard below.' : 'The owner dashboard is available only to the configured owner Telegram account.',
-      ...(isOwner ? { reply_markup: { inline_keyboard: [[{ text: 'Open owner dashboard', web_app: { url: `${base}/admin` } }]] } } : {}),
+    await send(
+      isOwner ? 'Owner access verified. Open the dashboard below.' : 'The owner dashboard is available only to the configured owner Telegram account.',
+      isOwner ? { inline_keyboard: [ownerButton] } : undefined,
+    );
+    return json({ ok: true });
+  }
+
+  if (command === '/start') {
+    const playUrl = roomPayload ? `${base}/?room=${roomPayload}` : agentCode && agent ? `${base}/?ref=${encodeURIComponent(agentCode)}` : base;
+    const notice = roomPayload
+      ? `\n\n${botText.roomReady[lang].replace('{code}', roomPayload)}`
+      : agentCode && agent ? `\n\n${botText.promoLinked[lang].replace('{code}', agentCode)}` : '';
+    const intro = hasContact ? welcomeBack[lang] : welcome[lang];
+    const introMarkup = {
+      inline_keyboard: [
+        [{ text: roomPayload ? `🎮 Join room · ${roomPayload}` : botButtons[lang].play, web_app: { url: playUrl } }],
+        ...(isOwner ? [ownerButton] : []),
+      ],
+    };
+    if (hasContact) {
+      await send(`${intro}${notice}`, introMarkup);
+    } else {
+      try {
+        await telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN, 'sendPhoto', {
+          chat_id: chatId,
+          photo: `${base}/promotions/play-together.png`,
+          caption: `${intro}${notice}`,
+          parse_mode: 'HTML',
+          reply_markup: introMarkup,
+        });
+      } catch {
+        await send(`${intro}${notice}`, introMarkup);
+      }
+    }
+    await send(hasContact ? menuPrompt[lang] : registrationText[lang], menu(playUrl));
+    return json({ ok: true });
+  }
+
+  if (command === '/play' || command === '/games') {
+    await send(botText[command === '/play' ? 'play' : 'games'][lang], webAppButton(botButtons[lang].play, '/'));
+    return json({ ok: true });
+  }
+
+  if (command === '/wallet') {
+    await send(botText.wallet[lang], webAppButton(botButtons[lang].wallet, '/?page=wallet'));
+    return json({ ok: true });
+  }
+
+  if (command === '/deposit') {
+    await send(botText.deposit[lang], webAppButton(botButtons[lang].deposit, '/?page=wallet&view=deposit'));
+    return json({ ok: true });
+  }
+
+  if (command === '/account') {
+    await send(botText.account[lang], webAppButton(botButtons[lang].login, '/?page=account'));
+    return json({ ok: true });
+  }
+
+  if (command === '/profile') {
+    await send(botText.profile[lang], webAppButton(botButtons[lang].play, '/'));
+    return json({ ok: true });
+  }
+
+  if (command === '/help' || command === '/support') {
+    await send(botText.help[lang], {
+      inline_keyboard: [
+        [{ text: botButtons[lang].play, web_app: { url: base } }],
+        [{ text: botButtons[lang].wallet, web_app: { url: `${base}/?page=wallet` } }],
+      ],
     });
     return json({ ok: true });
   }
-  const reply_markup = ['/start', '/play', '/games'].includes(command) ? {
-    inline_keyboard: [
-      [{ text: roomPayload ? `Join game · ${roomPayload}` : 'Play DIRE BET', web_app: { url: roomPayload ? `${base}/?room=${roomPayload}` : agentCode && agent ? `${base}/?ref=${encodeURIComponent(agentCode)}` : base } }],
-      ...(isOwner ? [[{ text: 'Owner dashboard', web_app: { url: `${base}/admin` } }]] : []),
-    ],
-  } : command === '/account' ? {
-    inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${base}/?page=account` } }]],
-  } : command === '/wallet' ? {
-    inline_keyboard: [[{ text: 'Open wallet', web_app: { url: `${base}/?page=wallet` } }]],
-  } : undefined;
-  await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
-    chat_id: message.chat.id,
-      text: roomPayload ? `${hasContact ? welcomeBack[lang] : welcome[lang]} Room ${roomPayload} is ready. Tap below to join.` : agentCode && agent ? `${hasContact ? welcomeBack[lang] : welcome[lang]} Promo code ${agentCode} includes a one-time 10 Birr welcome bonus once wallet credit is enabled.` : responses[command] || 'Use /play to open free games, or /help for help.',
-    ...(reply_markup ? { reply_markup } : {}),
-  });
-  if (command === '/start') {
-    const registrationText: Record<string, string> = {
-      en: 'Optional web login: share your own contact, then open Account to choose a username and 8-digit PIN. Your contact is used only to link your account. Live payments are off.',
-      am: 'የድር መግቢያ አማራጭ ነው፦ የራስዎን እውቂያ ያጋሩ፣ ከዚያ መለያ ውስጥ የተጠቃሚ ስምና 8 አሃዝ PIN ይምረጡ። እውቂያዎ መለያዎን ለማገናኘት ብቻ ይጠቀማል። ቀጥታ ክፍያዎች የሉም።',
-      so: 'Gelitaanka webka waa ikhtiyaari: la wadaag xiriirkaaga, kadib fur Account oo dooro magac iyo PIN 8-god ah. Xiriirka waxaa loo isticmaalaa oo keliya isku xidhka akoonkaaga. Lacag-bixin toos ah ma jirto.',
-      om: 'Seensi weebii filannoo dha: quunnamtii kee qoodi, achiis Herrega baniitii maqaa fayyadamaa fi PIN lakkoofsa 8 filadhu. Quunnamtiin kee herrega kee walitti hidhuuf qofa fayyada. Kaffaltiin kallattiin hin jiru.',
-    };
-    const keyboardLabels: Record<string, { play: string; contact: string; wallet: string; more: string }> = {
-      en: { play: '🎮 Play', contact: 'Share contact', wallet: 'Wallet', more: 'More' },
-      am: { play: '🎮 መጫወት', contact: 'እውቂያ አጋራ', wallet: 'ዋሌት', more: 'ተጨማሪ' },
-      so: { play: '🎮 Ciyaar', contact: 'La wadaag xiriirka', wallet: 'Wallet', more: 'Wax badan' },
-      om: { play: '🎮 Taphadhu', contact: 'Quunnamtii qoodi', wallet: 'Wallet', more: 'Dabalata' },
-    };
-    const labels = keyboardLabels[lang];
-    const keyboard: Array<Array<Record<string, unknown>>> = [
-      [{ text: labels.play, web_app: { url: base } }],
-      ...(hasContact ? [] : [[{ text: labels.contact, request_contact: true }]]),
-      [{ text: labels.wallet, web_app: { url: `${base}/?page=wallet` } }, { text: labels.more, web_app: { url: `${base}/?page=menu` } }],
-    ];
-    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: hasContact ? menuPrompt[lang] : registrationText[lang],
-      reply_markup: {
-        keyboard,
-        resize_keyboard: true,
-        is_persistent: true,
-        input_field_placeholder: 'Choose an option',
-      },
-    });
-  }
+
+  await send(botText.fallback[lang], menu());
   return json({ ok: true });
 }
 
@@ -698,16 +967,18 @@ async function setupTelegram(request: Request, env: Env): Promise<Response> {
   try {
     await call('setWebhook', { url: `${origin}/telegram/webhook`, secret_token: env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: ['message', 'callback_query'] });
     await call('setMyCommands', { commands: [
-      { command: 'start', description: 'Open DIRE BET' }, { command: 'play', description: 'Play free games' },
-      { command: 'games', description: 'See available games' }, { command: 'profile', description: 'View your profile' },
-      { command: 'account', description: 'Set up optional web login' },
-      { command: 'wallet', description: 'Open wallet and payment status' }, { command: 'leaderboard', description: 'View rankings' },
-      { command: 'admin', description: 'Open the owner dashboard' },
-      { command: 'help', description: 'Get help' }, { command: 'support', description: 'Contact support' },
-      { command: 'stop', description: 'Turn off promotions' },
+      { command: 'start', description: 'Open DIRE BET' },
+      { command: 'play', description: 'Play a game' },
+      { command: 'games', description: 'See available games' },
+      { command: 'wallet', description: 'Open your wallet' },
+      { command: 'deposit', description: 'Add funds' },
+      { command: 'channel', description: 'Open the official channel' },
+      { command: 'account', description: 'Set up web login' },
+      { command: 'help', description: 'Get help' },
     ] });
     await call('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Play', web_app: { url: origin } } });
-    await call('setMyDescription', { description: 'DIRE BET · Free-play games. Wallet payments are locked pending approvals.' });
+    await call('setMyDescription', { description: botProfileDescription });
+    await call('setMyShortDescription', { short_description: botProfileShortDescription });
     await env.DB.prepare("INSERT INTO application_settings (key, value, updated_at) VALUES ('telegram_setup_used', 'true', CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = CURRENT_TIMESTAMP").run();
     return json({ ok: true });
   } catch {
@@ -801,15 +1072,9 @@ async function authenticatePassword(request: Request, env: Env): Promise<Respons
 async function storeTelegramContact(message: { chat?: { id?: number }; from?: { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string }; contact?: { user_id?: number; phone_number?: string; first_name?: string } }, env: Env, origin: string): Promise<void> {
   const telegramId = message.from?.id;
   const phone = message.contact?.phone_number?.trim();
-  const language = ['am', 'so', 'om'].includes(message.from?.language_code || '') ? message.from?.language_code as string : 'am';
+  const language = botLanguage(message.from?.language_code);
   if (!env.SESSION_SECRET || !Number.isSafeInteger(telegramId) || telegramId! <= 0 || message.contact?.user_id !== telegramId || !phone || !/^[+\d().\s-]{7,24}$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15) {
-    const prompts: Record<string, string> = {
-      en: 'To register, use the Share contact button in this chat and share your own number.',
-      am: 'ለመመዝገብ በዚህ ውይይት ያለውን እውቂያ አጋራ ቁልፍ ተጠቅመው የራስዎን ቁጥር ያጋሩ።',
-      so: 'Si aad isu diiwaangeliso, taabo La wadaag xiriirka oo la wadaag lambarkaaga.',
-      om: 'Galmaa’uuf, Quunnamtii qoodi jedhu tuqiitii lakkoofsa bilbilaa kee qoodi.',
-    };
-    if (typeof message.chat?.id === 'number' && env.TELEGRAM_BOT_TOKEN) await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: message.chat.id, text: prompts[language] });
+    if (typeof message.chat?.id === 'number' && env.TELEGRAM_BOT_TOKEN) await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: message.chat.id, text: botText.contactRequired[language], parse_mode: 'HTML' });
     return;
   }
   const firstName = (message.from?.first_name || message.contact?.first_name || 'Player').slice(0, 128);
@@ -824,16 +1089,17 @@ async function storeTelegramContact(message: { chat?: { id?: number }; from?: { 
   await env.DB.prepare(`INSERT INTO user_contacts (user_id, phone_ciphertext, shared_at) VALUES (?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(user_id) DO UPDATE SET phone_ciphertext = excluded.phone_ciphertext, shared_at = CURRENT_TIMESTAMP`).bind(user.id, encrypted).run();
   if (typeof message.chat?.id === 'number' && env.TELEGRAM_BOT_TOKEN) {
-    const confirmations: Record<string, string> = {
-      en: 'Your contact is linked. Open DIRE BET to choose a web username and 8-digit PIN. No live payments are enabled.',
-      am: 'እውቂያዎ ተገናኝቷል። DIRE BET ን ከፍተው የድር የተጠቃሚ ስምና 8 አሃዝ PIN ይምረጡ። ቀጥታ ክፍያዎች የሉም።',
-      so: 'Xiriirkaaga waa la xidhay. Fur DIRE BET oo dooro magac web iyo PIN 8-god ah. Lacag-bixin toos ah ma jirto.',
-      om: 'Quunnamtiin kee walitti hidhameera. DIRE BET baniitii maqaa weebii fi PIN lakkoofsa 8 filadhu. Kaffaltiin kallattiin hin jiru.',
-    };
     await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
       chat_id: message.chat.id,
-      text: confirmations[language],
-      reply_markup: { inline_keyboard: [[{ text: 'Set up web login', web_app: { url: `${origin}/?page=account` } }]] },
+      text: botText.contactLinked[language],
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: botButtons[language].login, web_app: { url: `${origin}/?page=account` } }]] },
+    });
+    await telegramApi(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: menuPrompt[language],
+      parse_mode: 'HTML',
+      reply_markup: botMenuKeyboard(origin, language, true),
     });
   }
 }

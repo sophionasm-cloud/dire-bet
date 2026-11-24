@@ -404,6 +404,11 @@ describe('Telegram /start contact prompt', () => {
     const flat = call.reply_markup.keyboard.flat();
     expect(flat.some((button) => button.request_contact === true)).toBe(false);
     expect(call.text).toContain('menu below');
+    expect(call.reply_markup.keyboard.map((row) => row.map((button) => button.text))).toEqual([
+      ['🎮 Play'],
+      ['💰 Wallet', '💳 Deposit'],
+      ['📢 Channel'],
+    ]);
   });
 
   it('asks a new user to share contact only once during registration', async () => {
@@ -411,6 +416,35 @@ describe('Telegram /start contact prompt', () => {
     const flat = call.reply_markup.keyboard.flat();
     expect(flat.some((button) => button.request_contact === true)).toBe(true);
     expect(call.text).toContain('Optional web login');
+  });
+
+  it('offers the channel only when a real link is configured', async () => {
+    async function channelReply(env: Record<string, unknown>) {
+      const calls: Record<string, unknown>[] = [];
+      const telegram = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+        calls.push(JSON.parse(String(init?.body || '{}')) as Record<string, unknown>);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      });
+      const db = { prepare: () => ({ bind: () => ({ first: async () => ({ id: 42, phone_shared: 1 }) }) }) };
+      try {
+        const response = await worker.fetch(new Request('https://dire-bet.test/telegram/webhook', {
+          method: 'POST',
+          headers: { 'X-Telegram-Bot-Api-Secret-Token': 'hook-secret', 'content-type': 'application/json' },
+          body: JSON.stringify({ message: { text: '/channel', chat: { id: 99 }, from: { id: 123456789, first_name: 'Existing', language_code: 'en' } } }),
+        }), { TELEGRAM_BOT_TOKEN: token, TELEGRAM_WEBHOOK_SECRET: 'hook-secret', DB: db, ...env } as never);
+        expect(response.status).toBe(200);
+      } finally {
+        telegram.mockRestore();
+      }
+      return calls[0] as { text: string; reply_markup?: { inline_keyboard?: Array<Array<{ url?: string }>> } };
+    }
+
+    const missing = await channelReply({});
+    expect(missing.text).toContain('being prepared');
+    expect(missing.reply_markup).toBeUndefined();
+
+    const linked = await channelReply({ TELEGRAM_CHANNEL_URL: '@direbetofficial' });
+    expect(linked.reply_markup?.inline_keyboard?.[0]?.[0]?.url).toBe('https://t.me/direbetofficial');
   });
 });
 
@@ -433,7 +467,7 @@ describe('Telegram setup recovery', () => {
         }), env);
         expect(response.status, `${await response.clone().text()} (${telegram.mock.calls.length} Telegram calls)`).toBe(200);
       }
-      expect(telegram).toHaveBeenCalledTimes(8);
+      expect(telegram).toHaveBeenCalledTimes(10);
     } finally {
       telegram.mockRestore();
     }

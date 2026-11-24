@@ -8,7 +8,7 @@ type Provider = {
 };
 type WalletRequest = { id: string; provider: ProviderId; amount: number; status: string; created_at: string; review_reason: string | null; provider_reference?: string | null; reviewed_at?: string | null };
 type RequestData = { deposits: WalletRequest[]; withdrawals: WalletRequest[]; lastWithdrawalPhone?: string | null };
-type Props = { t: (key: TranslationKey) => string; token: string | null; onSupport: () => void };
+type Props = { t: (key: TranslationKey) => string; token: string | null; initialView?: 'deposit'; onInitialViewConsumed?: () => void; onSupport: () => void };
 type View = 'main' | 'deposit' | 'withdraw' | 'submitted';
 
 const providerLabel: Record<ProviderId, string> = { telebirr: 'Telebirr', ebirr: 'eBirr' };
@@ -46,7 +46,7 @@ function savePhone(value: string) {
   try { localStorage.setItem(lastPhoneKey, value); } catch { /* The next request can still use the typed number. */ }
 }
 
-export default function WalletApp({ t, token, onSupport }: Props) {
+export default function WalletApp({ t, token, initialView, onInitialViewConsumed, onSupport }: Props) {
   const [view, setView] = useState<View>('main');
   const [providers, setProviders] = useState<Provider[]>([]);
   const [requests, setRequests] = useState<RequestData>({ deposits: [], withdrawals: [] });
@@ -66,6 +66,7 @@ export default function WalletApp({ t, token, onSupport }: Props) {
   const idempotencyKey = useRef(crypto.randomUUID());
   const submitting = useRef(false);
   const copyTimer = useRef<number | null>(null);
+  const initialViewHandled = useRef(false);
 
   const selectedProvider = providers.find((item) => item.provider === provider && item.enabled) || null;
   const depositMinimum = selectedProvider?.minimumAmount ?? 50;
@@ -116,6 +117,15 @@ export default function WalletApp({ t, token, onSupport }: Props) {
     if (!token || !moneyEnabled) { setMessage(walletError || t('walletRequestFailed')); return; }
     setView('deposit'); setMessage(''); setProvider(firstEnabledProvider()); setDepositAmount(''); setDepositSms('');
   };
+
+  useEffect(() => {
+    if (initialView !== 'deposit' || initialViewHandled.current || view !== 'main' || !token || !moneyEnabled) return;
+    initialViewHandled.current = true;
+    setView('deposit'); setMessage('');
+    setProvider(providers.find((item) => item.provider === 'telebirr' && item.enabled)?.provider || providers.find((item) => item.enabled)?.provider || 'telebirr');
+    setDepositAmount(''); setDepositSms('');
+    onInitialViewConsumed?.();
+  }, [initialView, view, token, moneyEnabled, providers, onInitialViewConsumed]);
 
   const openWithdrawal = () => {
     if (!token || !moneyEnabled) { setMessage(walletError || t('walletRequestFailed')); return; }

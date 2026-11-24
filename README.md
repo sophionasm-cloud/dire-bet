@@ -37,6 +37,23 @@ npm run deploy
 
 The Worker config identifies the environment as production and serves free play with `REAL_MONEY_ENABLED=false` and `DEMO_MODE=false`. Keep real-money features disabled until every item in `docs/LEGAL_ACTIVATION_CHECKLIST.md` is satisfied. Telegram tokens stay in Cloudflare secrets. Run `./scripts/connect-telegram.ps1` to reconnect the bot; use `./scripts/connect-telegram.ps1 -ReplaceBotToken` only when replacing its token. Both prompts hide token typing.
 
+## Telegram bot presentation
+
+The Worker sets the bot description, short description, command menu and chat menu button during Telegram setup. After deploying, run `./scripts/connect-telegram.ps1` once so those fields refresh.
+
+Set `TELEGRAM_CHANNEL_URL` to the official channel (`@channelname` or `https://t.me/...`) in the Worker variables, then redeploy. Until it is set, the Channel button replies that the channel is being prepared; the bot never invents a link.
+
+Configure these in BotFather/Telegram manually:
+
+- Profile photo: upload a square DIRE BET logo. The Bot API cannot set the bot photo.
+- Bot name and username: confirm `DIRE BET` and `@Dire_Bet_bot`.
+- About and Description: the setup call fills these from the bot profile copy; paste the same text manually if BotFather shows older values.
+- Commands: the setup call adds `/start`, `/play`, `/games`, `/wallet`, `/deposit`, `/channel`, `/account` and `/help`.
+- Channel: create or confirm the official channel, add the bot as an admin only if you want it to post there, then set `TELEGRAM_CHANNEL_URL`.
+- Web App domain: if Telegram requests it, allow `dire-bet.sophionasm.workers.dev` in BotFather.
+
+The owner-only `/promo` command sends the branded play-together post with a **Play Now** button. Forward that post to the channel; `/promo` is deliberately hidden from the public command menu.
+
 ## Project commands
 
 - `npm run dev` — run the app locally
