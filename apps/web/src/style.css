@@ -1785,3 +1785,9 @@
 .ludo-tutorial-bubble.is-complete .tutorial-badge{background:#34d399;color:#042619}
 .tutorial-end-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:6px}
 @media(max-width:400px){.public-lobby-screen{padding:2px 5px 4px}.market-room-browser{padding:8px 9px}.market-create-panel{padding:6px 9px}.ludo-lobby-screen .market-entry-options.ludo-entry-options{gap:4px}}
+
+/* Custom game backgrounds for waiting rooms and gameplay dashboards */
+.player-shell:has(.lobby-game-ludo),.player-shell:has(.ludo-room-layout){background:linear-gradient(rgba(4,9,18,.34),rgba(4,9,18,.34)),url('/backgrounds/ludo-bg.jpg') center/cover no-repeat!important}
+.player-shell:has(.lobby-game-xo),.player-shell:has(.xo-board){background:linear-gradient(rgba(4,9,18,.3),rgba(4,9,18,.3)),url('/backgrounds/xo-bg.jpg') center/cover no-repeat!important}
+.player-shell:has(.lobby-game-checkers),.player-shell:has(.checkers-room-layout){background:linear-gradient(rgba(4,9,18,.32),rgba(4,9,18,.32)),url('/backgrounds/checkers-bg.jpg') center/cover no-repeat!important}
+.lobby-game-ludo::before,.lobby-game-xo::before,.lobby-game-checkers::before{display:none}

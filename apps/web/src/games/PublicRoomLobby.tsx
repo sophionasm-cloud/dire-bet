@@ -326,7 +326,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
 
   // Inline active room in public lobby
 
-  return <section className="screen public-lobby-screen ludo-lobby-screen">
+  return <section className={`screen public-lobby-screen ludo-lobby-screen lobby-game-${gameId}`}>
     <header className="public-lobby-header compact-header"><button className="back-button market-back-button" type="button" onClick={onExit}>← {t('home')}</button><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
     
     {!token && <div className="market-signin-hint" role="status">{t('marketTelegramRequired')}</div>}
