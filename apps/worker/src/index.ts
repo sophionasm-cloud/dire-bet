@@ -300,17 +300,38 @@ function escapeTelegramHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+const ALLOWED_ALERT_ETB = new Set([0, 10, 30, 50, 100, 200, 300, 500]);
+
+async function ensureNotificationPrefsTable(db: D1Database): Promise<void> {
+  try {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS user_notification_preferences (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      min_etb INTEGER NOT NULL DEFAULT 10,
+      max_etb INTEGER NOT NULL DEFAULT 500,
+      five_rooms_alerted_at INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`).run();
+  } catch {
+    // Minimal test DB mocks may omit DDL support.
+  }
+}
+
 async function notifyNewLudoRoom(
   env: Env,
   room: { creatorUserId: number; creatorName: string; roomCode: string; entryCredits: number; crownTarget: number; origin: string },
 ): Promise<void> {
   if (!env.TELEGRAM_BOT_TOKEN) return;
+  await ensureNotificationPrefsTable(env.DB);
   const recipientsResult = await env.DB.prepare(`
-    SELECT u.id, u.telegram_id, u.language
+    SELECT u.id, u.telegram_id, u.language, np.min_etb, np.max_etb, np.five_rooms_alerted_at
     FROM users u
+    JOIN user_notification_preferences np ON np.user_id = u.id
     WHERE u.id != ?
       AND u.status = 'active'
       AND u.telegram_id > 0
+      AND np.enabled = 1
+      AND ? BETWEEN np.min_etb AND np.max_etb
       AND EXISTS (SELECT 1 FROM user_contacts c WHERE c.user_id = u.id)
       AND NOT EXISTS (
         SELECT 1 FROM user_profiles p
@@ -319,15 +340,61 @@ async function notifyNewLudoRoom(
       )
     ORDER BY u.updated_at DESC
     LIMIT 40
-  `).bind(room.creatorUserId).all<{ id: number; telegram_id: number; language?: string }>().catch(() => null);
+  `).bind(room.creatorUserId, room.entryCredits).all<{ id: number; telegram_id: number; language?: string; min_etb: number; max_etb: number; five_rooms_alerted_at?: number }>().catch(() => null);
   const recipients = recipientsResult?.results || [];
   if (recipients.length === 0) return;
 
+  const listRes = await publicMarketplace(env).fetch('https://market/list?gameId=ludo').catch(() => null);
+  const listJson = listRes?.ok ? await listRes.json().catch(() => null) as { rooms?: Array<{ code?: string; entryCredits?: number }> } | null : null;
+  const waitingLudoRooms = Array.isArray(listJson?.rooms) ? listJson.rooms : [];
+
   const safeCreator = escapeTelegramHtml(room.creatorName || 'Player');
   const lobbyUrl = `${room.origin}/?page=lobby`;
+  const now = Date.now();
 
   for (const recipient of recipients) {
     if (!Number.isSafeInteger(recipient.telegram_id) || recipient.telegram_id <= 0) continue;
+    const lang = botLanguage(recipient.language);
+    const playLabel = ({ en: '▶ PLAY', am: '▶ ተጫወት', so: '▶ CIYAAR', om: '▶ TAPHADHU' })[lang];
+
+    const matchingWaiting = waitingLudoRooms.filter((item) => {
+      const stake = typeof item.entryCredits === 'number' ? item.entryCredits : 0;
+      return stake >= recipient.min_etb && stake <= recipient.max_etb;
+    });
+    const includesNew = matchingWaiting.some((item) => item.code === room.roomCode);
+    const totalEligible = includesNew ? matchingWaiting.length : matchingWaiting.length + 1;
+    const prevEligible = includesNew ? matchingWaiting.length - 1 : matchingWaiting.length;
+    const cooldownOk = now - (recipient.five_rooms_alerted_at || 0) > 10 * 60 * 1000;
+
+    if (prevEligible <= 5 && totalEligible > 5 && cooldownOk) {
+      const fiveDedupeId = `ludo-five:${Math.floor(now / (10 * 60 * 1000))}:${recipient.id}`;
+      let sendFive = true;
+      try {
+        const outbox = await env.DB.prepare(
+          `INSERT OR IGNORE INTO notification_outbox (id, user_id, payload_json, status) VALUES (?, ?, ?, 'sent')`
+        ).bind(fiveDedupeId, recipient.id, JSON.stringify({ type: 'ludo_five_rooms', count: totalEligible })).run();
+        if (outbox?.meta && typeof outbox.meta.changes === 'number') sendFive = outbox.meta.changes === 1;
+      } catch {
+        // Minimal mocks may skip outbox table.
+      }
+      if (sendFive) {
+        const multiText = ({
+          en: `🔥 <b>Multiple Ludo rooms are available!</b>\n\n<b>${totalEligible}</b> active rooms match your alert range (${recipient.min_etb}–${recipient.max_etb} ETB). Join a game now.`,
+          am: `🔥 <b>ብዙ የሉዶ ክፍሎች ተከፍተዋል!</b>\n\nከእርስዎ ክልል (${recipient.min_etb}–${recipient.max_etb} ብር) ጋር የሚመሳሰሉ <b>${totalEligible}</b> ክፍሎች አሉ። አሁን ይቀላቀሉ።`,
+          so: `🔥 <b>Qolal badan oo Ludo ah ayaa diyaar ah!</b>\n\n<b>${totalEligible}</b> qolal ayaa ku jira xadkaaga (${recipient.min_etb}–${recipient.max_etb} ETB). Hadda ku biir ciyaarta.`,
+          om: `🔥 <b>Kutaan Ludo hedduun banamaniiru!</b>\n\nKutaan <b>${totalEligible}</b> daangaa keessan (${recipient.min_etb}–${recipient.max_etb} ETB) keessatti argamu. Amma taphatti makamaa.`,
+        })[lang];
+        await telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+          chat_id: recipient.telegram_id,
+          text: multiText,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: playLabel, web_app: { url: lobbyUrl } }]] },
+        }).catch(() => undefined);
+        await env.DB.prepare('UPDATE user_notification_preferences SET five_rooms_alerted_at = ? WHERE user_id = ?').bind(now, recipient.id).run().catch(() => undefined);
+        continue;
+      }
+    }
+
     const dedupeId = `ludo-room:${room.roomCode}:${recipient.id}`;
     let inserted = true;
     try {
@@ -342,7 +409,6 @@ async function notifyNewLudoRoom(
     }
     if (!inserted) continue;
 
-    const lang = botLanguage(recipient.language);
     const stakeText = room.entryCredits === 0
       ? ({ en: 'FREE', am: 'ነፃ', so: 'Bilaash', om: 'Bilisa' }[lang])
       : `${room.entryCredits} ${lang === 'am' ? 'ብር' : 'ETB'}`;
@@ -352,17 +418,15 @@ async function notifyNewLudoRoom(
       so: `🎲 <b>Qol cusub oo Ludo ah waa la furay</b>\n\n👤 <b>${safeCreator}</b> wuxuu furay qol Ludo (#<code>${room.roomCode}</code>)\n💰 Gelitaanka: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nHoos taabo si aad ugu biirto.`,
       om: `🎲 <b>Kutaan Ludo haaraan uumameera</b>\n\n👤 <b>${safeCreator}</b> kutaa Ludo baneera (#<code>${room.roomCode}</code>)\n💰 Seensa: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nOsooo hin guutiin itti makamuuf gadii tuqi.`,
     })[lang];
-    const buttonLabel = botButtons[lang].play;
 
     await telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
       chat_id: recipient.telegram_id,
       text,
       parse_mode: 'HTML',
-      reply_markup: { inline_keyboard: [[{ text: buttonLabel, web_app: { url: lobbyUrl } }]] },
+      reply_markup: { inline_keyboard: [[{ text: playLabel, web_app: { url: lobbyUrl } }]] },
     }).catch(() => undefined);
   }
 }
-
 async function createPublicRoom(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
   const userId = await readSession(request, env.SESSION_SECRET);
@@ -416,6 +480,36 @@ async function handlePublicMarketplace(request: Request, env: Env, ctx?: Executi
     const gameId = url.searchParams.get('gameId') || '';
     if (gameId && (!isMarketplaceGame(gameId) || gameId === 'poker')) return json({ error: 'Game filter is invalid.' }, 400);
     return publicMarketplace(env).fetch(`https://market/list?gameId=${encodeURIComponent(gameId)}`);
+  }
+  if (url.pathname === '/api/public-rooms/notifications') {
+    if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
+    const userId = await readSession(request, env.SESSION_SECRET);
+    if (!userId) return json({ error: 'Sign in through Telegram to manage room alerts.' }, 401);
+    await ensureNotificationPrefsTable(env.DB);
+    if (request.method === 'GET') {
+      const prefs = await env.DB.prepare(
+        'SELECT enabled, min_etb, max_etb FROM user_notification_preferences WHERE user_id = ?'
+      ).bind(userId).first<{ enabled: number; min_etb: number; max_etb: number }>().catch(() => null);
+      return json({
+        enabled: prefs?.enabled === 1,
+        minEtb: typeof prefs?.min_etb === 'number' ? prefs.min_etb : 10,
+        maxEtb: typeof prefs?.max_etb === 'number' ? prefs.max_etb : 500,
+      });
+    }
+    if (request.method === 'PUT') {
+      const body = await request.json().catch(() => null) as { enabled?: unknown; minEtb?: unknown; maxEtb?: unknown } | null;
+      if (!body || typeof body.enabled !== 'boolean' || !ALLOWED_ALERT_ETB.has(Number(body.minEtb)) || !ALLOWED_ALERT_ETB.has(Number(body.maxEtb))) {
+        return json({ error: 'Notification settings are invalid.' }, 400);
+      }
+      const minEtb = Number(body.minEtb);
+      const maxEtb = Number(body.maxEtb);
+      if (minEtb > maxEtb) return json({ error: 'Minimum ETB cannot exceed maximum ETB.' }, 400);
+      await env.DB.prepare(`INSERT INTO user_notification_preferences (user_id, enabled, min_etb, max_etb, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, min_etb = excluded.min_etb, max_etb = excluded.max_etb, updated_at = CURRENT_TIMESTAMP`)
+        .bind(userId, body.enabled ? 1 : 0, minEtb, maxEtb).run();
+      return json({ enabled: body.enabled, minEtb, maxEtb });
+    }
   }
   if (url.pathname === '/api/public-rooms/balance' && request.method === 'GET') {
     const userId = await readSession(request, env.SESSION_SECRET);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { botLudoToken, initLudo, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
+import { botLudoToken, initLudo, legalLudoActions, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyPokerAction, botPokerAction, initTexasHoldem, legalPokerActions, type Card, type PokerAction, type PokerState, type Suit } from '@dire-bet/engines/poker';
 import type { TranslationKey } from '../i18n';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
@@ -8,10 +8,23 @@ import { LudoDie, useLudoTurnClock } from './LudoDie';
 export { CheckersPractice } from './CheckersRoom';
 
 type Translator = (key: TranslationKey) => string;
-type PracticeProps = { t: Translator; onExit: () => void; reduceEffects: boolean };
+type PracticeProps = { t: Translator; onExit: () => void; reduceEffects: boolean; tutorialMode?: boolean; onBackToLobby?: () => void };
 
-export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
-  const [state, setState] = useState<LudoState>(() => initLudo());
+export function LudoPractice({ t, onExit, reduceEffects, tutorialMode = false, onBackToLobby }: PracticeProps) {
+  const [state, setState] = useState<LudoState>(() => initLudo(0, tutorialMode ? 1 : 4));
+  const [sawCapture, setSawCapture] = useState(false);
+
+  useEffect(() => {
+    setState(initLudo(0, tutorialMode ? 1 : 4));
+    setSawCapture(false);
+  }, [tutorialMode]);
+
+  useEffect(() => {
+    if (state.lastEvent === 'capture' && state.lastMove?.player === 0) {
+      setSawCapture(true);
+    }
+  }, [state.lastEvent, state.lastMove]);
+
   useEffect(() => {
     if (state.turn !== 1 || state.winner !== null) return;
     const timer = window.setTimeout(() => setState((current) => {
@@ -23,6 +36,39 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
     return () => window.clearTimeout(timer);
   }, [state, reduceEffects]);
 
+  const legalActions = state.turn === 0 ? legalLudoActions(state) : [];
+  const allAtBase = state.tokens[0].every((pos) => pos === -1);
+  const nearHome = state.tokens[0].some((pos) => pos >= 46 && pos < 57);
+
+  let tutorialHint = '';
+  if (tutorialMode) {
+    if (state.winner !== null) {
+      tutorialHint = t('ludoTutStepComplete');
+    } else if (state.lastEvent === 'capture' && state.lastMove?.player === 0) {
+      tutorialHint = t('ludoTutStepCapture');
+    } else if (state.turn === 0 && state.dice === 6 && state.tokens[0].some((pos) => pos === -1) && legalActions.length > 0) {
+      tutorialHint = t('ludoTutStepSpawn');
+    } else if (state.turn === 0 && state.dice !== null && legalActions.length > 0) {
+      tutorialHint = nearHome ? t('ludoTutStepHome') : t('ludoTutStepMove');
+    } else if (allAtBase) {
+      tutorialHint = state.rollVersion > 0 && state.lastDice !== null && state.lastDice !== 6
+        ? t('ludoTutStepNeed6').replace('{roll}', String(state.lastDice))
+        : t('ludoTutStepRoll6');
+    } else if (nearHome) {
+      tutorialHint = t('ludoTutStepHome');
+    } else if (sawCapture) {
+      tutorialHint = t('ludoTutStepHome');
+    } else {
+      tutorialHint = state.turn === 0 ? t('ludoTutStepRoll6').replace('6', '1-6').split('.')[0] + ' · ' + t('yourTurn') : t('ludoTutStepCapture');
+    }
+  }
+
+  const leaveTarget = onBackToLobby || onExit;
+  const resetPractice = () => {
+    setSawCapture(false);
+    setState(initLudo(0, tutorialMode ? 1 : 4));
+  };
+
   const turnCopy = state.winner !== null ? outcome(state.winner, t) : state.turn === 0 ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('botTurn');
   const turnSeconds = useLudoTurnClock(`${state.turn}-${state.lastEvent}-${state.lastMove?.player ?? ''}-${state.lastMove?.token ?? ''}`);
   const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
@@ -31,11 +77,17 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
     <header className="ludo-room-topbar">
       <div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div>
       <span className="ludo-game-label"><i>⚄</i> Ludo</span>
-      <strong className="ludo-room-pill">{t('freePractice')} · {t('bot')}</strong>
+      <strong className="ludo-room-pill">{tutorialMode ? `${t('ludoTutorialBadge')} · ${t('bot')}` : `${t('freePractice')} · ${t('bot')}`}</strong>
       <span className="connection-pill connected"><i/>{t('bot')}</span>
       <button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button>
-      <button className="ludo-leave" type="button" onClick={onExit}>← {t('home')}</button>
+      <button className="ludo-leave" type="button" onClick={leaveTarget}>← {onBackToLobby ? t('back') : t('home')}</button>
     </header>
+    {tutorialMode && tutorialHint && (
+      <div className={`ludo-tutorial-bubble ${state.winner !== null ? 'is-complete' : ''}`} role="status" aria-live="polite">
+        <span className="tutorial-badge">{t('ludoTutorialBadge')}</span>
+        <strong>{tutorialHint}</strong>
+      </div>
+    )}
     <div className="ludo-notification" role="status" aria-live="polite"><span>✦</span><strong>{banner}</strong></div>
     <div className="ludo-match-meta practice-ludo-meta"><span>{t('ludoRuleText')}</span></div>
     <div className="ludo-two-player-layout">
@@ -45,7 +97,7 @@ export function LudoPractice({ t, onExit, reduceEffects }: PracticeProps) {
     </div>
     <div className="ludo-controls-wrap practice-ludo-controls">
       <LudoDie value={state.lastDice} rollVersion={state.rollVersion} color={state.turn === 0 ? 'yellow' : 'red'} canRoll={state.turn === 0 && state.dice === null && state.winner === null} onRoll={() => setState((current) => rollLudo(current, Math.floor(Math.random() * 6) + 1))} rollLabel={t('rollDice')} reducedMotion={reduceEffects}/>
-      {state.turn !== 0 || state.dice !== null || state.winner !== null ? <div className="ludo-waiting-turn" role="status">{state.winner === null ? turnCopy : <><strong>{turnCopy}</strong><button className="secondary-button" onClick={() => setState(initLudo())}>{t('practiceAgain')} ↻</button></>}</div> : null}
+      {state.turn !== 0 || state.dice !== null || state.winner !== null ? <div className="ludo-waiting-turn" role="status">{state.winner === null ? turnCopy : <><strong>{turnCopy}</strong><div className="tutorial-end-actions"><button className="secondary-button" onClick={resetPractice}>{t('practiceAgain')} ↻</button>{tutorialMode && onBackToLobby && <button className="primary-button" onClick={onBackToLobby}>{t('ludoTutBackToLobby')} →</button>}</div></>}</div> : null}
     </div>
   </section>;
 }

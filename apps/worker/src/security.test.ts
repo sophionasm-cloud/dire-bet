@@ -570,6 +570,108 @@ describe('Ludo room creation Telegram notifications', () => {
       telegram.mockRestore();
     }
   });
+
+  it('manages room notification preferences and sends grouped alert when eligible rooms exceed five', async () => {
+    const secret = 'notif-prefs-secret';
+    const authorization = `Bearer ${await signedSession(secret, 21)}`;
+    const prefsStore = new Map<number, { enabled: number; min_etb: number; max_etb: number }>();
+    const telegramPayloads: Array<{ chat_id: number; text: string }> = [];
+    const telegram = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).includes('api.telegram.org')) {
+        telegramPayloads.push(JSON.parse(String(init?.body || '{}')) as { chat_id: number; text: string });
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    });
+
+    const db = {
+      prepare(sql: string) {
+        let bound: unknown[] = [];
+        return {
+          bind(...values: unknown[]) { bound = values; return this; },
+          first: async () => {
+            if (sql.includes('SELECT enabled, min_etb, max_etb FROM user_notification_preferences')) {
+              return prefsStore.get(Number(bound[0])) || null;
+            }
+            if (sql.includes('SELECT status FROM users')) return { status: 'active' };
+            if (sql.includes('FROM user_contacts')) return { user_id: 21 };
+            if (sql.includes('SELECT enabled FROM games')) return { enabled: 1 };
+            if (sql.includes('SELECT first_name, username, web_username')) return { web_username: null, username: null, first_name: 'Abel' };
+            return null;
+          },
+          all: async () => {
+            if (sql.includes('FROM users u')) {
+              return {
+                results: [{ id: 22, telegram_id: 333001, language: 'en', min_etb: 10, max_etb: 500, five_rooms_alerted_at: 0 }],
+              };
+            }
+            return { results: [] };
+          },
+          run: async () => {
+            if (sql.includes('INSERT INTO user_notification_preferences')) {
+              prefsStore.set(Number(bound[0]), { enabled: Number(bound[1]), min_etb: Number(bound[2]), max_etb: Number(bound[3]) });
+            }
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+      },
+    };
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
+    const waitingRooms = [10, 30, 50, 100, 200, 300].map((entryCredits, idx) => ({ code: `RM000${idx}`, entryCredits }));
+    const matchmaker = {
+      idFromName: (id: string) => id,
+      get: () => ({
+        fetch: async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes('/list')) {
+            return new Response(JSON.stringify({ rooms: waitingRooms }), { status: 200, headers: { 'content-type': 'application/json' } });
+          }
+          return new Response(JSON.stringify({
+            room: { id: 'RM0005', code: 'RM0005', gameId: 'ludo', creatorName: 'Abel', entryCredits: 300, options: { player0Color: 'yellow', crownTarget: 1 } },
+          }), { status: 201, headers: { 'content-type': 'application/json' } });
+        },
+      }),
+    };
+    const env = { SESSION_SECRET: secret, TELEGRAM_BOT_TOKEN: 'bot-token', DB: db, RATE_LIMITER: rateLimiter, MATCHMAKER: matchmaker } as never;
+
+    try {
+      const initialGet = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/notifications', {
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test' },
+      }), env);
+      expect(initialGet.status).toBe(200);
+      expect(await initialGet.json()).toEqual({ enabled: false, minEtb: 10, maxEtb: 500 });
+
+      const invalidPut = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/notifications', {
+        method: 'PUT',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true, minEtb: 300, maxEtb: 100 }),
+      }), env);
+      expect(invalidPut.status).toBe(400);
+
+      const savedPut = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/notifications', {
+        method: 'PUT',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true, minEtb: 30, maxEtb: 200 }),
+      }), env);
+      expect(savedPut.status).toBe(200);
+      expect(await savedPut.json()).toEqual({ enabled: true, minEtb: 30, maxEtb: 200 });
+
+      const afterGet = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/notifications', {
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test' },
+      }), env);
+      expect(await afterGet.json()).toEqual({ enabled: true, minEtb: 30, maxEtb: 200 });
+
+      const created = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+        method: 'POST',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: 'ludo', entry: { kind: 'standard', amount: 300 }, options: { player0Color: 'yellow', crownTarget: 1 }, idempotencyKey: 'ludo-five-key' }),
+      }), env);
+      expect(created.status).toBe(201);
+      expect(telegramPayloads).toHaveLength(1);
+      expect(telegramPayloads[0].text).toContain('Multiple Ludo rooms are available');
+    } finally {
+      telegram.mockRestore();
+    }
+  });
 });
 
 

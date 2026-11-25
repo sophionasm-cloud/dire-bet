@@ -5,7 +5,8 @@ import { languageNames, translate, type Language, type TranslationKey } from './
 import { xoRules } from './i18n/rules';
 import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
-import PublicRoomLobby from './games/PublicRoomLobby';
+import PublicRoomLobby, { type RoomAlertPrefs } from './games/PublicRoomLobby';
+import type { MarketplaceRoom } from './games/marketplaceTypes';
 import WalletApp from './wallet/WalletApp';
 import DashboardWalletCard from './DashboardWalletCard';
 import WalletBalancePill from './WalletBalancePill';
@@ -19,6 +20,24 @@ type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
 type Account = { webUsername: string | null; phoneShared: boolean };
+type RoomAlertItem = { id: string; kind: 'room' | 'many'; code?: string; entryCredits?: number; count?: number };
+
+const DEFAULT_ROOM_ALERTS: RoomAlertPrefs = { enabled: false, minEtb: 10, maxEtb: 500 };
+
+function readStoredRoomAlerts(): RoomAlertPrefs {
+  try {
+    const raw = localStorage.getItem('direbet.roomAlertPrefs');
+    if (!raw) return DEFAULT_ROOM_ALERTS;
+    const parsed = JSON.parse(raw) as Partial<RoomAlertPrefs>;
+    return {
+      enabled: parsed.enabled === true,
+      minEtb: typeof parsed.minEtb === 'number' ? parsed.minEtb : 10,
+      maxEtb: typeof parsed.maxEtb === 'number' ? parsed.maxEtb : 500,
+    };
+  } catch {
+    return DEFAULT_ROOM_ALERTS;
+  }
+}
 
 const languageCodes: Record<Language, string> = { en: 'EN', am: 'AM', so: 'SO', om: 'OM' };
 type PromoAction = 'browse' | 'ludo' | 'xo';
@@ -102,6 +121,10 @@ function App() {
   const [privateInviteError, setPrivateInviteError] = useState('');
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
+  const [ludoTutorial, setLudoTutorial] = useState(false);
+  const [roomAlertPrefs, setRoomAlertPrefs] = useState<RoomAlertPrefs>(() => readStoredRoomAlerts());
+  const [queuedRoomAlerts, setQueuedRoomAlerts] = useState<RoomAlertItem[]>([]);
+  const [activeRoomAlert, setActiveRoomAlert] = useState<RoomAlertItem | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [failedTelegramPhoto, setFailedTelegramPhoto] = useState('');
   const promoTouchStart = useRef<{ x: number; y: number } | null>(null);
@@ -109,6 +132,128 @@ function App() {
   const profileRef = useRef<HTMLDivElement | null>(null);
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
   const telegramAuthPending = Boolean(telegramMiniApp && !sessionToken && !telegramAuthError);
+  const alertsInitializedRef = useRef(false);
+  const seenRoomIdsRef = useRef<Set<string>>(new Set());
+  const prevEligibleCountRef = useRef(0);
+  const lastManyRoomsAlertAtRef = useRef(0);
+  const isPlayingGame = page === 'online' || page === 'ludo' || page === 'checkers' || page === 'poker' || page === 'xo';
+
+  const dispatchRoomAlert = useCallback((item: RoomAlertItem) => {
+    if (isPlayingGame) {
+      setQueuedRoomAlerts((current) => {
+        if (current.some((entry) => entry.id === item.id)) return current;
+        return [...current.slice(-4), item];
+      });
+      return;
+    }
+    setActiveRoomAlert(item);
+  }, [isPlayingGame]);
+
+  const processLudoRoomsForAlerts = useCallback((rooms: MarketplaceRoom[]) => {
+    if (!roomAlertPrefs.enabled) {
+      alertsInitializedRef.current = false;
+      seenRoomIdsRef.current.clear();
+      prevEligibleCountRef.current = 0;
+      return;
+    }
+    const eligible = rooms.filter((room) => (
+      room.gameId === 'ludo'
+      && room.status === 'WAITING'
+      && room.entryCredits >= roomAlertPrefs.minEtb
+      && room.entryCredits <= roomAlertPrefs.maxEtb
+    ));
+    const now = Date.now();
+    if (!alertsInitializedRef.current) {
+      eligible.forEach((room) => seenRoomIdsRef.current.add(room.id));
+      prevEligibleCountRef.current = eligible.length;
+      alertsInitializedRef.current = true;
+      if (eligible.length > 5 && now - lastManyRoomsAlertAtRef.current > 10 * 60 * 1000) {
+        lastManyRoomsAlertAtRef.current = now;
+        dispatchRoomAlert({ id: `many-${Math.floor(now / 60_000)}`, kind: 'many', count: eligible.length });
+      }
+      return;
+    }
+    const newRooms = eligible.filter((room) => !seenRoomIdsRef.current.has(room.id));
+    eligible.forEach((room) => seenRoomIdsRef.current.add(room.id));
+
+    if (prevEligibleCountRef.current <= 5 && eligible.length > 5 && now - lastManyRoomsAlertAtRef.current > 10 * 60 * 1000) {
+      lastManyRoomsAlertAtRef.current = now;
+      dispatchRoomAlert({ id: `many-${Math.floor(now / 60_000)}`, kind: 'many', count: eligible.length });
+    } else if (newRooms.length > 0) {
+      const latest = newRooms[0];
+      dispatchRoomAlert({ id: `room-${latest.id}`, kind: 'room', code: latest.code, entryCredits: latest.entryCredits });
+    }
+    prevEligibleCountRef.current = eligible.length;
+  }, [roomAlertPrefs, dispatchRoomAlert]);
+
+  const saveRoomAlertPrefs = useCallback(async (next: RoomAlertPrefs) => {
+    if (sessionToken) {
+      const response = await fetch('/api/public-rooms/notifications', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify(next),
+      });
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(body?.error || t('onlineDisconnected'));
+    }
+    setRoomAlertPrefs(next);
+    localStorage.setItem('direbet.roomAlertPrefs', JSON.stringify(next));
+    alertsInitializedRef.current = false;
+    seenRoomIdsRef.current.clear();
+    prevEligibleCountRef.current = 0;
+    setNotice(t('notifSaved'));
+    window.setTimeout(() => setNotice(''), 2500);
+  }, [sessionToken, t]);
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    let live = true;
+    fetch('/api/public-rooms/notifications', { headers: { Authorization: `Bearer ${sessionToken}` } })
+      .then(async (res) => res.ok ? await res.json() as Partial<RoomAlertPrefs> : null)
+      .then((prefs) => {
+        if (!live || !prefs) return;
+        const next: RoomAlertPrefs = {
+          enabled: prefs.enabled === true,
+          minEtb: typeof prefs.minEtb === 'number' ? prefs.minEtb : 10,
+          maxEtb: typeof prefs.maxEtb === 'number' ? prefs.maxEtb : 500,
+        };
+        setRoomAlertPrefs(next);
+        localStorage.setItem('direbet.roomAlertPrefs', JSON.stringify(next));
+      })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [sessionToken]);
+
+  useEffect(() => {
+    if (!roomAlertPrefs.enabled || page === 'lobby') return;
+    let live = true;
+    const poll = () => {
+      fetch('/api/public-rooms?gameId=ludo')
+        .then(async (res) => res.ok ? await res.json() as { rooms?: MarketplaceRoom[] } : null)
+        .then((body) => {
+          if (live && body?.rooms) processLudoRoomsForAlerts(body.rooms);
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const id = window.setInterval(poll, 8000);
+    return () => { live = false; window.clearInterval(id); };
+  }, [roomAlertPrefs.enabled, page, processLudoRoomsForAlerts]);
+
+  useEffect(() => {
+    if (isPlayingGame || activeRoomAlert || queuedRoomAlerts.length === 0) return;
+    const nextAlert = queuedRoomAlerts.length > 5
+      ? { id: `many-queued-${Date.now()}`, kind: 'many' as const, count: queuedRoomAlerts.length }
+      : queuedRoomAlerts[queuedRoomAlerts.length - 1];
+    setQueuedRoomAlerts([]);
+    setActiveRoomAlert(nextAlert);
+  }, [isPlayingGame, activeRoomAlert, queuedRoomAlerts]);
+
+  useEffect(() => {
+    if (!activeRoomAlert) return;
+    const timer = window.setTimeout(() => setActiveRoomAlert(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [activeRoomAlert]);
 
   useEffect(() => {
     localStorage.setItem('direbet.language', language);
@@ -527,12 +672,12 @@ function App() {
       {xo.winner && <div className="game-actions"><button className="primary-button wide" onClick={openXo}>{t('playAgain')}<span>↻</span></button><button className="secondary-button" onClick={leaveGame}>{t('home')}</button></div>}
     </section>}
 
-    {page === 'ludo' && <LudoPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
+    {page === 'ludo' && <LudoPractice t={t} onExit={() => { setLudoTutorial(false); leaveGame(); }} reduceEffects={reduceEffects} tutorialMode={ludoTutorial} onBackToLobby={ludoTutorial ? () => { setLudoTutorial(false); setLobbyGameId('ludo'); setPage('lobby'); } : undefined} />}
     {page === 'checkers' && <CheckersPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
     {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
 
     {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
-    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} onRoom={enterOnlineRoom} onPractice={() => lobbyGameId === 'xo' ? openXo() : openPractice(lobbyGameId)} onExit={() => nav('home')} />}
+    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} alertPrefs={roomAlertPrefs} onSaveAlertPrefs={saveRoomAlertPrefs} onRoomsSnapshot={processLudoRoomsForAlerts} onRoom={enterOnlineRoom} onPractice={() => { if (lobbyGameId === 'xo') { openXo(); return; } if (lobbyGameId === 'ludo') setLudoTutorial(true); openPractice(lobbyGameId); }} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={exitOnlineRoom} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletApp t={t} token={sessionToken} initialView={walletInitialView} onInitialViewConsumed={() => setWalletInitialView(undefined)} onSupport={() => setOverlay('support')} />}
@@ -549,6 +694,30 @@ function App() {
     {overlay && <OverlaySheet overlay={overlay} t={t} language={language} displayName={displayName} authenticated={Boolean(sessionToken)} phoneShared={account?.phoneShared ?? null} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
     {onboarding && <Onboarding step={onboardingStep} setStep={setOnboardingStep} language={language} setLanguage={setLanguage} t={t} onFinish={() => { localStorage.setItem('direbet.onboarded','true'); setOnboarding(false); }} />}
     {privateInviteCode && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !privateInviteBusy && closePrivateInvite()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="private-invite-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="private-invite-title">{t('joinRoom')}</h2><p>{t('privateRoomInviteConfirm').replace('{code}', privateInviteCode)}</p>{privateInviteError && <p className="auth-message" role="alert">{privateInviteError}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={privateInviteBusy} onClick={() => void confirmPrivateInvite()}>{privateInviteBusy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
+    {activeRoomAlert && !isPlayingGame && (
+      <div className="room-alert-toast" role="status" aria-live="polite">
+        <span className="room-alert-icon" aria-hidden="true">🔔</span>
+        <span className="room-alert-copy">
+          {activeRoomAlert.kind === 'many'
+            ? t('notifManyRoomsToast')
+            : t('notifNewRoomToast')
+                .replace('{code}', activeRoomAlert.code || '')
+                .replace('{amount}', !activeRoomAlert.entryCredits ? t('marketFree') : `${activeRoomAlert.entryCredits} ${t('etb')}`)}
+        </span>
+        <button
+          type="button"
+          className="room-alert-play-btn"
+          onClick={() => {
+            setActiveRoomAlert(null);
+            setLobbyGameId('ludo');
+            nav('lobby');
+          }}
+        >
+          {t('notifPlayBtn')}
+        </button>
+        <button type="button" className="room-alert-close" aria-label={t('close')} onClick={() => setActiveRoomAlert(null)}>×</button>
+      </div>
+    )}
     {notice && <div role="status" className="toast">{notice}</div>}
   </main>;
 }

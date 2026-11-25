@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS user_notification_preferences (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  min_etb INTEGER NOT NULL DEFAULT 10,
+  max_etb INTEGER NOT NULL DEFAULT 500,
+  five_rooms_alerted_at INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
