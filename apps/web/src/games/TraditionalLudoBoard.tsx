@@ -15,27 +15,27 @@ export function LudoPawnPin({ color }: { color: LudoBoardColor }) {
   const gradId = `ludo-pawn-grad-${color}`;
 
   return (
-    <svg className="ludo-pawn-svg" viewBox="0 0 40 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg className="ludo-pawn-svg" viewBox="3 1 34 45" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <radialGradient id={gradId} cx="35%" cy="28%" r="72%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.82" />
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.86" />
           <stop offset="28%" stopColor={light} />
           <stop offset="72%" stopColor={main} />
           <stop offset="100%" stopColor={dark} />
         </radialGradient>
       </defs>
-      <ellipse cx="20" cy="41.5" rx="14.5" ry="5.2" fill={dark} stroke="rgba(15,23,42,0.45)" strokeWidth="1" />
-      <ellipse cx="20" cy="40" rx="13.2" ry="4.3" fill={`url(#${gradId})`} />
+      <ellipse cx="20" cy="41.5" rx="14.5" ry="4.8" fill={dark} stroke="rgba(15,23,42,0.5)" strokeWidth="1" />
+      <ellipse cx="20" cy="39.8" rx="13.5" ry="4.2" fill={`url(#${gradId})`} />
       <path
-        d="M 10 38.5 C 11 28 15 21 16 17 L 24 17 C 25 21 29 28 30 38.5 Z"
+        d="M 9.5 38.5 C 10.8 27.5 14.8 21 15.8 17 L 24.2 17 C 25.2 21 29.2 27.5 30.5 38.5 Z"
         fill={`url(#${gradId})`}
         stroke={dark}
         strokeWidth="1"
         strokeLinejoin="round"
       />
-      <ellipse cx="20" cy="17.5" rx="6.6" ry="2.2" fill={light} stroke={dark} strokeWidth="0.8" />
-      <circle cx="20" cy="10.8" r="7.4" fill={`url(#${gradId})`} stroke={dark} strokeWidth="1" />
-      <ellipse cx="17.2" cy="8" rx="2.4" ry="1.5" fill="#ffffff" opacity="0.68" transform="rotate(-24 17.2 8)" />
+      <ellipse cx="20" cy="17.5" rx="7" ry="2.3" fill={light} stroke={dark} strokeWidth="0.8" />
+      <circle cx="20" cy="10.6" r="7.8" fill={`url(#${gradId})`} stroke={dark} strokeWidth="1" />
+      <ellipse cx="17.2" cy="7.8" rx="2.5" ry="1.6" fill="#ffffff" opacity="0.72" transform="rotate(-24 17.2 7.8)" />
     </svg>
   );
 }
@@ -91,7 +91,7 @@ const STATIC_TRACK_CELLS: TrackCellDef[] = [
   { row: 0, col: 8, kind: 'white' },
   { row: 1, col: 6, kind: 'white' },
   { row: 1, col: 7, kind: 'lane', color: 'red' },
-  { row: 1, col: 8, kind: 'start', color: 'red' },
+  { row: 1, col: 8, kind: 'start', color: 'red', content: '★' },
   { row: 2, col: 6, kind: 'star', color: 'blue', content: '★' },
   { row: 2, col: 7, kind: 'lane', color: 'red' },
   { row: 2, col: 8, kind: 'white' },
@@ -122,7 +122,7 @@ const STATIC_TRACK_CELLS: TrackCellDef[] = [
   { row: 8, col: 10, kind: 'white' },
   { row: 8, col: 11, kind: 'white' },
   { row: 8, col: 12, kind: 'white' },
-  { row: 8, col: 13, kind: 'start', color: 'green' },
+  { row: 8, col: 13, kind: 'start', color: 'green', content: '★' },
   { row: 8, col: 14, kind: 'white' },
 
   // Bottom Arm (cols 6..8, rows 9..14)
@@ -138,7 +138,7 @@ const STATIC_TRACK_CELLS: TrackCellDef[] = [
   { row: 12, col: 6, kind: 'white' },
   { row: 12, col: 7, kind: 'lane', color: 'yellow' },
   { row: 12, col: 8, kind: 'star', color: 'green', content: '★' },
-  { row: 13, col: 6, kind: 'start', color: 'yellow' },
+  { row: 13, col: 6, kind: 'start', color: 'yellow', content: '★' },
   { row: 13, col: 7, kind: 'lane', color: 'yellow' },
   { row: 13, col: 8, kind: 'white' },
   { row: 14, col: 6, kind: 'white' },
@@ -147,7 +147,7 @@ const STATIC_TRACK_CELLS: TrackCellDef[] = [
 
   // Left Arm (rows 6..8, cols 0..5)
   { row: 6, col: 0, kind: 'white' },
-  { row: 6, col: 1, kind: 'start', color: 'blue' },
+  { row: 6, col: 1, kind: 'start', color: 'blue', content: '★' },
   { row: 6, col: 2, kind: 'white' },
   { row: 6, col: 3, kind: 'white' },
   { row: 6, col: 4, kind: 'white' },
@@ -268,12 +268,12 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
       if (position === -1) {
         const [row, col] = rotate(HOME_SPACES[player][token], rotation);
         rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -1 });
-      } else if (position < 52) {
+      } else if (position < 51) {
         const pathIndex = (position + player * 26) % 52;
         const [row, col] = rotate(TRACK[pathIndex], rotation);
         rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: pathIndex });
       } else if (position < 57) {
-        const [row, col] = rotate(HOME_LANES[player][position - 52], rotation);
+        const [row, col] = rotate(HOME_LANES[player][position - 51], rotation);
         rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -2 });
       } else {
         // Center finish area (7, 7)
@@ -285,6 +285,7 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
   // Calculate multi-token spacing for tokens sharing the exact same cell
   const cellGroups = new Map<string, TokenEntry[]>();
   for (const t of rawTokens) {
+    if (t.pathPosition === -1) continue;
     const key = `${t.row},${t.col}`;
     const group = cellGroups.get(key) || [];
     group.push(t);
@@ -292,35 +293,35 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
   }
 
   const multiTokenOffsets: Record<number, { x: number; y: number; scale: number }[]> = {
-    1: [{ x: 0, y: 0, scale: 1 }],
+    1: [{ x: 0, y: -2, scale: 1.18 }],
     2: [
-      { x: -5, y: 0, scale: 0.88 },
-      { x: 5, y: 0, scale: 0.88 },
+      { x: -7, y: -1, scale: 0.96 },
+      { x: 7, y: -1, scale: 0.96 },
     ],
     3: [
-      { x: 0, y: -5, scale: 0.78 },
-      { x: -5, y: 5, scale: 0.78 },
-      { x: 5, y: 5, scale: 0.78 },
+      { x: 0, y: -6, scale: 0.86 },
+      { x: -7, y: 5, scale: 0.86 },
+      { x: 7, y: 5, scale: 0.86 },
     ],
     4: [
-      { x: -5, y: -5, scale: 0.72 },
-      { x: 5, y: -5, scale: 0.72 },
-      { x: -5, y: 5, scale: 0.72 },
-      { x: 5, y: 5, scale: 0.72 },
+      { x: -6, y: -6, scale: 0.8 },
+      { x: 6, y: -6, scale: 0.8 },
+      { x: -6, y: 6, scale: 0.8 },
+      { x: 6, y: 6, scale: 0.8 },
     ],
   };
 
   const tokens = rawTokens.map((t) => {
-    // Tokens in home base are in separate distinct circles, keep centered
+    // Tokens in home base sit centered inside their larger 1.4-cell circular pad
     if (t.pathPosition === -1) {
-      return { ...t, shiftX: 0, shiftY: 0, scale: 1 };
+      return { ...t, shiftX: 0, shiftY: -2, scale: 1.48 };
     }
 
     const group = cellGroups.get(`${t.row},${t.col}`) || [t];
     const groupIndex = group.findIndex((item) => item.player === t.player && item.token === t.token);
     const count = Math.min(Math.max(group.length, 1), 4);
     const offsets = multiTokenOffsets[count] || multiTokenOffsets[1];
-    const offset = offsets[groupIndex] || { x: 0, y: 0, scale: 1 };
+    const offset = offsets[groupIndex] || { x: 0, y: -2, scale: 1.18 };
 
     return {
       ...t,
@@ -364,11 +365,11 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
       >
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="ludo-finish-svg">
           <polygon points="0,0 100,0 50,50" fill="#e61c24" />
-          <polygon points="100,0 100,100 50,50" fill="#009b3a" />
-          <polygon points="0,100 100,100 50,50" fill="#ffdb00" />
-          <polygon points="0,0 0,100 50,50" fill="#29aefd" />
-          <line x1="0" y1="0" x2="100" y2="100" stroke="#8e9ca8" strokeWidth="1" />
-          <line x1="100" y1="0" x2="0" y2="100" stroke="#8e9ca8" strokeWidth="1" />
+          <polygon points="100,0 100,100 50,50" fill="#00a645" />
+          <polygon points="0,100 100,100 50,50" fill="#facc15" />
+          <polygon points="0,0 0,100 50,50" fill="#1d8cf8" />
+          <line x1="0" y1="0" x2="100" y2="100" stroke="#ffffff" strokeWidth="1.2" />
+          <line x1="100" y1="0" x2="0" y2="100" stroke="#ffffff" strokeWidth="1.2" />
         </svg>
       </div>
 

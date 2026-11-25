@@ -166,23 +166,34 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     const roomMeta = snapshot.publicRoom;
     const playerZeroColor = roomLudoColor(roomMeta.options.player0Color);
     const colorAt = (seat: number): LudoBoardColor => seat === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
-    const notice = snapshot.status === 'finished' ? result : state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : t('selectToken')) : t('marketWaitingTurn');
+    const notice = snapshot.status === 'finished' ? result : state.lastEvent === 'capture' ? t('ludoCaptureNotice') : state.lastEvent === 'home' ? t('ludoHomeNotice') : state.turn === snapshot.seat ? (state.dice === null ? t('yourTurn') : `${state.lastDice ? `${state.lastDice} · ` : ''}${t('selectToken')}`) : t('marketWaitingTurn');
     const fullscreen = () => document.fullscreenElement ? void document.exitFullscreen() : void document.documentElement.requestFullscreen?.();
+    const betText = roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')}` : t('marketFree');
     return <section className="online-room-screen public-ludo-shell ludo-room-layout">
-      <header className="ludo-room-topbar"><div className="ludo-brand"><span className="ludo-brand-crown">♛</span><strong>DIRE <b>BET</b></strong></div><span className="ludo-game-label"><i>⚄</i> Ludo</span><strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span><button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button><button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button></header>
-      <div className="ludo-notification" role="status" aria-live="polite"><span>✦</span><strong>{notice}</strong></div>
-      <div className="ludo-match-meta"><span>{roomMeta.entryCredits ? `${roomMeta.entryCredits} ${t('marketDemoCredits')} · ${t('marketPerPlayer').toLowerCase()}` : t('marketFree')}</span><small>{t('marketCrownTarget').replace('{count}', String(state.crownTarget ?? 4))}</small><small>{t('marketSimulationNote')}</small></div>
-      <div className="ludo-two-player-layout">
-        {[0, 1].map((seat) => <LudoPlayerPanel key={seat} player={snapshot.players[seat]} seat={seat} color={colorAt(seat)} crownTarget={state.crownTarget ?? 4} active={state.turn === seat && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === seat} finished={state.tokens[seat].filter((position) => position === 57).length} seconds={turnSeconds} t={t}/>) }
-        <div className="ludo-board-stage">
-          {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
-          
-          {snapshot.status === 'cancelled' && <p className="online-error" role="alert">{t('onlineDisconnected')}</p>}
+      <header className="ludo-room-topbar">
+        <strong className="ludo-room-pill">♙ {t('marketRoomId')} #{room.code}</strong>
+        <span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span>
+        <div className="ludo-topbar-actions">
+          <button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button>
+          <button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button>
         </div>
+      </header>
+      <div className="ludo-match-header">
+        <LudoPlayerPanel player={snapshot.players[0]} seat={0} color={colorAt(0)} crownTarget={state.crownTarget ?? 4} active={state.turn === 0 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 0} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
+        <div className="ludo-bet-card">
+          <span className="ludo-bet-label">{roomMeta.entryCredits ? t('marketEntry') : 'Mode'}</span>
+          <strong className="ludo-bet-amount">{betText}</strong>
+          <span className="ludo-bet-timer">◷ {turnSeconds}s</span>
+        </div>
+        <LudoPlayerPanel player={snapshot.players[1]} seat={1} color={colorAt(1)} crownTarget={state.crownTarget ?? 4} active={state.turn === 1 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 1} finished={state.tokens[1].filter((position) => position === 57).length} t={t}/>
+      </div>
+      <div className="ludo-board-stage">
+        {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} notice={notice} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
+        {snapshot.status === 'cancelled' && <p className="online-error" role="alert">{t('onlineDisconnected')}</p>}
       </div>
       {error && <p className="online-error" role="status">{error}</p>}
       {connection === 'disconnected' && <button className="secondary-button wide ludo-reconnect" onClick={() => void reconnect()}>{t('reconnect')}<span>↻</span></button>}
-          <MatchResultModal
+      <MatchResultModal
         isOpen={Boolean(isMatchFinished && outcome)}
         isWinner={Boolean(outcome?.isWinner)}
         isDraw={Boolean(outcome?.isDraw)}
@@ -228,23 +239,28 @@ function XOBoard({ game, enabled, winning, onMove }: { game: XOState; enabled: b
   return <div className="xo-board online-xo-board" role="grid" aria-label="XO">{game.board.map((cell, index) => <button key={index} role="gridcell" className={`xo-cell ${cell ? `mark-${cell.toLowerCase()}` : ''} ${winning.includes(index) ? 'winning-cell' : ''}`} disabled={!enabled || Boolean(cell)} onClick={() => onMove(index)} aria-label={`XO ${index + 1}${cell ? ` ${cell}` : ''}`}>{cell === 'X' ? <span className="x-mark">×</span> : cell === 'O' ? <span className="o-mark">○</span> : ''}</button>)}</div>;
 }
 
-function OnlineLudo({ game, seat, playerZeroColor, t, send }: { game: LudoState; seat: number; playerZeroColor: LudoBoardColor; t: Translator; send: (payload: unknown) => void }) {
+function OnlineLudo({ game, seat, playerZeroColor, notice, t, send }: { game: LudoState; seat: number; playerZeroColor: LudoBoardColor; notice?: string; t: Translator; send: (payload: unknown) => void }) {
   const colorFor = (player: number) => player === 0 ? playerZeroColor : oppositeLudoColor(playerZeroColor);
   const canRoll = game.turn === seat && game.dice === null && game.winner === null;
+  const statusLabel = game.winner !== null
+    ? (game.winner === seat ? t('gameWinTitle') : t('gameLossTitle'))
+    : (notice || (game.dice !== null && game.turn === seat ? t('selectToken') : t('marketWaitingTurn')));
   return <>
     <TraditionalLudoBoard game={game} seat={seat} playerZeroColor={playerZeroColor} onMove={(token) => send({ type: 'move', token })}/>
-    <div className="ludo-controls-wrap"><LudoDie value={game.lastDice} rollVersion={game.rollVersion} color={colorFor(game.turn)} canRoll={canRoll} onRoll={() => send({ type: 'roll' })} rollLabel={t('rollDice')}/>
-      {!canRoll && <div className="ludo-waiting-turn" role="status">{game.winner === null ? (game.dice !== null && game.turn === seat ? t('selectToken') : t('marketWaitingTurn')) : game.winner === seat ? t('gameWinTitle') : t('gameLossTitle')}</div>}
-    </div>
+    <LudoDie value={game.lastDice} rollVersion={game.rollVersion} color={colorFor(game.turn)} canRoll={canRoll} onRoll={() => send({ type: 'roll' })} rollLabel={t('rollDice')} statusLabel={statusLabel}/>
   </>;
 }
 
-function LudoPlayerPanel({ player, seat, color, crownTarget, active, own, finished, seconds, t }: { player?: RoomPlayer; seat: number; color: LudoBoardColor; crownTarget: number; active: boolean; own: boolean; finished: number; seconds: number; t: Translator }) {
+function LudoPlayerPanel({ player, seat, color, crownTarget, active, own, finished, t }: { player?: RoomPlayer; seat: number; color: LudoBoardColor; crownTarget: number; active: boolean; own: boolean; finished: number; t: Translator }) {
   const name = player?.name || t('marketPlayer');
   return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
-    <span className={`ludo-player-avatar ${color}`}>{player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')}</span>
-    <div className="ludo-player-copy"><strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong><small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {ludoColorName(color, t)}</small>{active && <span className="ludo-turn-clock">◷ {seconds}s</span>}</div>
-    <span className={`ludo-player-score ${color}`}>{finished}/{crownTarget}</span>
+    <div className="ludo-player-top">
+      <span className={`ludo-player-avatar ${color}`}>{player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')}</span>
+      <div className="ludo-player-copy">
+        <strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong>
+        <small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {finished}/{crownTarget}</small>
+      </div>
+    </div>
     <span className={`ludo-turn-label ${active ? 'visible' : ''}`}>{active ? t('yourTurn') : t('marketWaiting')}</span>
   </article>;
 }
