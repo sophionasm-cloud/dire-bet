@@ -50,14 +50,52 @@ export function LudoDie({ value, rollVersion, color, canRoll, onRoll, rollLabel,
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  return <>
-    <div className={`ludo-dice ${color} ${rolling ? 'rolling' : ''} ${reducedMotion ? 'reduced' : ''}`} role="img" aria-label={value === null ? 'Dice ready' : `Dice ${value}`}>
-      <div className="ludo-die-cube" data-value={value ?? 1}>
-        <DieFace value={1} side="front"/><DieFace value={6} side="back"/>
-        <DieFace value={3} side="right"/><DieFace value={4} side="left"/>
-        <DieFace value={2} side="top"/><DieFace value={5} side="bottom"/>
+  return (
+    <div className="ludo-dice-section">
+      <div
+        className={`ludo-dice-stage ${color} ${canRoll ? 'interactive' : ''} ${rolling ? 'rolling' : ''} ${reducedMotion ? 'reduced' : ''}`}
+        role="button"
+        tabIndex={canRoll ? 0 : -1}
+        aria-label={value === null ? 'Dice ready to roll' : `Dice showing ${value}`}
+        onClick={() => {
+          if (canRoll && !rolling) {
+            startRolling();
+            onRoll();
+          }
+        }}
+        onKeyDown={(e) => {
+          if (canRoll && !rolling && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            startRolling();
+            onRoll();
+          }
+        }}
+      >
+        <div className="ludo-die-scene">
+          <div className="ludo-die-cube" data-value={value ?? 1}>
+            <DieFace value={1} side="front" />
+            <DieFace value={6} side="back" />
+            <DieFace value={3} side="right" />
+            <DieFace value={4} side="left" />
+            <DieFace value={2} side="top" />
+            <DieFace value={5} side="bottom" />
+          </div>
+        </div>
+        <div className="ludo-dice-glow-ring" aria-hidden="true" />
       </div>
+      {canRoll && (
+        <button
+          className="ludo-roll-button"
+          disabled={rolling}
+          onClick={() => {
+            startRolling();
+            onRoll();
+          }}
+        >
+          <span>⚄</span>
+          {rolling ? '…' : rollLabel}
+        </button>
+      )}
     </div>
-    {canRoll && <button className="ludo-roll-button" disabled={rolling} onClick={() => { startRolling(); onRoll(); }}><span>⚄</span>{rolling ? '…' : rollLabel}</button>}
-  </>;
+  );
 }

@@ -50,20 +50,21 @@ export function moveLudo(state: LudoState, token: number): LudoState {
   const position = previous === -1 ? 0 : previous + state.dice;
   tokens[player][token] = position;
   let captured: { player: LudoPlayer; token: number } | undefined;
-  if (position < TRACK_LENGTH) {
+  if (position < TRACK_LENGTH - 1) {
     const trackCell = (position + STARTS[player]) % TRACK_LENGTH;
     if (!SAFE_TRACK_CELLS.has(trackCell)) {
       const opponent = other(player);
-      const victim = tokens[opponent].findIndex((value) => value >= 0 && value < TRACK_LENGTH && (value + STARTS[opponent]) % TRACK_LENGTH === trackCell);
+      const victim = tokens[opponent].findIndex((value) => value >= 0 && value < TRACK_LENGTH - 1 && (value + STARTS[opponent]) % TRACK_LENGTH === trackCell);
       if (victim >= 0) { tokens[opponent][victim] = -1; captured = { player: opponent, token: victim }; }
     }
   }
   const winner = tokens[player].filter((value) => value === HOME).length >= (state.crownTarget ?? 4) ? player : null;
   const lastEvent: LudoEvent = winner !== null ? 'win' : position === HOME ? 'home' : captured ? 'capture' : 'move';
+  const keepTurn = winner !== null || state.dice === 6 || Boolean(captured) || position === HOME;
   return {
     ...state,
     tokens,
-    turn: winner !== null || state.dice === 6 ? player : other(player),
+    turn: keepTurn ? player : other(player),
     dice: null,
     consecutiveSixes: winner !== null || state.dice === 6 ? state.consecutiveSixes : 0,
     winner,

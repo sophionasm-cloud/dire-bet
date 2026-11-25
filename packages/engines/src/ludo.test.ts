@@ -27,11 +27,38 @@ describe('Ludo rules', () => {
     expect(third.lastDice).toBe(6);
   });
 
-  it('captures an opponent off a non-safe track cell', () => {
+  it('captures an opponent off a non-safe track cell and grants an extra turn', () => {
     const state = { ...initLudo(), tokens: [[1, -1, -1, -1], [28, -1, -1, -1]] as [number[], number[]], dice: 1 };
     const moved = moveLudo(state, 0);
     expect(moved.tokens[1][0]).toBe(-1);
     expect(moved.lastEvent).toBe('capture');
+    expect(moved.turn).toBe(0);
+  });
+
+  it('protects tokens on safe star cells from capture', () => {
+    const state = { ...initLudo(), tokens: [[7, -1, -1, -1], [34, -1, -1, -1]] as [number[], number[]], dice: 1 };
+    const moved = moveLudo(state, 0);
+    expect(moved.tokens[0][0]).toBe(8);
+    expect(moved.tokens[1][0]).toBe(34);
+    expect(moved.lastEvent).toBe('move');
+    expect(moved.turn).toBe(1);
+  });
+
+  it('enters home lane at step 51 without being capturable on the outer track', () => {
+    const state = { ...initLudo(), tokens: [[50, -1, -1, -1], [25, -1, -1, -1]] as [number[], number[]], dice: 1 };
+    const moved = moveLudo(state, 0);
+    expect(moved.tokens[0][0]).toBe(51);
+    expect(moved.tokens[1][0]).toBe(25);
+    expect(moved.lastEvent).toBe('move');
+  });
+
+  it('grants an extra turn when a token reaches home without winning yet', () => {
+    const state = { ...initLudo(0, 4), tokens: [[55, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 2 };
+    const moved = moveLudo(state, 0);
+    expect(moved.tokens[0][0]).toBe(57);
+    expect(moved.lastEvent).toBe('home');
+    expect(moved.winner).toBeNull();
+    expect(moved.turn).toBe(0);
   });
 
   it('requires an exact roll to enter home', () => {

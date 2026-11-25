@@ -5,33 +5,37 @@ export type LudoBoardColor = 'red' | 'yellow' | 'green' | 'blue';
 type BoardColor = LudoBoardColor;
 
 export function LudoPawnPin({ color }: { color: LudoBoardColor }) {
-  const colorMap: Record<LudoBoardColor, string> = {
-    red: '#e61c24',
-    yellow: '#ffdb00',
-    blue: '#29aefd',
-    green: '#009b3a',
+  const palette: Record<LudoBoardColor, { light: string; main: string; dark: string }> = {
+    red: { light: '#ff7a84', main: '#e61c24', dark: '#8c0d14' },
+    yellow: { light: '#fff066', main: '#facc15', dark: '#a16207' },
+    blue: { light: '#7dd3fc', main: '#1d8cf8', dark: '#1e3a8a' },
+    green: { light: '#6ee7b7', main: '#00a645', dark: '#065f46' },
   };
-  const fillColor = colorMap[color] || '#e61c24';
+  const { light, main, dark } = palette[color] || palette.red;
+  const gradId = `ludo-pawn-grad-${color}`;
 
   return (
-    <svg className="ludo-pawn-svg" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="18" cy="38" rx="9.5" ry="4" fill="#1e293b" />
-      <ellipse cx="18" cy="37.5" rx="7.8" ry="2.8" fill={fillColor} />
+    <svg className="ludo-pawn-svg" viewBox="0 0 40 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id={gradId} cx="35%" cy="28%" r="72%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.82" />
+          <stop offset="28%" stopColor={light} />
+          <stop offset="72%" stopColor={main} />
+          <stop offset="100%" stopColor={dark} />
+        </radialGradient>
+      </defs>
+      <ellipse cx="20" cy="41.5" rx="14.5" ry="5.2" fill={dark} stroke="rgba(15,23,42,0.45)" strokeWidth="1" />
+      <ellipse cx="20" cy="40" rx="13.2" ry="4.3" fill={`url(#${gradId})`} />
       <path
-        d="M 18 3 C 9.5 3 4 8.5 4 16 C 4 23.5 13.5 33.5 18 37 C 22.5 33.5 32 23.5 32 16 C 32 8.5 26.5 3 18 3 Z"
-        fill="#ffffff"
-        stroke="#1e293b"
-        strokeWidth="1.6"
+        d="M 10 38.5 C 11 28 15 21 16 17 L 24 17 C 25 21 29 28 30 38.5 Z"
+        fill={`url(#${gradId})`}
+        stroke={dark}
+        strokeWidth="1"
         strokeLinejoin="round"
       />
-      <circle
-        cx="18"
-        cy="15.5"
-        r="5.8"
-        fill={fillColor}
-        stroke="#1e293b"
-        strokeWidth="1.2"
-      />
+      <ellipse cx="20" cy="17.5" rx="6.6" ry="2.2" fill={light} stroke={dark} strokeWidth="0.8" />
+      <circle cx="20" cy="10.8" r="7.4" fill={`url(#${gradId})`} stroke={dark} strokeWidth="1" />
+      <ellipse cx="17.2" cy="8" rx="2.4" ry="1.5" fill="#ffffff" opacity="0.68" transform="rotate(-24 17.2 8)" />
     </svg>
   );
 }
@@ -183,6 +187,8 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
   };
   const { colors, rotation } = board[playerZeroColor];
   const [visibleTokens, setVisibleTokens] = useState(() => copyTokens(game.tokens));
+  const [animatingToken, setAnimatingToken] = useState<{ player: LudoPlayer; token: number } | null>(null);
+  const [capturedToken, setCapturedToken] = useState<{ player: LudoPlayer; token: number } | null>(null);
   const previousTokens = useRef(copyTokens(game.tokens));
   const actions = legalLudoActions(game);
 
@@ -191,46 +197,138 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
     const previous = previousTokens.current;
     previousTokens.current = next;
     const move = game.lastMove;
-    if (!move) { setVisibleTokens(next); return; }
+    if (!move) {
+      setVisibleTokens(next);
+      setAnimatingToken(null);
+      setCapturedToken(null);
+      return;
+    }
 
     const start = previous[move.player][move.token];
     const end = next[move.player][move.token];
-    if (end <= start) { setVisibleTokens(next); return; }
+
+    // If no forward steps, snap directly
+    if (end <= start) {
+      setVisibleTokens(next);
+      return;
+    }
 
     const steps = Array.from({ length: end - Math.max(start, -1) }, (_, index) => start < 0 ? index : start + index + 1);
-    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setVisibleTokens(next); return; }
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisibleTokens(next);
+      return;
+    }
+
     setVisibleTokens(previous);
+    setAnimatingToken({ player: move.player, token: move.token });
+
+    const stepDuration = 140;
     const timers: number[] = [];
-    steps.forEach((position, index) => timers.push(window.setTimeout(() => {
-      setVisibleTokens((current) => {
-        const updated = copyTokens(current);
-        updated[move.player][move.token] = position;
-        return updated;
-      });
-    }, (index + 1) * 135)));
-    timers.push(window.setTimeout(() => setVisibleTokens(next), steps.length * 135 + 25));
-    return () => timers.forEach(window.clearTimeout);
+
+    steps.forEach((position, index) => {
+      timers.push(window.setTimeout(() => {
+        setVisibleTokens((current) => {
+          const updated = copyTokens(current);
+          updated[move.player][move.token] = position;
+          return updated;
+        });
+      }, (index + 1) * stepDuration));
+    });
+
+    const finishTime = steps.length * stepDuration + 30;
+    timers.push(window.setTimeout(() => {
+      setVisibleTokens(next);
+      setAnimatingToken(null);
+      if (move.captured) {
+        setCapturedToken({ player: move.captured.player, token: move.captured.token });
+        const resetTimer = window.setTimeout(() => setCapturedToken(null), 400);
+        timers.push(resetTimer);
+      }
+    }, finishTime));
+
+    return () => {
+      timers.forEach(window.clearTimeout);
+      setAnimatingToken(null);
+    };
   }, [game]);
 
-  const tokens: { player: LudoPlayer; token: number; row: number; col: number; pathPosition: number }[] = [];
+  // Compute cell coordinates for each token
+  type TokenEntry = {
+    player: LudoPlayer;
+    token: number;
+    row: number;
+    col: number;
+    pathPosition: number;
+  };
+  const rawTokens: TokenEntry[] = [];
+
   for (let player = 0; player < 2; player++) {
     for (let token = 0; token < 4; token++) {
       const position = visibleTokens[player][token];
       if (position === -1) {
         const [row, col] = rotate(HOME_SPACES[player][token], rotation);
-        tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -1 });
+        rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -1 });
       } else if (position < 52) {
         const pathIndex = (position + player * 26) % 52;
         const [row, col] = rotate(TRACK[pathIndex], rotation);
-        tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: pathIndex });
+        rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: pathIndex });
       } else if (position < 57) {
         const [row, col] = rotate(HOME_LANES[player][position - 52], rotation);
-        tokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -2 });
+        rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -2 });
       } else {
-        tokens.push({ player: player as LudoPlayer, token, row: 7, col: 7, pathPosition: -3 });
+        // Center finish area (7, 7)
+        rawTokens.push({ player: player as LudoPlayer, token, row: 7, col: 7, pathPosition: -3 });
       }
     }
   }
+
+  // Calculate multi-token spacing for tokens sharing the exact same cell
+  const cellGroups = new Map<string, TokenEntry[]>();
+  for (const t of rawTokens) {
+    const key = `${t.row},${t.col}`;
+    const group = cellGroups.get(key) || [];
+    group.push(t);
+    cellGroups.set(key, group);
+  }
+
+  const multiTokenOffsets: Record<number, { x: number; y: number; scale: number }[]> = {
+    1: [{ x: 0, y: 0, scale: 1 }],
+    2: [
+      { x: -5, y: 0, scale: 0.88 },
+      { x: 5, y: 0, scale: 0.88 },
+    ],
+    3: [
+      { x: 0, y: -5, scale: 0.78 },
+      { x: -5, y: 5, scale: 0.78 },
+      { x: 5, y: 5, scale: 0.78 },
+    ],
+    4: [
+      { x: -5, y: -5, scale: 0.72 },
+      { x: 5, y: -5, scale: 0.72 },
+      { x: -5, y: 5, scale: 0.72 },
+      { x: 5, y: 5, scale: 0.72 },
+    ],
+  };
+
+  const tokens = rawTokens.map((t) => {
+    // Tokens in home base are in separate distinct circles, keep centered
+    if (t.pathPosition === -1) {
+      return { ...t, shiftX: 0, shiftY: 0, scale: 1 };
+    }
+
+    const group = cellGroups.get(`${t.row},${t.col}`) || [t];
+    const groupIndex = group.findIndex((item) => item.player === t.player && item.token === t.token);
+    const count = Math.min(Math.max(group.length, 1), 4);
+    const offsets = multiTokenOffsets[count] || multiTokenOffsets[1];
+    const offset = offsets[groupIndex] || { x: 0, y: 0, scale: 1 };
+
+    return {
+      ...t,
+      shiftX: offset.x,
+      shiftY: offset.y,
+      scale: offset.scale,
+    };
+  });
 
   return (
     <div className="ludo-traditional-board" aria-label="Two-player traditional Ludo board">
@@ -258,7 +356,7 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
         </span>
       ))}
 
-      {/* Center 3x3 Finish Area: 4 clean colored triangles meeting at the center, NO star */}
+      {/* Center 3x3 Finish Area: 4 clean colored triangles meeting at the center */}
       <div
         className="ludo-finish-area"
         style={{ gridRow: '7 / span 3', gridColumn: '7 / span 3' }}
@@ -275,22 +373,29 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
       </div>
 
       {/* Active Pawns */}
-      {tokens.map(({ player, token, row, col, pathPosition }) => (
-        <button
-          key={`${player}-${token}`}
-          className={`ludo-board-token ${colors[player]} ${player === seat && game.turn === seat && actions.includes(token) ? 'selectable' : ''} ${player === game.turn ? 'turn-piece' : ''} ${pathPosition === -3 ? 'home-piece' : ''}`}
-          style={{
-            ...cellStyle([row, col]),
-            '--piece-shift-x': pathPosition === -1 ? '0px' : `${token % 2 ? 3 : -3}px`,
-            '--piece-shift-y': pathPosition === -1 ? '0px' : `${Math.floor(token / 2) ? 3 : -3}px`,
-          } as CSSProperties}
-          aria-label={`${colors[player]} token ${token + 1}${pathPosition === -1 ? ', at home' : ''}`}
-          disabled={player !== seat || game.turn !== seat || !actions.includes(token)}
-          onClick={() => onMove(token)}
-        >
-          <LudoPawnPin color={colors[player]} />
-        </button>
-      ))}
+      {tokens.map(({ player, token, row, col, pathPosition, shiftX, shiftY, scale }) => {
+        const isHopping = animatingToken?.player === player && animatingToken?.token === token;
+        const isCaptured = capturedToken?.player === player && capturedToken?.token === token;
+        const isSelectable = player === seat && game.turn === seat && actions.includes(token);
+
+        return (
+          <button
+            key={`${player}-${token}`}
+            className={`ludo-board-token ${colors[player]} ${isSelectable ? 'selectable' : ''} ${player === game.turn ? 'turn-piece' : ''} ${pathPosition === -3 ? 'home-piece' : ''} ${isHopping ? 'token-hopping' : ''} ${isCaptured ? 'token-captured' : ''}`}
+            style={{
+              ...cellStyle([row, col]),
+              '--piece-shift-x': `${shiftX}px`,
+              '--piece-shift-y': `${shiftY}px`,
+              '--piece-scale': `${scale}`,
+            } as CSSProperties}
+            aria-label={`${colors[player]} token ${token + 1}${pathPosition === -1 ? ', at home' : ''}`}
+            disabled={!isSelectable}
+            onClick={() => onMove(token)}
+          >
+            <LudoPawnPin color={colors[player]} />
+          </button>
+        );
+      })}
     </div>
   );
 }
