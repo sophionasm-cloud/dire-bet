@@ -474,3 +474,102 @@ describe('Telegram setup recovery', () => {
   });
 });
 
+describe('Ludo room creation Telegram notifications', () => {
+  it('notifies eligible registered users once on 201 creation and ignores retries or failures', async () => {
+    const secret = 'ludo-notify-secret';
+    const authorization = `Bearer ${await signedSession(secret, 11)}`;
+    const sentOutboxIds = new Set<string>();
+    const telegramPayloads: Array<{ chat_id: number; text: string; reply_markup?: { inline_keyboard?: Array<Array<{ web_app?: { url: string } }>> } }> = [];
+    const telegram = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).includes('api.telegram.org')) {
+        telegramPayloads.push(JSON.parse(String(init?.body || '{}')) as (typeof telegramPayloads)[number]);
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    });
+
+    const db = {
+      prepare(sql: string) {
+        let bound: unknown[] = [];
+        return {
+          bind(...values: unknown[]) { bound = values; return this; },
+          first: async () => {
+            if (sql.includes('SELECT status FROM users')) return { status: 'active' };
+            if (sql.includes('FROM user_contacts')) return { user_id: 11 };
+            if (sql.includes('SELECT enabled FROM games')) return { enabled: 1 };
+            if (sql.includes('SELECT first_name, username, web_username')) return { web_username: null, username: null, first_name: 'Sofi' };
+            return null;
+          },
+          all: async () => {
+            if (sql.includes('FROM users u')) {
+              return {
+                results: [
+                  { id: 12, telegram_id: 222001, language: 'en' },
+                  { id: 13, telegram_id: 222002, language: 'am' },
+                ],
+              };
+            }
+            return { results: [] };
+          },
+          run: async () => {
+            if (sql.includes('INSERT OR IGNORE INTO notification_outbox')) {
+              const dedupeId = String(bound[0]);
+              if (sentOutboxIds.has(dedupeId)) return { success: true, meta: { changes: 0 } };
+              sentOutboxIds.add(dedupeId);
+              return { success: true, meta: { changes: 1 } };
+            }
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+      },
+    };
+
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
+    let marketStatus = 201;
+    const matchmaker = {
+      idFromName: (id: string) => id,
+      get: () => ({
+        fetch: async () => new Response(JSON.stringify({
+          room: { id: 'LUDO77', code: 'LUDO77', gameId: 'ludo', creatorName: 'Sofi', entryCredits: 0, options: { player0Color: 'yellow', crownTarget: 2 } },
+        }), { status: marketStatus, headers: { 'content-type': 'application/json' } }),
+      }),
+    };
+    const env = { SESSION_SECRET: secret, TELEGRAM_BOT_TOKEN: 'bot-token', DB: db, RATE_LIMITER: rateLimiter, MATCHMAKER: matchmaker } as never;
+
+    try {
+      const created = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+        method: 'POST',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: 'ludo', entry: { kind: 'free' }, options: { player0Color: 'yellow', crownTarget: 2 }, idempotencyKey: 'ludo-notify-key-1' }),
+      }), env);
+      expect(created.status).toBe(201);
+      expect(telegramPayloads).toHaveLength(2);
+      expect(telegramPayloads.map((p) => p.chat_id)).toEqual([222001, 222002]);
+      expect(telegramPayloads[0].text).toContain('LUDO77');
+      expect(telegramPayloads[0].text).toContain('FREE');
+      expect(telegramPayloads[0].reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe('https://dire-bet.test/?page=lobby');
+
+      // Retrying or receiving non-201 should not send duplicate notifications.
+      marketStatus = 200;
+      const retry = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+        method: 'POST',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: 'ludo', entry: { kind: 'free' }, options: { player0Color: 'yellow', crownTarget: 2 }, idempotencyKey: 'ludo-notify-key-1' }),
+      }), env);
+      expect(retry.status).toBe(200);
+      expect(telegramPayloads).toHaveLength(2);
+
+      // Even if market somehow returned 201 again for the same room code, notification_outbox deduplicates it.
+      marketStatus = 201;
+      await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+        method: 'POST',
+        headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: 'ludo', entry: { kind: 'free' }, options: { player0Color: 'yellow', crownTarget: 2 }, idempotencyKey: 'ludo-notify-key-2' }),
+      }), env);
+      expect(telegramPayloads).toHaveLength(2);
+    } finally {
+      telegram.mockRestore();
+    }
+  });
+});
+
+

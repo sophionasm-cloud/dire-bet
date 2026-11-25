@@ -426,7 +426,7 @@
 .market-section-heading,.market-form-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .market-section-heading{margin-bottom:11px}.market-section-heading h2,.market-form-heading h2{margin:3px 0 0;color:#f3f7ff;font-size:16px}
 .market-section-heading h2 b{display:inline-grid;min-width:22px;height:22px;place-items:center;margin-left:4px;border-radius:7px;background:#163251;color:#ffca6a;font-size:11px}
-.market-refresh{width:38px;height:38px;border:1px solid #354d6b;border-radius:11px;background:#12233c;color:#d9eaff;font-size:23px;line-height:1;cursor:pointer}
+.market-refresh{width:44px;min-width:44px;height:38px;border:1px solid #354d6b;border-radius:11px;background:#12233c;color:#d9eaff;font-size:23px;line-height:1;cursor:pointer}
 .market-refresh:disabled{opacity:.65;cursor:wait}
 .public-room-list{gap:8px}
 .public-room-card{padding:10px 11px;border-color:#35435a;border-radius:14px;background:linear-gradient(115deg,#192538ed,#101a2bed);box-shadow:inset 0 1px #ffffff0a}
@@ -1706,3 +1706,16 @@
   .dash-profile-menu{animation:none}
   .promo-track{transition:none}
 }
+.public-lobby-header.compact-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.public-lobby-header .market-back-button{grid-column:auto;margin:0;min-height:36px;display:inline-flex;align-items:center;gap:6px;padding:0 14px;border:1px solid #304764;border-radius:999px;background:linear-gradient(145deg,#142338,#0c1728);color:#e6effa;font-size:12px;font-weight:600;box-shadow:inset 0 1px rgba(255,255,255,.06);transition:border-color .16s,background .16s,transform .14s}
+.public-lobby-header .market-back-button:hover{border-color:#4f6f96;background:#192d47;color:#fff}
+.public-lobby-header .market-back-button:active{transform:scale(.97)}
+.market-section-heading.compact-empty-heading{margin-bottom:0}
+.market-loading-text{margin:2px 0 0;color:#9fb0c5;font-size:11px}
+.ludo-lobby-screen .market-entry-options.ludo-entry-options{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.ludo-lobby-screen .market-color-field.ludo-color-circles button{gap:10px;padding:0 10px}
+.ludo-lobby-screen .market-color-field.ludo-color-circles .color-token{width:15px;height:15px}
+.ludo-lobby-screen .market-color-field.ludo-color-circles b{color:#c9d8eb;font-size:10px;letter-spacing:.06em}
+.market-color-field button.color-choice-yellow.selected{border-color:#5eead4;background:linear-gradient(135deg,rgba(45,212,191,.24),rgba(56,189,248,.15));box-shadow:inset 0 0 0 1px rgba(94,234,212,.45),0 0 14px rgba(45,212,191,.16)}
+.ludo-lobby-screen .market-create-button{margin-top:10px}
+@media(max-width:560px){.ludo-lobby-screen .market-entry-options.ludo-entry-options{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.ludo-lobby-screen .market-color-field.ludo-color-circles .color-token{width:14px;height:14px}}

@@ -34,7 +34,7 @@ export type Settlement = {
 };
 
 export const DEFAULT_MARKETPLACE_SETTINGS: MarketplaceSettings = {
-  standardAmounts: [10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000],
+  standardAmounts: [10, 30, 50, 100, 200, 300, 500],
   customEnabled: true,
   customMaximum: 1000,
   waitingSeconds: 30,

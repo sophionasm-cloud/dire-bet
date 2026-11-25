@@ -13,8 +13,12 @@ import {
 } from './marketplace';
 
 describe('public room entry rules', () => {
-  it.each([10, 20, 30, 50, 100, 200, 300, 400, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000])('accepts standard entry %i ETB', (amount) => {
+  it.each([10, 30, 50, 100, 200, 300, 500])('accepts standard entry %i ETB', (amount) => {
     expect(parseEntryChoice({ kind: 'standard', amount }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(amount);
+  });
+
+  it.each([20, 400, 700, 1000, 2000, 3000, 5000, 7000, 10000])('rejects removed standard entry %i ETB', (amount) => {
+    expect(parseEntryChoice({ kind: 'standard', amount }, DEFAULT_MARKETPLACE_SETTINGS)).toBeNull();
   });
 
   it('accepts a whole-credit custom amount above 100 within the configured cap', () => {
@@ -33,9 +37,9 @@ describe('public room entry rules', () => {
     expect(parseEntryChoice({ kind: 'free' }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(0);
   });
 
-  it('uses a 30-second default and supports the full published stake list', () => {
+  it('uses a 30-second default and supports the published stake list', () => {
     expect(DEFAULT_MARKETPLACE_SETTINGS.waitingSeconds).toBe(30);
-    expect(DEFAULT_MARKETPLACE_SETTINGS.standardAmounts).toContain(10000);
+    expect(DEFAULT_MARKETPLACE_SETTINGS.standardAmounts).toEqual([10, 30, 50, 100, 200, 300, 500]);
   });
 
   it('accepts only the supported Ludo color and crown choices', () => {

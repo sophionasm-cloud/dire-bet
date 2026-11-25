@@ -16,9 +16,11 @@ type Props = {
 type MarketState = { type: 'market'; rooms: MarketplaceRoom[]; ownRoom: MarketplaceRoom | null; serverTime: number };
 type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balance?: number; settings?: MarketplaceSettings };
 
-const defaultSettings: MarketplaceSettings = { standardAmounts: [10, 20, 30, 50, 100, 200, 500], customEnabled: true, customMaximum: 1000, waitingSeconds: 30, realMoneyEnabled: false };
+const LUDO_PAID_AMOUNTS = [10, 30, 50, 100, 200, 300, 500];
+const defaultSettings: MarketplaceSettings = { standardAmounts: LUDO_PAID_AMOUNTS, customEnabled: true, customMaximum: 1000, waitingSeconds: 30, realMoneyEnabled: false };
 
 export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom, onPractice, onExit }: Props) {
+  const isLudo = gameId === 'ludo';
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
   const [pendingJoin, setPendingJoin] = useState<MarketplaceRoom | null>(null);
@@ -41,7 +43,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
   const roomMutation = useRef(0);
   const cancelledRooms = useRef(new Set<string>());
   const amount = entry === -1 ? Number(customAmount) : entry;
-  const insufficient = Boolean(token && balance !== null && amount > balance);
+  const insufficient = Boolean(token && balance !== null && amount > 0 && amount > balance);
   const title = gameTitle(gameId);
   const headers = useMemo<Record<string, string>>(() => { const value: Record<string, string> = {}; if (token) value.Authorization = `Bearer ${token}`; return value; }, [token]);
 
@@ -181,18 +183,24 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
     window.dispatchEvent(new Event('direbet:wallet-changed'));
   }, [activeRoom]);
 
+  useEffect(() => {
+    if (!isLudo && entry === 0) setEntry(10);
+  }, [isLudo, entry]);
+
   const create = async () => {
     if (creating.current) return;
     launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
-    if (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum))) { setMessage(t('marketAmountInvalid')); return; }
+    const isFree = isLudo && entry === 0;
+    if (!isFree && (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum)))) { setMessage(t('marketAmountInvalid')); return; }
     creating.current = true;
     setBusy(true); setMessage('');
     try {
       const freshKey = crypto.randomUUID();
+      const entryPayload = isFree ? { kind: 'free' } : { kind: entry === -1 ? 'custom' : 'standard', amount };
       const response = await fetch('/api/public-rooms', {
         method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ gameId, entry: { kind: entry === -1 ? 'custom' : 'standard', amount }, options: gameId === 'ludo' ? { player0Color, crownTarget } : {}, idempotencyKey: freshKey }),
+        body: JSON.stringify({ gameId, entry: entryPayload, options: isLudo ? { player0Color, crownTarget } : {}, idempotencyKey: freshKey }),
       });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.room) throw new Error(result.error || t('onlineDisconnected'));
@@ -271,14 +279,19 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
 
   // Inline active room in public lobby
 
-  return <section className="screen public-lobby-screen">
-    <header className="public-lobby-header"><button className="back-button" onClick={onExit}>← {t('home')}</button><div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div><span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
-    <p className="public-lobby-intro">{t('marketLobbyIntro')}</p>
+  const paidOptions = isLudo
+    ? LUDO_PAID_AMOUNTS
+    : (settings.standardAmounts.length > 0 ? settings.standardAmounts.filter((value) => LUDO_PAID_AMOUNTS.includes(value)) : LUDO_PAID_AMOUNTS);
+  const visiblePaidAmounts = paidOptions.length > 0 ? paidOptions : LUDO_PAID_AMOUNTS;
+
+  return <section className={`screen public-lobby-screen${isLudo ? ' ludo-lobby-screen' : ''}`}>
+    <header className={`public-lobby-header${isLudo ? ' compact-header' : ''}`}><button className="back-button market-back-button" type="button" onClick={onExit}>← {t('home')}</button>{!isLudo && <div className="public-lobby-game"><span className={`market-game-mark ${gameId}`}>{gameSymbol(gameId)}</span><div><span className="eyebrow">{t('onlineMatches')}</span><h1>{title}</h1></div></div>}<span className={`market-connection ${connection}`}><i/>{connection === 'connected' ? t('marketConnected') : connection === 'connecting' ? t('marketConnecting') : t('marketOffline')}</span></header>
+    {!isLudo && <p className="public-lobby-intro">{t('marketLobbyIntro')}</p>}
     
     {!token && <div className="market-signin-hint" role="status">{t('marketTelegramRequired')}</div>}
     <div className="market-room-browser">
-      <div className="market-section-heading"><div><span className="eyebrow">{t('marketPublicRooms')}</span><h2>{t('marketAvailableRooms')} <b>{rooms.length}</b></h2></div><button className="market-refresh" type="button" aria-label={t('marketRefresh')} title={t('marketRefresh')} disabled={refreshing || loading} onClick={() => { setRefreshing(true); void loadRooms().finally(() => setRefreshing(false)); }}>{refreshing ? '…' : '↻'}</button></div>
-      <div className="public-room-list">
+      <div className={`market-section-heading${isLudo && !loading && !activeRoom && rooms.length === 0 ? ' compact-empty-heading' : ''}`}><div>{!isLudo && <span className="eyebrow">{t('marketPublicRooms')}</span>}<h2>{t('marketAvailableRooms')} <b>{rooms.length}</b></h2></div><button className="market-refresh" type="button" aria-label={t('marketRefresh')} title={t('marketRefresh')} disabled={refreshing || loading} onClick={() => { setRefreshing(true); void loadRooms().finally(() => setRefreshing(false)); }}>{refreshing ? '…' : '↻'}</button></div>
+      {(activeRoom || loading || rooms.length > 0 || !isLudo) && <div className="public-room-list">
         {activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) && (
           <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
             <div className="market-room-primary">
@@ -319,22 +332,22 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
             <button className="market-join-button" disabled={busy || !token} onClick={() => void resume()}>{busy ? '…' : t('marketResumeMatch')}</button>
           </div>
         </article>}
-        {loading ? <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div> : rooms.length ? rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => { setMessage(''); setPendingJoin(room); }} t={t}/>) : <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div>}
-      </div>
+        {loading ? (isLudo ? <p className="market-loading-text">{t('marketLoading')}</p> : <div className="market-empty"><span>◌</span><p>{t('marketLoading')}</p></div>) : rooms.length ? rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => { setMessage(''); setPendingJoin(room); }} t={t}/>) : !isLudo ? <div className="market-empty compact"><span>⌁</span><div><h2>{t('marketNoRooms')}</h2><p>{t('marketNoRoomsCopy')}</p></div></div> : null}
+      </div>}
     </div>
     <div className="market-create-panel">
-      <div className="market-form-heading"><div><span className="eyebrow">{t('marketCreateRoom')}</span><h2>{t('marketEntryAmount')}</h2></div><span className="market-capacity">2 {t('marketPlayersRequired')}</span></div>
-      {gameId === 'ludo' && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
+      <div className="market-form-heading"><div>{isLudo ? <h2>{t('marketCreateRoom')}</h2> : <><span className="eyebrow">{t('marketCreateRoom')}</span><h2>{t('marketEntryAmount')}</h2></>}</div><span className="market-capacity">2 {t('marketPlayersRequired')}</span></div>
+      {isLudo && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
       <div className="market-option-heading"><strong>{t('marketEntryAmount')}</strong><small>{t('marketDemoCredits')}</small></div>
-      <div className="market-entry-options">{(settings.standardAmounts.length > 0 ? settings.standardAmounts : [10, 20, 30, 50, 100, 200, 500]).map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
-      {entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
-      {gameId === 'ludo' && <fieldset className="market-color-field"><legend>{t('marketColor')}</legend><button type="button" aria-pressed={player0Color === 'yellow'} className={player0Color === 'yellow' ? 'selected' : ''} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><span>{t('marketYellow')}</span><b>VS</b><i className="color-token red-token"/><span>{t('marketRed')}</span></button><button type="button" aria-pressed={player0Color === 'green'} className={player0Color === 'green' ? 'selected' : ''} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><span>{t('marketGreen')}</span><b>VS</b><i className="color-token blue-token"/><span>{t('marketBlue')}</span></button></fieldset>}
-      <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>
+      <div className={`market-entry-options${isLudo ? ' ludo-entry-options' : ''}`}>{isLudo && <button type="button" aria-pressed={entry === 0} className={entry === 0 ? 'selected' : ''} onClick={() => setEntry(0)}><strong>{t('marketFree')}</strong></button>}{visiblePaidAmounts.map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}{!isLudo && settings.customEnabled && <button type="button" aria-pressed={entry === -1} className={entry === -1 ? 'selected' : ''} onClick={() => setEntry(-1)}><strong>{t('marketCustom')}</strong></button>}</div>
+      {!isLudo && entry === -1 && <label className="market-custom-field">{t('marketCustomAmount')}<input inputMode="numeric" type="number" min="101" max={settings.customMaximum} step="1" value={customAmount} onChange={(event) => setCustomAmount(event.target.value.replace(/\D/g, '').slice(0, 6))}/><small>{t('marketCustomHelp').replace('{max}', formatCredits(settings.customMaximum))}</small></label>}
+      {isLudo && <fieldset className="market-color-field ludo-color-circles"><legend>{t('marketColor')}</legend><button type="button" aria-label={`${t('marketYellow')} vs ${t('marketBlue')}`} aria-pressed={player0Color === 'yellow'} className={`color-choice-yellow ${player0Color === 'yellow' ? 'selected' : ''}`} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><b>VS</b><i className="color-token blue-token"/></button><button type="button" aria-label={`${t('marketGreen')} vs ${t('marketBlue')}`} aria-pressed={player0Color === 'green'} className={`color-choice-green ${player0Color === 'green' ? 'selected' : ''}`} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><b>VS</b><i className="color-token blue-token"/></button></fieldset>}
+      {!isLudo && <div className="market-settings-line"><span>{t('marketMode')}</span><strong>{gameMode(gameId)}</strong></div>}
       
       {insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
       {message && <p className="market-message" role="alert">{message}</p>}
-      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}<span>↗</span></button>
-      <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>
+      <button className="primary-button wide market-create-button" disabled={busy || !token || insufficient || Boolean(activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status))} onClick={() => void create()}>{busy ? t('marketCreating') : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})` : `${t('marketCreateAction')} · ${amount === 0 ? t('marketFree') : `${amount} ${t('etb')}`}`}<span>↗</span></button>
+      {!isLudo && <button className="market-practice-link" onClick={onPractice}>{t('marketPracticeInstead')} →</button>}
     </div>
     {pendingJoin && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && setPendingJoin(null)}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="market-join-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={busy} onClick={() => setPendingJoin(null)} aria-label={t('close')}><span aria-hidden="true">×</span></button><span className="eyebrow">{t('marketPublicRooms')}</span><h2 id="market-join-title">{t('joinRoom')}</h2><p>{t('marketJoinConfirm').replace('{game}', gameTitle(pendingJoin.gameId)).replace('{amount}', pendingJoin.entryCredits === 0 ? t('marketFree') : `${formatCredits(pendingJoin.entryCredits)} ${t('etb')}`)}</p>{message && <p className="auth-message" role="alert">{message}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setPendingJoin(null)}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={busy || !token} onClick={() => void join(pendingJoin)}>{busy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
   </section>;
@@ -343,7 +356,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, onRoom,
 function RoomCard({ room, now, busy, canJoin, onJoin, t }: { room: MarketplaceRoom; now: number; busy: boolean; canJoin: boolean; onJoin: () => void; t: Translator }) {
   const seconds = Math.max(0, Math.ceil((room.expiresAt - now) / 1000));
   const target = room.options.crownTarget === 1 || room.options.crownTarget === 2 || room.options.crownTarget === 4 ? room.options.crownTarget : 4;
-  const pair = room.options.player0Color === 'green' ? t('marketGreenVsBlue') : t('marketYellowVsRed');
+  const pair = room.options.player0Color === 'green' ? t('marketGreenVsBlue') : `${t('marketYellow')} vs ${t('marketBlue')}`;
   return <article className="public-room-card">
     <div className="market-room-primary"><span className="market-avatar">{room.creatorAvatar}</span><div className="market-room-player"><strong>{room.creatorName}</strong><small>{room.gameId === 'ludo' ? <><span aria-hidden="true">♛</span> {target} · {pair}</> : gameMode(room.gameId)}</small></div><div className="market-room-stake"><strong>{room.entryCredits === 0 ? t('marketFree') : formatCredits(room.entryCredits)}</strong><small>{room.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div><div className="market-room-time"><strong>{seconds}s</strong><small>{t('marketTimeLeft')}</small></div><button className="market-join-button" disabled={busy || !canJoin} onClick={onJoin}>{canJoin ? t('joinRoom') : t('marketTelegramRequired')}</button></div>
     <div className="market-room-details"><span>#{room.code}</span><span>{gameTitle(room.gameId)} · {room.mode}</span><span>{room.playerCount}/{room.capacity} {t('marketPlayersRequired')}</span></div>

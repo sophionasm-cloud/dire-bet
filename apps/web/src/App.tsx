@@ -65,7 +65,7 @@ function posterSrc(id: string): string {
 function App() {
   const requestedParams = new URLSearchParams(location.search);
   const requestedPage = requestedParams.get('page');
-  const initialPage: Page = requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu' ? requestedPage : 'home';
+  const initialPage: Page = requestedPage === 'wallet' || requestedPage === 'account' || requestedPage === 'login' || requestedPage === 'menu' || requestedPage === 'lobby' ? requestedPage : 'home';
   const telegramInitData = window.Telegram?.WebApp?.initData || '';
   const telegramMiniApp = Boolean(telegramInitData);
   const [language, setLanguage] = useState<Language>(() => {

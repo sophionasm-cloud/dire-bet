@@ -296,7 +296,74 @@ function publicMarketplace(env: Env): DurableObjectStub {
   return env.MATCHMAKER.get(env.MATCHMAKER.idFromName('public-room-marketplace'));
 }
 
-async function createPublicRoom(request: Request, env: Env): Promise<Response> {
+function escapeTelegramHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function notifyNewLudoRoom(
+  env: Env,
+  room: { creatorUserId: number; creatorName: string; roomCode: string; entryCredits: number; crownTarget: number; origin: string },
+): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN) return;
+  const recipientsResult = await env.DB.prepare(`
+    SELECT u.id, u.telegram_id, u.language
+    FROM users u
+    WHERE u.id != ?
+      AND u.status = 'active'
+      AND u.telegram_id > 0
+      AND EXISTS (SELECT 1 FROM user_contacts c WHERE c.user_id = u.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM user_profiles p
+        WHERE p.user_id = u.id
+          AND (p.self_excluded_until > CURRENT_TIMESTAMP OR p.cooling_off_until > CURRENT_TIMESTAMP)
+      )
+    ORDER BY u.updated_at DESC
+    LIMIT 40
+  `).bind(room.creatorUserId).all<{ id: number; telegram_id: number; language?: string }>().catch(() => null);
+  const recipients = recipientsResult?.results || [];
+  if (recipients.length === 0) return;
+
+  const safeCreator = escapeTelegramHtml(room.creatorName || 'Player');
+  const lobbyUrl = `${room.origin}/?page=lobby`;
+
+  for (const recipient of recipients) {
+    if (!Number.isSafeInteger(recipient.telegram_id) || recipient.telegram_id <= 0) continue;
+    const dedupeId = `ludo-room:${room.roomCode}:${recipient.id}`;
+    let inserted = true;
+    try {
+      const outboxResult = await env.DB.prepare(
+        `INSERT OR IGNORE INTO notification_outbox (id, user_id, payload_json, status) VALUES (?, ?, ?, 'sent')`
+      ).bind(dedupeId, recipient.id, JSON.stringify({ type: 'ludo_room_created', roomCode: room.roomCode, entryCredits: room.entryCredits })).run();
+      if (outboxResult?.meta && typeof outboxResult.meta.changes === 'number') {
+        inserted = outboxResult.meta.changes === 1;
+      }
+    } catch {
+      // Minimal test mocks without notification_outbox should not prevent notification delivery.
+    }
+    if (!inserted) continue;
+
+    const lang = botLanguage(recipient.language);
+    const stakeText = room.entryCredits === 0
+      ? ({ en: 'FREE', am: 'ነፃ', so: 'Bilaash', om: 'Bilisa' }[lang])
+      : `${room.entryCredits} ${lang === 'am' ? 'ብር' : 'ETB'}`;
+    const text = ({
+      en: `🎲 <b>New Ludo room created</b>\n\n👤 <b>${safeCreator}</b> opened a Ludo room (#<code>${room.roomCode}</code>)\n💰 Entry: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nTap below to join before the seat fills.`,
+      am: `🎲 <b>አዲስ የሉዶ ክፍል ተፈጥሯል</b>\n\n👤 <b>${safeCreator}</b> የሉዶ ክፍል ከፍቷል (#<code>${room.roomCode}</code>)\n💰 መግቢያ: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nከመሙላቱ በፊት ለመቀላቀል ከታች ይንኩ።`,
+      so: `🎲 <b>Qol cusub oo Ludo ah waa la furay</b>\n\n👤 <b>${safeCreator}</b> wuxuu furay qol Ludo (#<code>${room.roomCode}</code>)\n💰 Gelitaanka: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nHoos taabo si aad ugu biirto.`,
+      om: `🎲 <b>Kutaan Ludo haaraan uumameera</b>\n\n👤 <b>${safeCreator}</b> kutaa Ludo baneera (#<code>${room.roomCode}</code>)\n💰 Seensa: <b>${stakeText}</b> · ♛ ${room.crownTarget}\n\nOsooo hin guutiin itti makamuuf gadii tuqi.`,
+    })[lang];
+    const buttonLabel = botButtons[lang].play;
+
+    await telegramApi<unknown>(env.TELEGRAM_BOT_TOKEN, 'sendMessage', {
+      chat_id: recipient.telegram_id,
+      text,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: buttonLabel, web_app: { url: lobbyUrl } }]] },
+    }).catch(() => undefined);
+  }
+}
+
+async function createPublicRoom(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
   const userId = await readSession(request, env.SESSION_SECRET);
   if (!userId) return json({ error: 'Open DIRE BET in Telegram to create a public room.' }, 401);
@@ -308,10 +375,28 @@ async function createPublicRoom(request: Request, env: Env): Promise<Response> {
   if (!game || game.enabled !== 1) return json({ error: 'This game is not open for online play.' }, 409);
   const displayName = await gameDisplayName(env, userId);
   if (!displayName) return json({ error: 'Player account is unavailable.' }, 401);
-  return publicMarketplace(env).fetch('https://market/create', {
+  const marketResponse = await publicMarketplace(env).fetch('https://market/create', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...input, userId, displayName }),
   });
+  if (marketResponse.status === 201 && input.gameId === 'ludo' && env.TELEGRAM_BOT_TOKEN) {
+    const createdBody = await marketResponse.clone().json().catch(() => null) as {
+      room?: { code?: string; entryCredits?: number; creatorName?: string; options?: { crownTarget?: number } };
+    } | null;
+    if (createdBody?.room?.code) {
+      const notifyTask = notifyNewLudoRoom(env, {
+        creatorUserId: userId,
+        creatorName: createdBody.room.creatorName || displayName,
+        roomCode: createdBody.room.code,
+        entryCredits: typeof createdBody.room.entryCredits === 'number' ? createdBody.room.entryCredits : 0,
+        crownTarget: typeof createdBody.room.options?.crownTarget === 'number' ? createdBody.room.options.crownTarget : 1,
+        origin: new URL(request.url).origin,
+      }).catch(() => undefined);
+      if (ctx) ctx.waitUntil(notifyTask);
+      else await notifyTask;
+    }
+  }
+  return marketResponse;
 }
 
 async function superAdmin(request: Request, env: Env): Promise<number | Response> {
@@ -324,7 +409,7 @@ async function superAdmin(request: Request, env: Env): Promise<number | Response
   return userId;
 }
 
-async function handlePublicMarketplace(request: Request, env: Env): Promise<Response | null> {
+async function handlePublicMarketplace(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === '/api/public-rooms/config' && request.method === 'GET') return publicMarketplace(env).fetch('https://market/config');
   if (url.pathname === '/api/public-rooms' && request.method === 'GET') {
@@ -344,7 +429,7 @@ async function handlePublicMarketplace(request: Request, env: Env): Promise<Resp
     const gameId = url.searchParams.get('gameId') || '';
     return publicMarketplace(env).fetch(`https://market/mine?userId=${userId}&gameId=${encodeURIComponent(gameId)}`);
   }
-  if (url.pathname === '/api/public-rooms' && request.method === 'POST') return createPublicRoom(request, env);
+  if (url.pathname === '/api/public-rooms' && request.method === 'POST') return createPublicRoom(request, env, ctx);
   if (url.pathname === '/api/public-rooms/ws-ticket' && request.method === 'POST') {
     if (!sameOrigin(request)) return json({ error: 'Origin rejected' }, 403);
     const userId = await readSession(request, env.SESSION_SECRET);
@@ -1736,7 +1821,7 @@ async function handleWalletAndStaff(request: Request, env: Env): Promise<Respons
   return null;
 }
 
-async function handleRequest(request: Request, env: Env): Promise<Response> {
+async function handleRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: securityHeaders });
   if (url.pathname === '/api/health' && request.method === 'GET') {
@@ -1759,7 +1844,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   }
   const walletStaffResponse = await handleWalletAndStaff(request, env);
   if (walletStaffResponse) return walletStaffResponse;
-  const publicMarketplaceResponse = await handlePublicMarketplace(request, env);
+  const publicMarketplaceResponse = await handlePublicMarketplace(request, env, ctx);
   if (publicMarketplaceResponse) return publicMarketplaceResponse;
   if (url.pathname === '/api/rooms' && request.method === 'POST') return createRoom(request, env);
   const join = url.pathname.match(/^\/api\/rooms\/([23456789A-HJ-NP-Z]{6})\/join$/i);
@@ -1806,8 +1891,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    try { return await handleRequest(request, env); }
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    try { return await handleRequest(request, env, ctx); }
     catch { return json({ error: 'Service temporarily unavailable' }, 503); }
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

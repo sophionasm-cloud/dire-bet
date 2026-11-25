@@ -164,6 +164,10 @@ export class Matchmaker {
       id INTEGER PRIMARY KEY AUTOINCREMENT, admin_user_id INTEGER NOT NULL, action TEXT NOT NULL,
       entity_id TEXT, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
     sql.exec('INSERT OR IGNORE INTO marketplace_settings (singleton, settings_json, updated_at) VALUES (1, ?, ?)', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
+    const storedSettings = sql.exec<{ settings_json: string }>('SELECT settings_json FROM marketplace_settings WHERE singleton = 1').toArray()[0]?.settings_json;
+    if (storedSettings && storedSettings.includes('10000') && storedSettings.includes(',20,')) {
+      sql.exec('UPDATE marketplace_settings SET settings_json = ?, updated_at = ? WHERE singleton = 1', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
+    }
   }
 
   private settings(): MarketplaceSettings {
