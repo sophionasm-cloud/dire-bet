@@ -359,5 +359,9 @@
   "ludoTutStepCapture": "Qabasho fiican! Calaamadda kale salka ayay ku noqotay.",
   "ludoTutStepHome": "Waxaad ku dhowdahay guriga! Ku gaar tiro sax ah si aad u dhaliso.",
   "ludoTutStepComplete": "Hagaha wuu dhammaaday! Waad dhammaysay ciyaarta tababarka.",
-  "ludoTutBackToLobby": "Ku noqo hoolka"
+  "ludoTutBackToLobby": "Ku noqo hoolka",
+  "forfeitExitTitle": "Iska dhiib ciyaarta?",
+  "forfeitExitConfirm": "Ka bixitaanka ciyaarta socota waxay ka dhigan tahay guul-darro degdeg ah. Ma hubtaa inaad baxayso?",
+  "forfeitAndExit": "Is dhiib oo ka bax",
+  "stayInGame": "Ku sugnow ciyaarta"
 }

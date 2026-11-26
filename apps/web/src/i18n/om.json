@@ -359,5 +359,9 @@
   "ludoTutStepCapture": "Qabannaa gaarii! Token morkataa gara bu'uuraatti deebi'a.",
   "ludoTutStepHome": "Manaaf dhiyaatteetta! Lakkoofsa sirriitiin gara mana gidduu seeni.",
   "ludoTutStepComplete": "Qajeelfamni xumurameera! Tapha shaakalaa xumurteetta.",
-  "ludoTutBackToLobby": "Gara kutaalee deebi'i"
+  "ludoTutBackToLobby": "Gara kutaalee deebi'i",
+  "forfeitExitTitle": "Tapha dhiisuu?",
+  "forfeitExitConfirm": "Tapha adeemsarra jiru keessaa ba'uun akka mo'amuutti lakkaa'ama. Dhuguma ba'uu barbaadduu?",
+  "forfeitAndExit": "Of kennitee ba'i",
+  "stayInGame": "Tapharratti hafi"
 }

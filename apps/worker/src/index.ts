@@ -2073,27 +2073,32 @@ export class GameRoom {
       return this.sendError(socket, 'The turn timer expired. An automatic move was made.');
     }
     if (room.terminal) return this.sendError(socket, 'This match has finished.');
-    const control = input.type === 'resign' || input.type === 'draw-offer' || input.type === 'draw-accept' || input.type === 'draw-decline';
+    const isResign = input.type === 'resign' || input.type === 'forfeit';
+    const control = isResign || input.type === 'draw-offer' || input.type === 'draw-accept' || input.type === 'draw-decline';
     if (!control && gameTurn(room) !== playerIndex) return this.sendError(socket, 'Please wait for your turn.');
     const turnBefore = gameTurn(room);
     const previous = { game: room.game, status: room.status, terminal: room.terminal, drawOfferBy: room.drawOfferBy, turnDeadline: room.turnDeadline, timeoutRecorded: room.timeoutRecorded };
     try {
       if (control) {
-        if (room.gameId !== 'checkers') return this.sendError(socket, 'Move is not allowed for this game.');
-        if (input.type === 'resign') {
+        if (isResign) {
           room.terminal = { winner: playerIndex === 0 ? 1 : 0, reason: 'resign' };
           room.status = 'finished';
-        } else if (input.type === 'draw-offer') {
-          if (room.drawOfferBy !== undefined) return this.sendError(socket, 'A draw offer is already pending.');
-          room.drawOfferBy = playerIndex;
-        } else if (input.type === 'draw-accept') {
-          if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to accept.');
-          room.terminal = { winner: 'draw', reason: 'draw' };
-          room.drawOfferBy = undefined;
-          room.status = 'finished';
+          room.turnDeadline = undefined;
+          room.reconnectDeadline = undefined;
         } else {
-          if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to decline.');
-          room.drawOfferBy = undefined;
+          if (room.gameId !== 'checkers') return this.sendError(socket, 'Move is not allowed for this game.');
+          if (input.type === 'draw-offer') {
+            if (room.drawOfferBy !== undefined) return this.sendError(socket, 'A draw offer is already pending.');
+            room.drawOfferBy = playerIndex;
+          } else if (input.type === 'draw-accept') {
+            if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to accept.');
+            room.terminal = { winner: 'draw', reason: 'draw' };
+            room.drawOfferBy = undefined;
+            room.status = 'finished';
+          } else {
+            if (room.drawOfferBy === undefined || room.drawOfferBy === playerIndex) return this.sendError(socket, 'There is no draw offer to decline.');
+            room.drawOfferBy = undefined;
+          }
         }
       } else {
         room.drawOfferBy = undefined;

@@ -359,5 +359,9 @@
   "ludoTutStepCapture": "ጥሩ መያዝ! የተቃዋሚው ድንጋይ ወደ መነሻው ይመለሳል።",
   "ludoTutStepHome": "ቤት ደርሰዋል! ትክክለኛ ቁጥር አግኝተው ወደ መሃል ቤት ይግቡ።",
   "ludoTutStepComplete": "መመሪያው ተጠናቋል! የልምምድ ጨዋታውን አጠናቀዋል።",
-  "ludoTutBackToLobby": "ወደ ክፍሎች ተመለስ"
+  "ludoTutBackToLobby": "ወደ ክፍሎች ተመለስ",
+  "forfeitExitTitle": "እጅ መስጠት እና መውጣት?",
+  "forfeitExitConfirm": "ጨዋታው ሳይጠናቀቅ መውጣት እንደ እጅ መስጠት እና መሸነፍ ይቆጠራል። በእርግጥ መውጣት ይፈልጋሉ?",
+  "forfeitAndExit": "ውጣና እጅ ስጥ",
+  "stayInGame": "ጨዋታውን ቀጥል"
 }

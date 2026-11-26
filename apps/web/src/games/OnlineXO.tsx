@@ -56,6 +56,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [connection, setConnection] = useState<'connecting'|'connected'|'disconnected'>('connecting');
   const [error, setError] = useState('');
+  const [showForfeitModal, setShowForfeitModal] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const walletRefresh = useRef('');
   const winning = useMemo(() => snapshot?.gameId === 'xo' ? winningLine((snapshot.game as XOState).board) : [], [snapshot]);
@@ -98,6 +99,22 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       setTicket(result.ticket); setError(''); setConnection('connecting');
     } catch (cause) { setError(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
   };
+  const requestExit = useCallback(() => {
+    if (snapshot?.status === 'active') {
+      setShowForfeitModal(true);
+    } else {
+      onExit();
+    }
+  }, [snapshot?.status, onExit]);
+
+  const confirmForfeit = useCallback(() => {
+    send({ type: 'resign' });
+    setShowForfeitModal(false);
+    setTimeout(() => {
+      onExit();
+    }, 250);
+  }, [send, onExit]);
+
   const copy = async () => { try { await navigator.clipboard.writeText(room.code); setError(''); } catch { setError(room.code); } };
   const share = async () => {
     const link = `https://t.me/Dire_Bet_bot?start=room_${room.code}`;
@@ -159,7 +176,10 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       drawOfferBy: snapshot.drawOfferBy ?? null,
       publicRoom: snapshot.publicRoom,
     } : null;
-    return <CheckersRoom snapshot={checkersSnapshot} room={room} connection={connection} error={error} t={t} send={send} onReconnect={() => void reconnect()} onExit={onExit} onCopy={() => void copy()} onShare={() => void share()} />;
+    return <>
+      <CheckersRoom snapshot={checkersSnapshot} room={room} connection={connection} error={error} t={t} send={send} onReconnect={() => void reconnect()} onExit={requestExit} onCopy={() => void copy()} onShare={() => void share()} />
+      <ForfeitConfirmModal isOpen={showForfeitModal} onCancel={() => setShowForfeitModal(false)} onConfirm={confirmForfeit} t={t} />
+    </>;
   }
   if (snapshot?.gameId === 'ludo' && snapshot.publicRoom) {
     const state = snapshot.game as LudoState;
@@ -175,7 +195,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
         <span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span>
         <div className="ludo-topbar-actions">
           <button className="ludo-fullscreen" type="button" aria-label={t('marketFullScreen')} title={t('marketFullScreen')} onClick={fullscreen}>⛶</button>
-          <button className="ludo-leave" type="button" onClick={onExit}>↗ {t('exitGame')}</button>
+          <button className="ludo-leave" type="button" onClick={requestExit}>↗ {t('exitGame')}</button>
         </div>
       </header>
       <div className="ludo-match-header">
@@ -203,10 +223,11 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
         onExit={onExit}
         t={t}
       />
+      <ForfeitConfirmModal isOpen={showForfeitModal} onCancel={() => setShowForfeitModal(false)} onConfirm={confirmForfeit} t={t} />
     </section>;
   }
   return <section className="screen online-room-screen">
-    <button className="back-button" onClick={onExit}>← {t('matches')}</button>
+    <button className="back-button" onClick={requestExit}>← {t('matches')}</button>
     <div className="practice-heading"><div><span className="eyebrow">{t('onlineMatches')} · {gameTitle(room.gameId)}</span><h1>{t('roomCodeLabel')}</h1></div><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span></div>
     <div className="room-code-card"><strong>{room.code}</strong><div><button className="secondary-button" onClick={() => void copy()}>{t('copyCode')}</button><button className="primary-button" onClick={() => void share()}>{t('shareInvite')}</button></div></div>
     <p className="practice-note">{t('freeRoomNotice')}</p>
@@ -232,6 +253,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       onExit={onExit}
       t={t}
     />
+    <ForfeitConfirmModal isOpen={showForfeitModal} onCancel={() => setShowForfeitModal(false)} onConfirm={confirmForfeit} t={t} />
   </section>;
 }
 
@@ -332,4 +354,25 @@ function PlayingCard({ card }: { card: Card | null }) {
 }
 function pokerActionLabel(action: PokerAction, t: Translator): string {
   if (action.type === 'fold') return t('pokerFold'); if (action.type === 'check') return t('pokerCheck'); if (action.type === 'call') return t('pokerCall'); if (action.type === 'all-in') return t('pokerAllIn'); return `${t('pokerRaiseTo')} ${action.to}`;
+}
+
+function ForfeitConfirmModal({ isOpen, onCancel, onConfirm, t }: { isOpen: boolean; onCancel: () => void; onConfirm: () => void; t: Translator }) {
+  if (!isOpen) return null;
+  return (
+    <div className="forfeit-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="forfeit-title">
+      <div className="forfeit-modal-card">
+        <div className="forfeit-modal-icon" aria-hidden="true">⚠️</div>
+        <h2 id="forfeit-title" className="forfeit-modal-title">{t('forfeitExitTitle')}</h2>
+        <p className="forfeit-modal-body">{t('forfeitExitConfirm')}</p>
+        <div className="forfeit-modal-actions">
+          <button type="button" className="forfeit-confirm-btn" onClick={onConfirm}>
+            {t('forfeitAndExit')}
+          </button>
+          <button type="button" className="forfeit-cancel-btn" onClick={onCancel}>
+            {t('stayInGame')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

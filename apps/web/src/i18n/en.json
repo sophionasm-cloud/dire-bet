@@ -359,5 +359,9 @@
   "ludoTutStepCapture": "Nice capture! Landing on an opponent sends their pawn back to base.",
   "ludoTutStepHome": "Almost there! Reach the center home triangle with an exact roll to score.",
   "ludoTutStepComplete": "Tutorial complete! You finished the practice match.",
-  "ludoTutBackToLobby": "Return to Lobby"
+  "ludoTutBackToLobby": "Return to Lobby",
+  "forfeitExitTitle": "Forfeit Match?",
+  "forfeitExitConfirm": "Leaving an active game will forfeit the match and count as an immediate loss. Are you sure you want to exit?",
+  "forfeitAndExit": "Forfeit & Exit",
+  "stayInGame": "Stay in Game"
 }
