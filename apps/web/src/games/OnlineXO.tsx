@@ -181,7 +181,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
       <div className="ludo-match-header">
         <LudoPlayerPanel player={snapshot.players[0]} seat={0} color={colorAt(0)} crownTarget={state.crownTarget ?? 4} active={state.turn === 0 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 0} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
         <div className="ludo-bet-card">
-          <span className="ludo-bet-label">{roomMeta.entryCredits ? t('marketEntry') : 'Mode'}</span>
+          <span className="ludo-bet-label">{roomMeta.entryCredits ? t('marketEntryAmount') : 'Mode'}</span>
           <strong className="ludo-bet-amount">{betText}</strong>
           <span className="ludo-bet-timer">◷ {turnSeconds}s</span>
         </div>
