@@ -638,7 +638,7 @@ describe('Ludo room creation Telegram notifications', () => {
         headers: { Authorization: authorization, Origin: 'https://dire-bet.test' },
       }), env);
       expect(initialGet.status).toBe(200);
-      expect(await initialGet.json()).toEqual({ enabled: false, minEtb: 10, maxEtb: 500 });
+      expect(await initialGet.json()).toEqual({ enabled: false, minEtb: 30, maxEtb: 10000 });
 
       const invalidPut = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/notifications', {
         method: 'PUT',
@@ -671,6 +671,61 @@ describe('Ludo room creation Telegram notifications', () => {
     } finally {
       telegram.mockRestore();
     }
+  });
+
+  it('uses Telegram account name instead of @username or web_username in rooms and exposes player counts', async () => {
+    const secret = 'telegram-name-secret';
+    const authorization = `Bearer ${await signedSession(secret, 55)}`;
+    let forwardedDisplayName = '';
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind: () => ({
+            first: async () => {
+              if (sql.includes('SELECT status FROM users')) return { status: 'active' };
+              if (sql.includes('FROM user_contacts')) return { user_id: 55 };
+              if (sql.includes('SELECT enabled FROM games')) return { enabled: 1 };
+              if (sql.includes('SELECT first_name, username, web_username')) {
+                return { first_name: 'Dawit', last_name: 'Tadesse', username: 'user_918273', web_username: 'dawit99' };
+              }
+              return null;
+            },
+            all: async () => ({ results: [] }),
+            run: async () => ({ success: true, meta: { changes: 1 } }),
+          }),
+        };
+      },
+    };
+    const rateLimiter = { idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(JSON.stringify({ allowed: true }), { status: 200 }) }) };
+    const matchmaker = {
+      idFromName: (id: string) => id,
+      get: () => ({
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes('/counts')) {
+            return new Response(JSON.stringify({ counts: { ludo: 4, checkers: 2, xo: 1, poker: 0 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+          }
+          const parsed = JSON.parse(String(init?.body || '{}')) as { displayName?: string };
+          forwardedDisplayName = parsed.displayName || '';
+          return new Response(JSON.stringify({
+            room: { id: 'RM5555', code: 'RM5555', gameId: 'ludo', creatorName: forwardedDisplayName, entryCredits: 30, options: { player0Color: 'yellow', crownTarget: 1 } },
+          }), { status: 201, headers: { 'content-type': 'application/json' } });
+        },
+      }),
+    };
+    const env = { SESSION_SECRET: secret, DB: db, RATE_LIMITER: rateLimiter, MATCHMAKER: matchmaker } as never;
+
+    const countsRes = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms/counts'), env);
+    expect(countsRes.status).toBe(200);
+    expect(await countsRes.json()).toEqual({ counts: { ludo: 4, checkers: 2, xo: 1, poker: 0 } });
+
+    const created = await worker.fetch(new Request('https://dire-bet.test/api/public-rooms', {
+      method: 'POST',
+      headers: { Authorization: authorization, Origin: 'https://dire-bet.test', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId: 'ludo', entry: { kind: 'standard', amount: 30 }, options: { player0Color: 'yellow', crownTarget: 1 }, idempotencyKey: 'tg-name-key-1' }),
+    }), env);
+    expect(created.status).toBe(201);
+    expect(forwardedDisplayName).toBe('Dawit Tadesse');
   });
 });
 

@@ -82,6 +82,7 @@ export class Matchmaker {
     try {
       if (path === '/connect' && request.method === 'GET') return this.connect(request);
       if (path === '/list' && request.method === 'GET') return reply({ rooms: this.waitingRooms(url.searchParams.get('gameId'), this.moneyActive) });
+      if (path === '/counts' && request.method === 'GET') return reply({ counts: this.playerCounts() });
       if (path === '/config' && request.method === 'GET') return reply(this.marketConfig());
       if (path === '/balance' && request.method === 'GET') return this.balance(Number(url.searchParams.get('userId')));
       if (path === '/mine' && request.method === 'GET') return reply({ room: this.myRoom(Number(url.searchParams.get('userId')), url.searchParams.get('gameId')) });
@@ -165,7 +166,7 @@ export class Matchmaker {
       entity_id TEXT, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
     sql.exec('INSERT OR IGNORE INTO marketplace_settings (singleton, settings_json, updated_at) VALUES (1, ?, ?)', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
     const storedSettings = sql.exec<{ settings_json: string }>('SELECT settings_json FROM marketplace_settings WHERE singleton = 1').toArray()[0]?.settings_json;
-    if (storedSettings && storedSettings.includes('10000') && storedSettings.includes(',20,')) {
+    if (storedSettings && (storedSettings.includes('[10,') || storedSettings.includes(',20,') || !storedSettings.includes('10000') || !storedSettings.includes(`"waitingSeconds":${MATCHMAKING_WAITING_SECONDS}`))) {
       sql.exec('UPDATE marketplace_settings SET settings_json = ?, updated_at = ? WHERE singleton = 1', JSON.stringify(DEFAULT_MARKETPLACE_SETTINGS), Date.now());
     }
   }
@@ -652,6 +653,21 @@ export class Matchmaker {
       try { socket.send(JSON.stringify(this.snapshot(attachment.gameId, attachment.userId || 0))); }
       catch { socket.close(1011, 'Unable to send room update'); }
     }
+  }
+
+  private playerCounts(): Record<string, number> {
+    const now = Date.now();
+    const rows = this.state.storage.sql.exec<{ game_id: string; players: number }>(
+      `SELECT game_id, COALESCE(SUM(player_count), 0) AS players
+       FROM public_rooms
+       WHERE (status = 'WAITING' AND game_ready = 1 AND expires_at > ?)
+          OR status IN ('FULL', 'STARTING', 'IN_PROGRESS', 'SETTLING')
+       GROUP BY game_id`,
+      now,
+    ).toArray();
+    const counts: Record<string, number> = { ludo: 0, checkers: 0, xo: 0, poker: 0 };
+    for (const row of rows) counts[row.game_id] = Number(row.players) || 0;
+    return counts;
   }
 
   private waitingRooms(gameId: string | null, moneyActive = this.moneyActive): MarketRoom[] {

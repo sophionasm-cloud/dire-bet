@@ -217,10 +217,20 @@ async function encryptContact(phone: string, secret: string): Promise<string> {
   return base64url(packed);
 }
 
+function telegramAccountName(user: { first_name?: string | null; last_name?: string | null; username?: string | null; web_username?: string | null }): string {
+  const first = typeof user.first_name === 'string' ? user.first_name.trim() : '';
+  const last = typeof user.last_name === 'string' ? user.last_name.trim() : '';
+  const full = [first, last].filter(Boolean).join(' ').trim();
+  if (full && full !== 'Player') return full;
+  if (typeof user.username === 'string' && user.username.trim()) return user.username.trim();
+  if (full) return full;
+  return user.web_username?.trim() || 'Player';
+}
+
 async function gameDisplayName(env: Env, userId: number): Promise<string | null> {
-  const user = await env.DB.prepare('SELECT first_name, username, web_username FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ first_name: string; username: string | null; web_username: string | null }>();
+  const user = await env.DB.prepare('SELECT first_name, username, web_username, last_name FROM users WHERE id = ? AND status = ?').bind(userId, 'active').first<{ first_name: string; username: string | null; web_username: string | null; last_name?: string | null }>();
   if (!user) return null;
-  return (user.web_username || (user.username ? `@${user.username}` : user.first_name)).slice(0, 32);
+  return telegramAccountName(user).slice(0, 32);
 }
 
 async function hasRegisteredContact(env: Env, userId: number): Promise<boolean> {
@@ -300,15 +310,15 @@ function escapeTelegramHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const ALLOWED_ALERT_ETB = new Set([0, 10, 30, 50, 100, 200, 300, 500]);
+const ALLOWED_ALERT_ETB = new Set([0, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000]);
 
 async function ensureNotificationPrefsTable(db: D1Database): Promise<void> {
   try {
     await db.prepare(`CREATE TABLE IF NOT EXISTS user_notification_preferences (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
-      min_etb INTEGER NOT NULL DEFAULT 10,
-      max_etb INTEGER NOT NULL DEFAULT 500,
+      min_etb INTEGER NOT NULL DEFAULT 30,
+      max_etb INTEGER NOT NULL DEFAULT 10000,
       five_rooms_alerted_at INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`).run();
@@ -476,6 +486,7 @@ async function superAdmin(request: Request, env: Env): Promise<number | Response
 async function handlePublicMarketplace(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === '/api/public-rooms/config' && request.method === 'GET') return publicMarketplace(env).fetch('https://market/config');
+  if (url.pathname === '/api/public-rooms/counts' && request.method === 'GET') return publicMarketplace(env).fetch('https://market/counts');
   if (url.pathname === '/api/public-rooms' && request.method === 'GET') {
     const gameId = url.searchParams.get('gameId') || '';
     if (gameId && (!isMarketplaceGame(gameId) || gameId === 'poker')) return json({ error: 'Game filter is invalid.' }, 400);
@@ -490,10 +501,12 @@ async function handlePublicMarketplace(request: Request, env: Env, ctx?: Executi
       const prefs = await env.DB.prepare(
         'SELECT enabled, min_etb, max_etb FROM user_notification_preferences WHERE user_id = ?'
       ).bind(userId).first<{ enabled: number; min_etb: number; max_etb: number }>().catch(() => null);
+      const rawMin = typeof prefs?.min_etb === 'number' ? prefs.min_etb : 30;
+      const rawMax = typeof prefs?.max_etb === 'number' ? prefs.max_etb : 10000;
       return json({
         enabled: prefs?.enabled === 1,
-        minEtb: typeof prefs?.min_etb === 'number' ? prefs.min_etb : 10,
-        maxEtb: typeof prefs?.max_etb === 'number' ? prefs.max_etb : 500,
+        minEtb: rawMin === 10 ? 30 : rawMin,
+        maxEtb: rawMax === 10 ? 30 : rawMax,
       });
     }
     if (request.method === 'PUT') {
@@ -1187,7 +1200,8 @@ async function authenticate(request: Request, env: Env): Promise<Response> {
       last_name = excluded.last_name, updated_at = CURRENT_TIMESTAMP RETURNING id`).bind(id, username, firstName, lastName, lang).first<{ id: number }>();
     if (!result) return json({ error: 'Could not create session' }, 500);
     if (parsed.data.refreshToken) await revokeRefreshToken(env, parsed.data.refreshToken).catch(() => undefined);
-    return await issueAuthResponse(env, result.id, request, { displayName: firstName, username, language: lang });
+    const displayName = telegramAccountName({ first_name: firstName, last_name: lastName, username });
+    return await issueAuthResponse(env, result.id, request, { displayName, username, language: lang });
   } catch {
     return json({ error: 'Could not create session' }, 503);
   }

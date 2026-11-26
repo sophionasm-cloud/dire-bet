@@ -13,11 +13,11 @@ import {
 } from './marketplace';
 
 describe('public room entry rules', () => {
-  it.each([10, 30, 50, 100, 200, 300, 500])('accepts standard entry %i ETB', (amount) => {
+  it.each([30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000])('accepts standard entry %i ETB', (amount) => {
     expect(parseEntryChoice({ kind: 'standard', amount }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(amount);
   });
 
-  it.each([20, 400, 700, 1000, 2000, 3000, 5000, 7000, 10000])('rejects removed standard entry %i ETB', (amount) => {
+  it.each([10, 20, 400, 700, 3000, 7000])('rejects removed standard entry %i ETB', (amount) => {
     expect(parseEntryChoice({ kind: 'standard', amount }, DEFAULT_MARKETPLACE_SETTINGS)).toBeNull();
   });
 
@@ -37,15 +37,15 @@ describe('public room entry rules', () => {
     expect(parseEntryChoice({ kind: 'free' }, DEFAULT_MARKETPLACE_SETTINGS)).toBe(0);
   });
 
-  it('uses a 30-second default and supports the published stake list', () => {
-    expect(DEFAULT_MARKETPLACE_SETTINGS.waitingSeconds).toBe(30);
-    expect(DEFAULT_MARKETPLACE_SETTINGS.standardAmounts).toEqual([10, 30, 50, 100, 200, 300, 500]);
+  it('uses a 90-second default and supports the published stake list', () => {
+    expect(DEFAULT_MARKETPLACE_SETTINGS.waitingSeconds).toBe(90);
+    expect(DEFAULT_MARKETPLACE_SETTINGS.standardAmounts).toEqual([30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000]);
   });
 
   it('accepts only the supported Ludo color and crown choices', () => {
     expect(parseLudoRoomOptions({})).toEqual({ player0Color: 'red', crownTarget: 4 });
     expect(parseLudoRoomOptions({ player0Color: 'green', crownTarget: 2 })).toEqual({ player0Color: 'green', crownTarget: 2 });
-    expect(parseLudoRoomOptions({ player0Color: 'blue', crownTarget: 1 })).toEqual({ player0Color: 'red', crownTarget: 1 });
+    expect(parseLudoRoomOptions({ player0Color: 'blue', crownTarget: 1 })).toEqual({ player0Color: 'blue', crownTarget: 1 });
     expect(parseLudoRoomOptions({ player0Color: 'green', crownTarget: 3 })).toBeNull();
   });
 
@@ -56,12 +56,12 @@ describe('public room entry rules', () => {
 
   it('ignores historical commission settings', () => {
     expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, commissionBps: 100 })).toEqual(DEFAULT_MARKETPLACE_SETTINGS);
-    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, standardAmounts: [10, 10] })).toBeNull();
+    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, standardAmounts: [30, 30] })).toBeNull();
   });
 
-  it('always normalizes the matchmaking wait to exactly 30 seconds', () => {
-    expect(MATCHMAKING_WAITING_SECONDS).toBe(30);
-    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, waitingSeconds: 120 })?.waitingSeconds).toBe(30);
+  it('always normalizes the matchmaking wait to exactly 90 seconds', () => {
+    expect(MATCHMAKING_WAITING_SECONDS).toBe(90);
+    expect(validateMarketplaceSettings({ ...DEFAULT_MARKETPLACE_SETTINGS, waitingSeconds: 120 })?.waitingSeconds).toBe(90);
   });
 
   it('lets creators cancel only before a match starts', () => {

@@ -22,17 +22,19 @@ type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'ru
 type Account = { webUsername: string | null; phoneShared: boolean };
 type RoomAlertItem = { id: string; kind: 'room' | 'many'; code?: string; entryCredits?: number; count?: number };
 
-const DEFAULT_ROOM_ALERTS: RoomAlertPrefs = { enabled: false, minEtb: 10, maxEtb: 500 };
+const DEFAULT_ROOM_ALERTS: RoomAlertPrefs = { enabled: false, minEtb: 30, maxEtb: 10000 };
 
 function readStoredRoomAlerts(): RoomAlertPrefs {
   try {
     const raw = localStorage.getItem('direbet.roomAlertPrefs');
     if (!raw) return DEFAULT_ROOM_ALERTS;
     const parsed = JSON.parse(raw) as Partial<RoomAlertPrefs>;
+    const rawMin = typeof parsed.minEtb === 'number' ? parsed.minEtb : 30;
+    const rawMax = typeof parsed.maxEtb === 'number' ? parsed.maxEtb : 10000;
     return {
       enabled: parsed.enabled === true,
-      minEtb: typeof parsed.minEtb === 'number' ? parsed.minEtb : 10,
-      maxEtb: typeof parsed.maxEtb === 'number' ? parsed.maxEtb : 500,
+      minEtb: rawMin === 10 ? 30 : rawMin,
+      maxEtb: rawMax === 10 ? 30 : rawMax,
     };
   } catch {
     return DEFAULT_ROOM_ALERTS;
@@ -104,7 +106,10 @@ function App() {
   const [round, setRound] = useState(0);
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem('direbet.recent') || '[]') as string[]);
   const [reduceEffects, setReduceEffects] = useState(() => localStorage.getItem('direbet.reduceEffects') === 'true');
-  const [displayName, setDisplayName] = useState('Guest');
+  const tgInitialUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+  const tgInitialName = [tgInitialUser?.first_name?.trim(), tgInitialUser?.last_name?.trim()].filter(Boolean).join(' ').trim();
+  const [displayName, setDisplayName] = useState(() => tgInitialName || 'Guest');
+  const [playerCounts, setPlayerCounts] = useState<Record<string, number>>({});
   const [sessionToken, setSessionToken] = useState<string | null>(() => isSignedOut() ? null : readAccessToken());
   const [account, setAccount] = useState<Account | null>(null);
   const [telegramAuthError, setTelegramAuthError] = useState(() => isSignedOut());
@@ -212,10 +217,12 @@ function App() {
       .then(async (res) => res.ok ? await res.json() as Partial<RoomAlertPrefs> : null)
       .then((prefs) => {
         if (!live || !prefs) return;
+        const rawMin = typeof prefs.minEtb === 'number' ? prefs.minEtb : 30;
+        const rawMax = typeof prefs.maxEtb === 'number' ? prefs.maxEtb : 10000;
         const next: RoomAlertPrefs = {
           enabled: prefs.enabled === true,
-          minEtb: typeof prefs.minEtb === 'number' ? prefs.minEtb : 10,
-          maxEtb: typeof prefs.maxEtb === 'number' ? prefs.maxEtb : 500,
+          minEtb: rawMin === 10 ? 30 : rawMin,
+          maxEtb: rawMax === 10 ? 30 : rawMax,
         };
         setRoomAlertPrefs(next);
         localStorage.setItem('direbet.roomAlertPrefs', JSON.stringify(next));
@@ -223,6 +230,20 @@ function App() {
       .catch(() => undefined);
     return () => { live = false; };
   }, [sessionToken]);
+
+  useEffect(() => {
+    if (page !== 'home') return;
+    let live = true;
+    const loadCounts = () => {
+      fetch('/api/public-rooms/counts')
+        .then(async (res) => res.ok ? await res.json() as { counts?: Record<string, number> } : null)
+        .then((body) => { if (live && body?.counts) setPlayerCounts(body.counts); })
+        .catch(() => undefined);
+    };
+    loadCounts();
+    const id = window.setInterval(loadCounts, 10_000);
+    return () => { live = false; window.clearInterval(id); };
+  }, [page]);
 
   useEffect(() => {
     if (!roomAlertPrefs.enabled || page === 'lobby') return;
@@ -648,7 +669,7 @@ function App() {
       </div>
       <div className="game-grid">
         {filteredGames.map((game) => <button key={game.id} className={`game-card ${game.availability === 'unavailable' ? 'game-disabled' : ''}`} onClick={() => selectGame(game)} disabled={game.availability === 'unavailable'} aria-label={`${game.title} ${game.availability === 'coming-soon' ? t('comingSoon') : game.availability === 'unavailable' ? t('unavailable') : ''}`}>
-          <GameArt id={game.id}/><div className="game-card-copy"><strong>{game.title}</strong><small>{game.availability === 'playable' ? t('freePractice') : game.availability === 'unavailable' ? t('unavailable') : t('comingSoon')}</small></div>
+          <GameArt id={game.id}/><div className="game-card-copy"><strong>{game.title}</strong>{game.availability === 'playable' ? <small className="game-live-players"><i className="live-player-dot" aria-hidden="true"/>{playerCounts[game.id] ?? 0} {t('livePlayers')}</small> : <small>{game.availability === 'unavailable' ? t('unavailable') : t('comingSoon')}</small>}</div>
           {game.availability !== 'playable' && <span className={`availability ${game.availability}`}>{game.availability === 'unavailable' ? t('unavailable') : t('comingSoon')}</span>}
         </button>)}
       </div>

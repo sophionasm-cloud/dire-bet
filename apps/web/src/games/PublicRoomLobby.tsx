@@ -21,10 +21,10 @@ type Props = {
 type MarketState = { type: 'market'; rooms: MarketplaceRoom[]; ownRoom: MarketplaceRoom | null; serverTime: number };
 type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balance?: number; settings?: MarketplaceSettings };
 
-const STANDARD_PAID_AMOUNTS = [10, 30, 50, 100, 200, 300, 500];
-const ALERT_ETB_OPTIONS = [0, 10, 30, 50, 100, 200, 300, 500];
-const defaultAlertPrefs: RoomAlertPrefs = { enabled: false, minEtb: 10, maxEtb: 500 };
-const defaultSettings: MarketplaceSettings = { standardAmounts: STANDARD_PAID_AMOUNTS, customEnabled: true, customMaximum: 1000, waitingSeconds: 30, realMoneyEnabled: false };
+const STANDARD_PAID_AMOUNTS = [30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000];
+const ALERT_ETB_OPTIONS = [0, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000];
+const defaultAlertPrefs: RoomAlertPrefs = { enabled: false, minEtb: 30, maxEtb: 10000 };
+const defaultSettings: MarketplaceSettings = { standardAmounts: STANDARD_PAID_AMOUNTS, customEnabled: true, customMaximum: 1000, waitingSeconds: 90, realMoneyEnabled: false };
 
 export default function PublicRoomLobby({ gameId, token, t, displayName, alertPrefs = defaultAlertPrefs, onSaveAlertPrefs, onRoomsSnapshot, onRoom, onPractice, onExit }: Props) {
   const isLudo = gameId === 'ludo';
@@ -33,12 +33,12 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
   const [pendingJoin, setPendingJoin] = useState<MarketplaceRoom | null>(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [balance, setBalance] = useState<number | null>(null);
-  const [entry, setEntry] = useState<number>(10);
+  const [entry, setEntry] = useState<number>(30);
   const [customAmount, setCustomAmount] = useState('150');
   const [crownTarget, setCrownTarget] = useState<1 | 2 | 4>(1);
-  const [player0Color, setPlayer0Color] = useState<'yellow'|'green'>('yellow');
+  const [player0Color, setPlayer0Color] = useState<'yellow'|'blue'>('yellow');
   const [clockNow, setClockNow] = useState(Date.now());
-  const [countdown, setCountdown] = useState(30);
+  const [countdown, setCountdown] = useState(90);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -357,7 +357,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
               <div className="market-room-primary">
                 <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>👑</span>
                 <div className="market-room-player">
-                  <strong>{t('marketYou')} (#{activeRoom.code})</strong>
+                  <strong>{activeRoom.creatorName || displayName}</strong>
                   <small style={{ color: '#ffc840' }}>⏳ {t('marketWaiting')}</small>
                 </div>
                 <div className="market-room-stake">
@@ -365,7 +365,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
                   <small>{activeRoom.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small>
                 </div>
                 <div className="market-room-time">
-                  <strong style={{ color: '#ffc840' }}>{Math.max(0, Math.ceil((activeRoom.expiresAt - clockNow) / 1000))}s</strong>
+                  <strong style={{ color: '#ffc840' }}>{formatTimeLeft(Math.max(0, Math.ceil((activeRoom.expiresAt - clockNow) / 1000)))}</strong>
                   <small>{t('marketTimeLeft')}</small>
                 </div>
                 <button
@@ -387,7 +387,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
           {activeRoom?.status === 'IN_PROGRESS' && <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
             <div className="market-room-primary">
               <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>🎮</span>
-              <div className="market-room-player"><strong>{t('marketYou')} (#{activeRoom.code})</strong><small style={{ color: '#ffc840' }}>{t('marketInProgress')}</small></div>
+              <div className="market-room-player"><strong>{activeRoom.creatorName || displayName}</strong><small style={{ color: '#ffc840' }}>{t('marketInProgress')}</small></div>
               <div className="market-room-stake"><strong>{activeRoom.entryCredits === 0 ? t('marketFree') : formatCredits(activeRoom.entryCredits)}</strong><small>{activeRoom.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div>
               <button className="market-join-button" disabled={busy || !token} onClick={() => void resume()}>{busy ? '…' : t('marketResumeMatch')}</button>
             </div>
@@ -400,7 +400,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
         {isLudo && <fieldset className="market-option-field"><legend>{t('marketCrownOptions')}</legend><div className="market-crown-options">{([1, 2, 4] as const).map((count) => <button key={count} type="button" aria-pressed={crownTarget === count} className={crownTarget === count ? 'selected' : ''} onClick={() => setCrownTarget(count)}><span>{Array.from({ length: count }, (_, index) => <i key={index}>♛</i>)}</span><small>{t('marketPawnCount').replace('{count}', String(count))}</small></button>)}</div></fieldset>}
         <div className="market-option-heading"><strong>{t('marketEntryAmount')}</strong><small>{t('marketDemoCredits')}</small></div>
         <div className="market-entry-options ludo-entry-options"><button type="button" aria-pressed={entry === 0} className={entry === 0 ? 'selected' : ''} onClick={() => setEntry(0)}><strong>{t('marketFree')}</strong></button>{STANDARD_PAID_AMOUNTS.map((value) => <button key={value} type="button" aria-pressed={entry === value} className={entry === value ? 'selected' : ''} onClick={() => setEntry(value)} disabled={Boolean(token && balance !== null && value > balance)}><strong>{value}</strong></button>)}</div>
-        {isLudo && <fieldset className="market-color-field ludo-color-circles"><legend>{t('marketColor')}</legend><button type="button" aria-label={`${t('marketYellow')} vs ${t('marketBlue')}`} aria-pressed={player0Color === 'yellow'} className={`color-choice-yellow ${player0Color === 'yellow' ? 'selected' : ''}`} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><b>VS</b><i className="color-token blue-token"/></button><button type="button" aria-label={`${t('marketGreen')} vs ${t('marketBlue')}`} aria-pressed={player0Color === 'green'} className={`color-choice-green ${player0Color === 'green' ? 'selected' : ''}`} onClick={() => setPlayer0Color('green')}><i className="color-token green-token"/><b>VS</b><i className="color-token blue-token"/></button></fieldset>}
+        {isLudo && <fieldset className="market-color-field ludo-color-circles"><legend>{t('marketColor')}</legend><button type="button" aria-label={t('marketYellowVsRed')} aria-pressed={player0Color === 'yellow'} className={`color-choice-yellow ${player0Color === 'yellow' ? 'selected' : ''}`} onClick={() => setPlayer0Color('yellow')}><i className="color-token yellow-token"/><b>VS</b><i className="color-token red-token"/></button><button type="button" aria-label={`${t('marketBlue')} vs ${t('marketGreen')}`} aria-pressed={player0Color === 'blue'} className={`color-choice-blue ${player0Color === 'blue' ? 'selected' : ''}`} onClick={() => setPlayer0Color('blue')}><i className="color-token blue-token"/><b>VS</b><i className="color-token green-token"/></button></fieldset>}
         
         {entry !== 0 && insufficient && <p className="market-message" role="alert">{t('marketLowBalance')}</p>}
         {message && <p className="market-message" role="alert">{message}</p>}
@@ -410,7 +410,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
             : busy
               ? t('marketCreating')
               : activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status)
-                ? `⏳ ${t('marketWaiting')} (#${activeRoom.code})`
+                ? `⏳ ${t('marketWaiting')}`
                 : `${t('marketCreateAction')} · ${amount} ${t('etb')}`}
           <span>↗</span>
         </button>
@@ -489,9 +489,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
 function RoomCard({ room, now, busy, canJoin, onJoin, t }: { room: MarketplaceRoom; now: number; busy: boolean; canJoin: boolean; onJoin: () => void; t: Translator }) {
   const seconds = Math.max(0, Math.ceil((room.expiresAt - now) / 1000));
   const target = room.options.crownTarget === 1 || room.options.crownTarget === 2 || room.options.crownTarget === 4 ? room.options.crownTarget : 4;
-  const pair = room.options.player0Color === 'green' ? t('marketGreenVsBlue') : `${t('marketYellow')} vs ${t('marketBlue')}`;
+  const pair = room.options.player0Color === 'blue' ? `${t('marketBlue')} vs ${t('marketGreen')}` : room.options.player0Color === 'green' ? t('marketGreenVsBlue') : t('marketYellowVsRed');
   return <article className="public-room-card">
-    <div className="market-room-primary"><span className="market-avatar">{room.creatorAvatar}</span><div className="market-room-player"><strong>{room.creatorName}</strong><small>{room.gameId === 'ludo' ? <><span aria-hidden="true">♛</span> {target} · {pair}</> : gameMode(room.gameId)}</small></div><div className="market-room-stake"><strong>{room.entryCredits === 0 ? t('marketFree') : formatCredits(room.entryCredits)}</strong><small>{room.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div><div className="market-room-time"><strong>{seconds}s</strong><small>{t('marketTimeLeft')}</small></div><button className="market-join-button" disabled={busy || !canJoin} onClick={onJoin}>{canJoin ? t('joinRoom') : t('marketTelegramRequired')}</button></div>
+    <div className="market-room-primary"><span className="market-avatar">{room.creatorAvatar}</span><div className="market-room-player"><strong>{room.creatorName}</strong><small>{room.gameId === 'ludo' ? <><span aria-hidden="true">♛</span> {target} · {pair}</> : gameMode(room.gameId)}</small></div><div className="market-room-stake"><strong>{room.entryCredits === 0 ? t('marketFree') : formatCredits(room.entryCredits)}</strong><small>{room.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div><div className="market-room-time"><strong>{formatTimeLeft(seconds)}</strong><small>{t('marketTimeLeft')}</small></div><button className="market-join-button" disabled={busy || !canJoin} onClick={onJoin}>{canJoin ? t('joinRoom') : t('marketTelegramRequired')}</button></div>
     <div className="market-room-details"><span>#{room.code}</span><span>{gameTitle(room.gameId)} · {room.mode}</span><span>{room.playerCount}/{room.capacity} {t('marketPlayersRequired')}</span></div>
   </article>;
 }
@@ -552,7 +552,9 @@ function WaitingRoom({
     }
   };
 
-  const formattedCountdown = `00:${countdown < 10 ? '0' + countdown : countdown}`;
+  const countdownMins = Math.floor(countdown / 60);
+  const countdownSecs = countdown % 60;
+  const formattedCountdown = `${String(countdownMins).padStart(2, '0')}:${String(countdownSecs).padStart(2, '0')}`;
   const entryFormatted = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.entryCredits)} ${t('etb')}`;
   const poolFormatted = room.entryCredits === 0 ? t('marketFree') : `${formatCredits(room.poolCredits || room.entryCredits * 2)} ${t('etb')}`;
 
@@ -720,6 +722,14 @@ function WaitingRoom({
   );
 }
 
+function formatTimeLeft(seconds: number): string {
+  if (seconds >= 60) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${seconds}s`;
+}
 function gameTitle(id: GameId): string { return id === 'poker' ? 'Texas Hold’em' : id === 'xo' ? 'XO' : id === 'ludo' ? 'Ludo' : 'Checkers'; }
 function gameSymbol(id: GameId): string { return id === 'ludo' ? '⚄' : id === 'checkers' ? '♛' : id === 'poker' ? '♠' : '× ○'; }
 function gameMode(id: GameId): string { return id === 'ludo' ? 'Classic · two players' : id === 'poker' ? 'Heads-up' : id === 'checkers' ? 'American · two players' : 'Classic 3 × 3'; }

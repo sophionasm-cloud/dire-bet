@@ -307,8 +307,7 @@ function resultCopy(id: GameId, state: RoomGame, seat: number, you: 'X'|'O'|null
 
 function roomLudoColor(value: unknown): LudoBoardColor {
   if (value === 'white') return 'yellow';
-  if (value === 'blue') return 'red';
-  return value === 'red' || value === 'yellow' || value === 'green' ? value : 'red';
+  return value === 'red' || value === 'yellow' || value === 'green' || value === 'blue' ? value : 'red';
 }
 function oppositeLudoColor(color: LudoBoardColor): LudoBoardColor { return color === 'red' ? 'yellow' : color === 'yellow' ? 'red' : color === 'green' ? 'blue' : 'green'; }
 function ludoColorName(color: LudoBoardColor, t: Translator): string {

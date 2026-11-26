@@ -1,8 +1,8 @@
 export type EntryChoice = { kind: 'free' } | { kind: 'standard' | 'custom'; amount: number };
-export type LudoRoomOptions = { player0Color: 'red' | 'yellow' | 'green'; crownTarget: 1 | 2 | 4 };
+export type LudoRoomOptions = { player0Color: 'red' | 'yellow' | 'green' | 'blue'; crownTarget: 1 | 2 | 4 };
 export type PublicWalletKind = 'demo' | 'real' | 'free';
 
-export const MATCHMAKING_WAITING_SECONDS = 30;
+export const MATCHMAKING_WAITING_SECONDS = 90;
 
 export function isCreatorCancellableRoom(status: string): boolean {
   return status === 'WAITING' || status === 'FULL' || status === 'STARTING';
@@ -34,10 +34,10 @@ export type Settlement = {
 };
 
 export const DEFAULT_MARKETPLACE_SETTINGS: MarketplaceSettings = {
-  standardAmounts: [10, 30, 50, 100, 200, 300, 500],
+  standardAmounts: [30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 10000],
   customEnabled: true,
   customMaximum: 1000,
-  waitingSeconds: 30,
+  waitingSeconds: 90,
   realMoneyEnabled: false,
 };
 
@@ -56,8 +56,8 @@ export function parseLudoRoomOptions(input: unknown): LudoRoomOptions | null {
   if (!input || typeof input !== 'object') return { player0Color: 'red', crownTarget: 4 };
   const value = input as { player0Color?: unknown; crownTarget?: unknown };
   const selectedColor = value.player0Color ?? 'red';
-  const player0Color = selectedColor === 'blue' ? 'red' : selectedColor === 'white' ? 'yellow' : selectedColor;
-  if (player0Color !== 'red' && player0Color !== 'yellow' && player0Color !== 'green') return null;
+  const player0Color = selectedColor === 'white' ? 'yellow' : selectedColor;
+  if (player0Color !== 'red' && player0Color !== 'yellow' && player0Color !== 'green' && player0Color !== 'blue') return null;
   const crownTarget = value.crownTarget ?? 4;
   if (crownTarget !== 1 && crownTarget !== 2 && crownTarget !== 4) return null;
   return { player0Color, crownTarget };
