@@ -19,6 +19,8 @@ type Props = {
   onRoom: (room: RoomConfig) => void;
   onPractice: () => void;
   onExit: () => void;
+  onJoiningChange: (joining: boolean) => void;
+  onNotice: (message: string) => void;
 };
 type MarketState = { type: 'market'; rooms: MarketplaceRoom[]; ownRoom: MarketplaceRoom | null; serverTime: number };
 type ResponseBody = { error?: string; room?: MarketplaceRoom | null; rooms?: MarketplaceRoom[]; ticket?: string; code?: string; gameId?: GameId; balance?: number; settings?: MarketplaceSettings };
@@ -28,11 +30,10 @@ const ALERT_ETB_OPTIONS = [0, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 1000
 const defaultAlertPrefs: RoomAlertPrefs = { enabled: false, minEtb: 30, maxEtb: 10000 };
 const defaultSettings: MarketplaceSettings = { standardAmounts: STANDARD_PAID_AMOUNTS, customEnabled: true, customMaximum: 1000, waitingSeconds: 90, realMoneyEnabled: false };
 
-export default function PublicRoomLobby({ gameId, token, t, displayName, avatarUrl, alertPrefs = defaultAlertPrefs, onSaveAlertPrefs, onRoomsSnapshot, onRoom, onPractice, onExit }: Props) {
+export default function PublicRoomLobby({ gameId, token, t, displayName, avatarUrl, alertPrefs = defaultAlertPrefs, onSaveAlertPrefs, onRoomsSnapshot, onRoom, onPractice, onExit, onJoiningChange, onNotice }: Props) {
   const isLudo = gameId === 'ludo';
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
-  const [pendingJoin, setPendingJoin] = useState<MarketplaceRoom | null>(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [balance, setBalance] = useState<number | null>(null);
   const [entry, setEntry] = useState<number>(30);
@@ -216,6 +217,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
     if (!Number.isSafeInteger(amount) || amount <= 0 || (entry === -1 && (amount <= 100 || amount > settings.customMaximum))) { setMessage(t('marketAmountInvalid')); return; }
     creating.current = true;
+    onJoiningChange(true);
     setBusy(true); setMessage('');
     try {
       const freshKey = crypto.randomUUID();
@@ -229,8 +231,13 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
       roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
-    finally { creating.current = false; setBusy(false); }
+      onJoiningChange(false);
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : t('onlineDisconnected');
+      setMessage(reason);
+      onNotice(reason);
+      onJoiningChange(false);
+    } finally { creating.current = false; setBusy(false); }
   };
 
   const openNotifModal = () => {
@@ -262,7 +269,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
   const join = async (room: MarketplaceRoom) => {
     launching.current = '';
     if (!token) { setMessage(t('marketTelegramRequired')); return; }
+    onJoiningChange(true);
     setBusy(true); setMessage('');
+    let joined = false;
     try {
       const response = await fetch(`/api/public-rooms/${room.code}/join`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
       const result = await response.json() as ResponseBody;
@@ -270,11 +279,11 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
       roomMutation.current += 1; cancelledRooms.current.delete(result.room.id);
       setActiveRoom(result.room); setBalance(result.balance ?? balance);
       window.dispatchEvent(new Event('direbet:wallet-changed'));
-      setPendingJoin(null);
 
       if (result.ticket && result.code && result.gameId) {
         launching.current = result.room.id;
         onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId, publicRoom: result.room });
+        joined = true;
         return;
       }
       if (['IN_PROGRESS', 'STARTING', 'SETTLING'].includes(result.room.status)) {
@@ -284,27 +293,43 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
           if (sessionRes.ok && sessionResult.ticket && sessionResult.code && sessionResult.gameId) {
             launching.current = result.room.id;
             onRoom({ code: sessionResult.code, ticket: sessionResult.ticket, gameId: sessionResult.gameId, publicRoom: sessionResult.room || result.room });
+            joined = true;
             return;
           }
         } catch { /* The room card offers an explicit resume action. */ }
       }
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected')); void loadRooms(); }
-    finally { setBusy(false); }
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : t('onlineDisconnected');
+      setMessage(reason);
+      onNotice(reason);
+      void loadRooms();
+    } finally {
+      if (!joined) onJoiningChange(false);
+      setBusy(false);
+    }
   };
 
   const resume = async () => {
     if (!token || !activeRoom || launching.current === activeRoom.id) return;
     launching.current = activeRoom.id;
+    onJoiningChange(true);
     setBusy(true); setMessage('');
+    let joined = false;
     try {
       const response = await fetch(`/api/public-rooms/${activeRoom.code}/session`, { headers });
       const result = await response.json() as ResponseBody;
       if (!response.ok || !result.ticket || !result.code || !result.gameId) throw new Error(result.error || t('onlineDisconnected'));
       onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId, publicRoom: result.room || activeRoom });
+      joined = true;
     } catch (cause) {
       launching.current = '';
-      setMessage(cause instanceof Error ? cause.message : t('onlineDisconnected'));
-    } finally { setBusy(false); }
+      const reason = cause instanceof Error ? cause.message : t('onlineDisconnected');
+      setMessage(reason);
+      onNotice(reason);
+    } finally {
+      if (!joined) onJoiningChange(false);
+      setBusy(false);
+    }
   };
 
   const cancel = async () => {
@@ -398,7 +423,7 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
               <button className="market-join-button" disabled={busy || !token} onClick={() => void resume()}>{busy ? '…' : t('marketResumeMatch')}</button>
             </div>
           </article>}
-          {loading ? <p className="market-loading-text">{t('marketLoading')}</p> : rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => { setMessage(''); setPendingJoin(room); }} t={t}/>)}
+          {loading ? <p className="market-loading-text">{t('marketLoading')}</p> : rooms.filter((r) => r.id !== activeRoom?.id).map((room) => <RoomCard key={room.id} room={room} now={clockNow} busy={busy} canJoin={Boolean(token)} onJoin={() => { setMessage(''); void join(room); }} t={t}/>)}
         </div>}
       </div>
       <div className="market-create-panel">
@@ -488,7 +513,6 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, avatarU
         </section>
       </div>
     )}
-    {pendingJoin && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && setPendingJoin(null)}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="market-join-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={busy} onClick={() => setPendingJoin(null)} aria-label={t('close')}><span aria-hidden="true">×</span></button><span className="eyebrow">{t('marketPublicRooms')}</span><h2 id="market-join-title">{t('joinRoom')}</h2><p>{t('marketJoinConfirm').replace('{game}', gameTitle(pendingJoin.gameId)).replace('{amount}', pendingJoin.entryCredits === 0 ? t('marketFree') : `${formatCredits(pendingJoin.entryCredits)} ${t('etb')}`)}</p>{message && <p className="auth-message" role="alert">{message}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setPendingJoin(null)}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={busy || !token} onClick={() => void join(pendingJoin)}>{busy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
   </section>;
 }
 

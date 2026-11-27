@@ -22,21 +22,30 @@ type RoomGame = XOState | LudoState | CheckersState | PokerPublic;
 type RoomSnapshot = { type: 'state'; code: string; gameId: GameId; status: 'waiting'|'active'|'finished'|'cancelled'; players: RoomPlayer[]; game: RoomGame; you: 'X'|'O'|null; seat: number; matchId?: string | null; terminal?: { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null; drawOfferBy?: number | null; turnDeadline?: number | null; serverTime?: number; publicRoom?: { id: string; entryCredits: number; payoutCredits?: number; options: Record<string, unknown> } };
 type ApiResult = { code?: string; ticket?: string; gameId?: GameId; error?: string };
 
-export function OnlineMatches({ t, token, onRoom }: Props & { onRoom: (room: RoomConfig) => void }) {
+export function OnlineMatches({ t, token, onRoom, onJoiningChange, onNotice }: Props & { onRoom: (room: RoomConfig) => void; onJoiningChange: (joining: boolean) => void; onNotice: (message: string) => void }) {
   const [code, setCode] = useState('');
   const [gameId, setGameId] = useState<GameId>('xo');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const requestRoom = async (url: string, body: unknown) => {
     if (!token) { setError(t('onlineRequiresTelegram')); return; }
+    onJoiningChange(true);
     setBusy(true); setError('');
+    let joined = false;
     try {
       const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       const result = await response.json() as ApiResult;
       if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
       onRoom({ code: result.code, ticket: result.ticket, gameId: result.gameId || gameId });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : t('onlineDisconnected')); }
-    finally { setBusy(false); }
+      joined = true;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : t('onlineDisconnected');
+      setError(message);
+      onNotice(message);
+    } finally {
+      if (!joined) onJoiningChange(false);
+      setBusy(false);
+    }
   };
   const create = () => requestRoom('/api/rooms', { gameId });
   const join = (event: FormEvent) => { event.preventDefault(); const value = code.trim().toUpperCase(); if (value) void requestRoom(`/api/rooms/${encodeURIComponent(value)}/join`, {}); };

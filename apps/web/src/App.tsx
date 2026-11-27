@@ -5,6 +5,7 @@ import { languageNames, translate, type Language, type TranslationKey } from './
 import { xoRules } from './i18n/rules';
 import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
+import { DireBetLoading } from './games/DireBetLoading';
 import PublicRoomLobby, { type RoomAlertPrefs } from './games/PublicRoomLobby';
 import { PlayerAvatar } from './games/PlayerAvatar';
 import type { MarketplaceRoom } from './games/marketplaceTypes';
@@ -122,9 +123,7 @@ function App() {
   const [loginPin, setLoginPin] = useState('');
   const [loginMessage, setLoginMessage] = useState('');
   const [roomConfig, setRoomConfig] = useState<RoomConfig | null>(null);
-  const [privateInviteCode, setPrivateInviteCode] = useState<string | null>(null);
-  const [privateInviteBusy, setPrivateInviteBusy] = useState(false);
-  const [privateInviteError, setPrivateInviteError] = useState('');
+  const [joiningRoom, setJoiningRoom] = useState(false);
   const [xo, setXo] = useState<XOState>(() => initXO());
   const [notice, setNotice] = useState('');
   const [ludoTutorial, setLudoTutorial] = useState(false);
@@ -134,6 +133,7 @@ function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [accountAvatarUrl, setAccountAvatarUrl] = useState<string | null>(null);
   const promoTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const privateInviteAttempt = useRef('');
   const bannerResume = useRef(0);
   const profileRef = useRef<HTMLDivElement | null>(null);
   const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
@@ -379,12 +379,27 @@ function App() {
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('room')?.toUpperCase();
     if (!sessionToken || !code || roomConfig || !/^[23456789A-HJ-NP-Z]{6}$/.test(code)) return;
+    if (privateInviteAttempt.current === code) return;
+    privateInviteAttempt.current = code;
     const search = new URLSearchParams(location.search);
     search.delete('room');
     history.replaceState(null, '', `${location.pathname}${search.toString() ? `?${search}` : ''}${location.hash}`);
-    setPrivateInviteCode(code);
-    setPrivateInviteError('');
-  }, [sessionToken, roomConfig]);
+    setJoiningRoom(true);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/rooms/${code}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' });
+        const result = await response.json() as { code?: string; ticket?: string; gameId?: GameId; error?: string };
+        if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
+        setJoiningRoom(false);
+        setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' });
+        setOverlay(null); setSelected(null); setPage('online');
+      } catch (cause) {
+        setJoiningRoom(false);
+        setNotice(cause instanceof Error ? cause.message : t('onlineDisconnected'));
+        window.setTimeout(() => setNotice(''), 3000);
+      }
+    })();
+  }, [sessionToken, roomConfig, t]);
 
   useEffect(() => {
     const names = ['/admin', '/admin/'];
@@ -484,8 +499,9 @@ function App() {
     const value = !reduceEffects; setReduceEffects(value); localStorage.setItem('direbet.reduceEffects', String(value));
   };
   const showUnavailable = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 3000); };
-  const enterOnlineRoom = useCallback((room: RoomConfig) => { setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
+  const enterOnlineRoom = useCallback((room: RoomConfig) => { setJoiningRoom(false); setRoomConfig(room); setOverlay(null); setSelected(null); setPage('online'); }, []);
   const exitOnlineRoom = useCallback(() => {
+    privateInviteAttempt.current = '';
     setRoomConfig(null);
     nav('home');
   }, []);
@@ -544,32 +560,6 @@ function App() {
     if (refreshToken) {
       await fetch('/api/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }) }).catch(() => undefined);
     }
-  };
-
-  const confirmPrivateInvite = async () => {
-    if (!sessionToken || !privateInviteCode || privateInviteBusy) return;
-    setPrivateInviteBusy(true);
-    setPrivateInviteError('');
-    try {
-      const response = await fetch(`/api/rooms/${privateInviteCode}/join`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${sessionToken}` }, body: '{}' });
-      const result = await response.json() as { code?: string; ticket?: string; gameId?: GameId; error?: string };
-      if (!response.ok || !result.code || !result.ticket) throw new Error(result.error || t('onlineDisconnected'));
-      setRoomConfig({ code: result.code, ticket: result.ticket, gameId: result.gameId || 'xo' });
-      setPrivateInviteCode(null);
-      setPage('online');
-      history.replaceState(null, '', `${location.pathname}${location.hash}`);
-    } catch (cause) {
-      setPrivateInviteError(cause instanceof Error ? cause.message : t('onlineDisconnected'));
-    } finally {
-      setPrivateInviteBusy(false);
-    }
-  };
-
-  const closePrivateInvite = () => {
-    setPrivateInviteCode(null);
-    setPrivateInviteError('');
-    setLobbyGameId('xo');
-    setPage('lobby');
   };
 
   if (location.pathname.startsWith('/admin')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AdminApp sessionToken={sessionToken} /></Suspense>;
@@ -703,8 +693,8 @@ function App() {
     {page === 'checkers' && <CheckersPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
     {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
 
-    {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
-    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} avatarUrl={resolvedAvatarSrc || resolvedAvatarFallbackSrc} alertPrefs={roomAlertPrefs} onSaveAlertPrefs={saveRoomAlertPrefs} onRoomsSnapshot={processLudoRoomsForAlerts} onRoom={enterOnlineRoom} onPractice={() => { if (lobbyGameId === 'xo') { openXo(); return; } if (lobbyGameId === 'ludo') setLudoTutorial(true); openPractice(lobbyGameId); }} onExit={() => nav('home')} />}
+    {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} onJoiningChange={setJoiningRoom} onNotice={showUnavailable} />}
+    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} avatarUrl={resolvedAvatarSrc || resolvedAvatarFallbackSrc} alertPrefs={roomAlertPrefs} onSaveAlertPrefs={saveRoomAlertPrefs} onRoomsSnapshot={processLudoRoomsForAlerts} onRoom={enterOnlineRoom} onPractice={() => { if (lobbyGameId === 'xo') { openXo(); return; } if (lobbyGameId === 'ludo') setLudoTutorial(true); openPractice(lobbyGameId); }} onExit={() => nav('home')} onJoiningChange={setJoiningRoom} onNotice={showUnavailable} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={exitOnlineRoom} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletApp t={t} token={sessionToken} initialView={walletInitialView} onInitialViewConsumed={() => setWalletInitialView(undefined)} onSupport={() => setOverlay('support')} />}
@@ -720,7 +710,6 @@ function App() {
     {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : openPractice(selected.id as GameId)} />}
     {overlay && <OverlaySheet overlay={overlay} t={t} language={language} displayName={displayName} avatarSrc={resolvedAvatarSrc} avatarFallbackSrc={resolvedAvatarFallbackSrc} authenticated={Boolean(sessionToken)} phoneShared={account?.phoneShared ?? null} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
     {onboarding && <Onboarding step={onboardingStep} setStep={setOnboardingStep} language={language} setLanguage={setLanguage} t={t} onFinish={() => { localStorage.setItem('direbet.onboarded','true'); setOnboarding(false); }} />}
-    {privateInviteCode && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !privateInviteBusy && closePrivateInvite()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="private-invite-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="private-invite-title">{t('joinRoom')}</h2><p>{t('privateRoomInviteConfirm').replace('{code}', privateInviteCode)}</p>{privateInviteError && <p className="auth-message" role="alert">{privateInviteError}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={privateInviteBusy} onClick={() => void confirmPrivateInvite()}>{privateInviteBusy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
     {activeRoomAlert && !isPlayingGame && (
       <div className="room-alert-toast" role="status" aria-live="polite">
         <span className="room-alert-icon" aria-hidden="true">🔔</span>
@@ -745,6 +734,7 @@ function App() {
         <button type="button" className="room-alert-close" aria-label={t('close')} onClick={() => setActiveRoomAlert(null)}>×</button>
       </div>
     )}
+    {joiningRoom && <DireBetLoading label={t('onlineConnecting')} />}
     {notice && <div role="status" className="toast">{notice}</div>}
   </main>;
 }
