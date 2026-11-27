@@ -727,6 +727,51 @@ describe('Ludo room creation Telegram notifications', () => {
     expect(created.status).toBe(201);
     expect(forwardedDisplayName).toBe('Dawit Tadesse');
   });
+
+  it('serves Telegram profile photos via /api/avatar/:userId with safe fallback', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/getUserProfilePhotos')) {
+        return new Response(JSON.stringify({ ok: true, result: { total_count: 1, photos: [[{ file_id: 'small-1' }, { file_id: 'med-1' }]] } }), { status: 200 });
+      }
+      if (url.includes('/getFile')) {
+        return new Response(JSON.stringify({ ok: true, result: { file_path: 'photos/file_0.jpg' } }), { status: 200 });
+      }
+      if (url.includes('/file/botbot-token/photos/file_0.jpg')) {
+        return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind: (id: unknown) => ({
+            first: async () => {
+              if (sql.includes('SELECT telegram_id FROM users')) {
+                return Number(id) === 42 ? { telegram_id: 987654 } : null;
+              }
+              return null;
+            },
+            run: async () => ({ success: true, meta: { changes: 0 } }),
+          }),
+        };
+      },
+    };
+    const env = { TELEGRAM_BOT_TOKEN: 'bot-token', DB: db } as never;
+
+    try {
+      const res = await worker.fetch(new Request('https://dire-bet.test/api/avatar/42'), env);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+
+      const missing = await worker.fetch(new Request('https://dire-bet.test/api/avatar/999'), env);
+      expect(missing.status).toBe(404);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 
 

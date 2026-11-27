@@ -3,7 +3,7 @@ export type AuthPayload = {
   refreshToken?: string;
   expiresIn?: number;
   refreshExpiresIn?: number;
-  user?: { displayName?: string; webUsername?: string | null; language?: string };
+  user?: { displayName?: string; webUsername?: string | null; language?: string; avatarUrl?: string | null };
 };
 
 const ACCESS_KEY = 'direbet.session';

@@ -24,9 +24,9 @@ type RoomRow = {
   fee_tenths: number; payout_tenths: number; winner: number | null; wallet_kind: 'demo' | 'real' | 'free';
 };
 type PlayerRow = { user_id: number; display_name: string; seat: number; reserved_units: number };
-type MarketPlayer = { name: string; avatar: string; seat: number };
+type MarketPlayer = { name: string; avatar: string; avatarUrl: string; seat: number };
 type MarketRoom = {
-  id: string; code: string; gameId: RoomGame; creatorName: string; creatorAvatar: string;
+  id: string; code: string; gameId: RoomGame; creatorName: string; creatorAvatar: string; creatorAvatarUrl: string;
   players: MarketPlayer[]; playerCount: number; capacity: number; entryCredits: number;
   poolCredits: number; payoutCredits: number;
   mode: string; options: Record<string, unknown>; status: PublicStatus; createdAt: number; expiresAt: number;
@@ -706,7 +706,8 @@ export class Matchmaker {
     return {
       id: row.id, code: row.code, gameId: row.game_id, creatorName: row.creator_name,
       creatorAvatar: (row.creator_name.trim()[0] || 'P').toUpperCase(),
-      players: players.map((player) => ({ name: player.display_name, avatar: (player.display_name.trim()[0] || 'P').toUpperCase(), seat: player.seat })),
+      creatorAvatarUrl: `/api/avatar/${row.creator_id}`,
+      players: players.map((player) => ({ name: player.display_name, avatar: (player.display_name.trim()[0] || 'P').toUpperCase(), avatarUrl: `/api/avatar/${player.user_id}`, seat: player.seat })),
       playerCount: row.player_count, capacity: row.capacity, entryCredits: row.wallet_kind === 'free' ? 0 : row.entry_credits,
       poolCredits: credits(row.status === 'COMPLETED' ? row.pool_tenths : expected.poolTenths),
       payoutCredits: credits(row.status === 'COMPLETED' ? row.payout_tenths : expected.payoutTenths),

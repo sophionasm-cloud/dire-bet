@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { applyCheckerMove, botCheckerMove, legalCheckerMoves, newCheckersGame, type CheckerPlayer, type CheckersState } from '@dire-bet/engines/checkers';
 import type { TranslationKey } from '../i18n';
 import { MatchResultModal } from './MatchResultModal';
+import { PlayerAvatar } from './PlayerAvatar';
 import type { RoomConfig } from './marketplaceTypes';
 
 export type CheckersTranslator = (key: TranslationKey) => string;
 export type CheckersTerminal = { winner: number | 'draw'; reason: 'resign' | 'draw' | 'timeout' } | null;
-export type CheckersPlayerInfo = { name: string; online: boolean; bot?: boolean };
+export type CheckersPlayerInfo = { id?: number; name: string; online: boolean; bot?: boolean };
 export type CheckersSnapshot = {
   code: string;
   status: 'waiting' | 'active' | 'finished' | 'cancelled';
@@ -170,7 +171,9 @@ export function CheckersPlayerPanel({ player, seat, color, own, active, pieces, 
   const name = player?.name || (waiting ? t('waitingForPlayer') : seat === 0 ? t('you') : t('opponent'));
   const status = player?.bot ? t('bot') : player?.online ? t('onlineConnected') : waiting ? t('waitingForPlayer') : t('onlineConnecting');
   return <article className={`checkers-player-panel ${color}${active ? ' turn-active' : ''}${own ? ' is-you' : ''}`}>
-    <span className={`checkers-avatar ${color}`}>{player?.bot ? '✦' : (player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2'))}</span>
+    <span className={`checkers-avatar ${color}`}>
+      {player?.bot ? '✦' : <PlayerAvatar src={player?.id ? `/api/avatar/${player.id}` : undefined} fallback={player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')} />}
+    </span>
     <div className="checkers-player-copy">
       <strong>{name}{own && name !== t('you') ? ` · ${t('you')}` : ''}</strong>
       <small><i className={`checkers-online-dot${player?.online ? ' online' : ''}`} />{status} · {color === 'ivory' ? t('checkersIvory') : t('checkersGraphite')}</small>
@@ -286,8 +289,8 @@ export function CheckersRoom({ snapshot, room, connection, error, t, send, onRec
     localStorage.setItem('direbet.checkers.sound', String(next));
     if (next) playCheckersSound('move', true);
   };
-  const topPlayer: CheckersPlayerInfo | undefined = snapshot?.players[1] ? { name: snapshot.players[1].name, online: snapshot.players[1].online } : undefined;
-  const bottomPlayer: CheckersPlayerInfo | undefined = snapshot?.players[0] ? { name: snapshot.players[0].name, online: snapshot.players[0].online } : undefined;
+  const topPlayer: CheckersPlayerInfo | undefined = snapshot?.players[1] ? { id: snapshot.players[1].id, name: snapshot.players[1].name, online: snapshot.players[1].online } : undefined;
+  const bottomPlayer: CheckersPlayerInfo | undefined = snapshot?.players[0] ? { id: snapshot.players[0].id, name: snapshot.players[0].name, online: snapshot.players[0].online } : undefined;
 
   useEffect(() => {
     if (!snapshot) return;

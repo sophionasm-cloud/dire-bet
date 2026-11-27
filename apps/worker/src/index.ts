@@ -53,7 +53,7 @@ const securityHeaders = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), geolocation=(), payment=(), microphone=(self)',
   'X-Frame-Options': 'SAMEORIGIN',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; base-uri 'self'; form-action 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org",
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://t.me https://*.telegram.org https://*.cdn-telegram.org; connect-src 'self' wss:; base-uri 'self'; form-action 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org",
 };
 
 function json(data: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -679,7 +679,7 @@ async function revokeRefreshToken(env: Env, refreshToken: string): Promise<void>
 async function issueAuthResponse(env: Env, userId: number, request: Request, user: Record<string, unknown>, lifetime = SESSION_LIFETIME): Promise<Response> {
   const token = await issueSession(userId, env.SESSION_SECRET || '', lifetime);
   const refresh = await createAuthSession(env, userId, request);
-  return json({ token, expiresIn: lifetime, refreshToken: refresh.refreshToken, refreshExpiresIn: refresh.expiresIn, user });
+  return json({ token, expiresIn: lifetime, refreshToken: refresh.refreshToken, refreshExpiresIn: refresh.expiresIn, user: { ...user, avatarUrl: `/api/avatar/${userId}` } });
 }
 
 async function renewAuthSession(request: Request, env: Env): Promise<Response> {
@@ -709,7 +709,7 @@ async function renewAuthSession(request: Request, env: Env): Promise<Response> {
   if (results[0]?.meta.changes !== 1) return json({ error: 'Session renewal is invalid or expired' }, 401);
   const token = await issueSession(row.user_id, env.SESSION_SECRET);
   return json({ token, expiresIn: SESSION_LIFETIME, refreshToken, refreshExpiresIn: REFRESH_TOKEN_LIFETIME,
-    user: { displayName: row.web_username || row.first_name, webUsername: row.web_username, language: row.language } });
+    user: { displayName: row.web_username || row.first_name, webUsername: row.web_username, language: row.language, avatarUrl: `/api/avatar/${row.user_id}` } });
 }
 
 async function endAuthSession(request: Request, env: Env): Promise<Response> {
@@ -724,6 +724,122 @@ async function endAuthSession(request: Request, env: Env): Promise<Response> {
 
 function validEvidenceReference(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length >= 3 && value.trim().length <= 240;
+}
+
+function validTelegramPhotoUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 512) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === 't.me'
+      || host === 'telegram.org'
+      || host.endsWith('.telegram.org')
+      || host.endsWith('.cdn-telegram.org')
+      || host === 'telesco.pe'
+      || host.endsWith('.telesco.pe')
+    ) {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureUserAvatarsTable(db: D1Database): Promise<void> {
+  try {
+    await db.prepare(`CREATE TABLE IF NOT EXISTS user_avatars (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      photo_url TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`).run();
+  } catch {
+    // Minimal test DB mocks may omit DDL support.
+  }
+}
+
+async function saveUserAvatarUrl(db: D1Database, userId: number, photoUrl: unknown): Promise<void> {
+  const safeUrl = validTelegramPhotoUrl(photoUrl);
+  if (!safeUrl) return;
+  try {
+    await ensureUserAvatarsTable(db);
+    await db.prepare(`INSERT INTO user_avatars (user_id, photo_url, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id) DO UPDATE SET photo_url = excluded.photo_url, updated_at = CURRENT_TIMESTAMP`)
+      .bind(userId, safeUrl).run();
+  } catch {
+    // Never fail login if avatar cache table cannot be written.
+  }
+}
+
+function avatarImageResponse(bytes: ArrayBuffer, contentType: string | null): Response {
+  const safeType = contentType && contentType.toLowerCase().startsWith('image/') ? contentType : 'image/jpeg';
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      'Content-Type': safeType,
+      'Cache-Control': 'public, max-age=1800',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+async function serveUserAvatar(userId: number, env: Env): Promise<Response> {
+  if (!Number.isSafeInteger(userId) || userId <= 0) return new Response(null, { status: 404 });
+  const user = await env.DB.prepare('SELECT telegram_id FROM users WHERE id = ? AND status = ?')
+    .bind(userId, 'active')
+    .first<{ telegram_id: number | null }>()
+    .catch(() => null);
+  if (!user) return new Response(null, { status: 404, headers: { 'Cache-Control': 'public, max-age=120' } });
+
+  if (env.TELEGRAM_BOT_TOKEN && Number.isSafeInteger(user.telegram_id) && (user.telegram_id || 0) > 0) {
+    try {
+      const photosResult = await telegramApi<{ total_count?: number; photos?: Array<Array<{ file_id?: string }>> }>(
+        env.TELEGRAM_BOT_TOKEN,
+        'getUserProfilePhotos',
+        { user_id: user.telegram_id, limit: 1 },
+      );
+      const sizes = photosResult?.photos?.[0];
+      const chosen = sizes?.[1] || sizes?.[0];
+      if (chosen?.file_id) {
+        const fileInfo = await telegramApi<{ file_path?: string }>(env.TELEGRAM_BOT_TOKEN, 'getFile', { file_id: chosen.file_id });
+        if (fileInfo?.file_path) {
+          const fileRes = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${fileInfo.file_path}`);
+          if (fileRes.ok) {
+            return avatarImageResponse(await fileRes.arrayBuffer(), fileRes.headers.get('Content-Type'));
+          }
+        }
+      }
+    } catch {
+      // Fall back to saved initData photo_url if Bot API photo lookup is unavailable.
+    }
+  }
+
+  try {
+    await ensureUserAvatarsTable(env.DB);
+    const saved = await env.DB.prepare('SELECT photo_url FROM user_avatars WHERE user_id = ?')
+      .bind(userId)
+      .first<{ photo_url: string | null }>()
+      .catch(() => null);
+    const safeUrl = validTelegramPhotoUrl(saved?.photo_url);
+    if (safeUrl) {
+      const upstream = await fetch(safeUrl);
+      if (upstream.ok) {
+        const contentType = upstream.headers.get('Content-Type');
+        if (!contentType || contentType.toLowerCase().startsWith('image/')) {
+          return avatarImageResponse(await upstream.arrayBuffer(), contentType);
+        }
+      }
+    }
+  } catch {
+    // Fall through to 404 so client falls back to letter initial.
+  }
+
+  return new Response(null, { status: 404, headers: { 'Cache-Control': 'public, max-age=300' } });
 }
 
 async function telegramApi<T>(token: string, method: string, body: unknown): Promise<T> {
@@ -1199,6 +1315,7 @@ async function authenticate(request: Request, env: Env): Promise<Response> {
       ON CONFLICT(telegram_id) DO UPDATE SET username = excluded.username, first_name = excluded.first_name,
       last_name = excluded.last_name, updated_at = CURRENT_TIMESTAMP RETURNING id`).bind(id, username, firstName, lastName, lang).first<{ id: number }>();
     if (!result) return json({ error: 'Could not create session' }, 500);
+    if (user.photo_url) await saveUserAvatarUrl(env.DB, result.id, user.photo_url);
     if (parsed.data.refreshToken) await revokeRefreshToken(env, parsed.data.refreshToken).catch(() => undefined);
     const displayName = telegramAccountName({ first_name: firstName, last_name: lastName, username });
     return await issueAuthResponse(env, result.id, request, { displayName, username, language: lang });
@@ -1943,12 +2060,16 @@ async function handleRequest(request: Request, env: Env, ctx?: ExecutionContext)
   if (url.pathname === '/api/auth/refresh' && request.method === 'POST') return renewAuthSession(request, env);
   if (url.pathname === '/api/auth/logout' && request.method === 'POST') return endAuthSession(request, env);
   if (url.pathname === '/api/account/web-login' && request.method === 'POST') return setWebLogin(request, env);
+  const avatarMatch = url.pathname.match(/^\/api\/avatar\/(\d+)$/);
+  if (avatarMatch && request.method === 'GET') {
+    return serveUserAvatar(Number(avatarMatch[1]), env);
+  }
   if (url.pathname === '/api/me' && request.method === 'GET') {
     const id = await readSession(request, env.SESSION_SECRET);
     if (!id) return json({ error: 'Authentication required' }, 401);
     const user = await env.DB.prepare(`SELECT id, first_name, web_username, language,
       EXISTS(SELECT 1 FROM user_contacts WHERE user_id = users.id) AS phone_shared FROM users WHERE id = ?`).bind(id).first<{ id: number; first_name: string; web_username: string | null; language: string; phone_shared: number }>();
-    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language } }) : json({ error: 'Session is no longer valid' }, 401);
+    return user ? json({ user: { displayName: user.web_username || user.first_name, webUsername: user.web_username, phoneShared: user.phone_shared === 1, telegramLinked: true, language: user.language, avatarUrl: `/api/avatar/${user.id}` } }) : json({ error: 'Session is no longer valid' }, 401);
   }
   const walletStaffResponse = await handleWalletAndStaff(request, env);
   if (walletStaffResponse) return walletStaffResponse;

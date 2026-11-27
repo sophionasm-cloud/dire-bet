@@ -7,7 +7,8 @@ export type MarketplaceRoom = {
   gameId: GameId;
   creatorName: string;
   creatorAvatar: string;
-  players: { name: string; avatar: string; seat: number }[];
+  creatorAvatarUrl?: string;
+  players: { name: string; avatar: string; avatarUrl?: string; seat: number }[];
   playerCount: number;
   capacity: number;
   entryCredits: number;

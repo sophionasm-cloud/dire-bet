@@ -6,6 +6,7 @@ import { xoRules } from './i18n/rules';
 import { CheckersPractice, LudoPractice, PokerPractice } from './games/PracticeGames';
 import { OnlineMatches, OnlineRoom, type RoomConfig } from './games/OnlineXO';
 import PublicRoomLobby, { type RoomAlertPrefs } from './games/PublicRoomLobby';
+import { PlayerAvatar } from './games/PlayerAvatar';
 import type { MarketplaceRoom } from './games/marketplaceTypes';
 import WalletApp from './wallet/WalletApp';
 import DashboardWalletCard from './DashboardWalletCard';
@@ -19,7 +20,7 @@ type Page = 'home'|'matches'|'online'|'lobby'|'wallet'|'rank'|'menu'|'account'|'
 type Category = 'all'|'board'|'cards'|'quick';
 type Game = (typeof PUBLIC_GAMES)[number];
 type Overlay = 'language'|'menu'|'support'|'notifications'|'terms'|'privacy'|'rules'|null;
-type Account = { webUsername: string | null; phoneShared: boolean };
+type Account = { webUsername: string | null; phoneShared: boolean; avatarUrl?: string | null };
 type RoomAlertItem = { id: string; kind: 'room' | 'many'; code?: string; entryCredits?: number; count?: number };
 
 const DEFAULT_ROOM_ALERTS: RoomAlertPrefs = { enabled: false, minEtb: 30, maxEtb: 10000 };
@@ -131,7 +132,7 @@ function App() {
   const [queuedRoomAlerts, setQueuedRoomAlerts] = useState<RoomAlertItem[]>([]);
   const [activeRoomAlert, setActiveRoomAlert] = useState<RoomAlertItem | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [failedTelegramPhoto, setFailedTelegramPhoto] = useState('');
+  const [accountAvatarUrl, setAccountAvatarUrl] = useState<string | null>(null);
   const promoTouchStart = useRef<{ x: number; y: number } | null>(null);
   const bannerResume = useRef(0);
   const profileRef = useRef<HTMLDivElement | null>(null);
@@ -288,6 +289,7 @@ function App() {
     if (!payload?.token) { setSessionToken(null); return; }
     setSessionToken(payload.token);
     if (payload.user?.displayName) setDisplayName(payload.user.displayName);
+    if (payload.user?.avatarUrl) setAccountAvatarUrl(payload.user.avatarUrl);
   }), []);
 
   useEffect(() => {
@@ -331,12 +333,13 @@ function App() {
     let live = true;
     const previousRefresh = readRefreshToken();
     fetch('/api/auth/telegram', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ initData: telegramInitData, ...(previousRefresh ? { refreshToken: previousRefresh } : {}) }) })
-      .then(async (r) => { if (!r.ok) throw new Error(); return r.json() as Promise<{ token: string; refreshToken?: string; expiresIn?: number; user: { displayName?: string } }> })
+      .then(async (r) => { if (!r.ok) throw new Error(); return r.json() as Promise<{ token: string; refreshToken?: string; expiresIn?: number; user: { displayName?: string; avatarUrl?: string | null } }> })
       .then((data) => {
         if (!live) return;
         storeAuth(data);
         setSessionToken(data.token);
         setDisplayName(data.user.displayName || 'Player');
+        if (data.user.avatarUrl) setAccountAvatarUrl(data.user.avatarUrl);
         setTelegramAuthError(false);
         setPage((current) => current === 'home' ? initialPage : current);
         const search = new URLSearchParams(location.search);
@@ -354,11 +357,12 @@ function App() {
     fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Session expired. Sign in again.');
-        return response.json() as Promise<{ user: { displayName: string; webUsername: string | null; phoneShared: boolean } }>;
+        return response.json() as Promise<{ user: { displayName: string; webUsername: string | null; phoneShared: boolean; avatarUrl?: string | null } }>;
       })
       .then((data) => {
         if (!live) return;
-        setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
+        setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared, avatarUrl: data.user.avatarUrl });
+        if (data.user.avatarUrl) setAccountAvatarUrl(data.user.avatarUrl);
         setDisplayName(data.user.displayName || 'Player');
         if (data.user.webUsername) setAccountUsername(data.user.webUsername);
       })
@@ -491,10 +495,10 @@ function App() {
     if (!/^\d{8}$/.test(loginPin)) { setLoginMessage('Enter your 8-digit PIN.'); return; }
     try {
       const response = await fetch('/api/auth/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: loginUsername, password: loginPin }) });
-      const data = await response.json() as { token?: string; refreshToken?: string; expiresIn?: number; user?: { displayName?: string }; error?: string };
+      const data = await response.json() as { token?: string; refreshToken?: string; expiresIn?: number; user?: { displayName?: string; avatarUrl?: string | null }; error?: string };
       if (!response.ok || !data.token) throw new Error(data.error || 'Could not sign in.');
       storeAuth(data);
-      setSessionToken(data.token); setDisplayName(data.user?.displayName || loginUsername); setLoginPin(''); setPage('home');
+      setSessionToken(data.token); setDisplayName(data.user?.displayName || loginUsername); setAccountAvatarUrl(data.user?.avatarUrl || null); setLoginPin(''); setPage('home');
       const nextRoute = new URLSearchParams(location.search).get('next');
       history.replaceState(null, '', nextRoute === '/agent' || nextRoute === '/admin' ? nextRoute : location.pathname);
     } catch (cause) { setLoginMessage(cause instanceof Error ? cause.message : 'Could not sign in.'); }
@@ -523,9 +527,10 @@ function App() {
     setAccountMessage('Checking your account…');
     try {
       const response = await fetch('/api/me', { headers: { Authorization: `Bearer ${sessionToken}` } });
-      const data = await response.json() as { user?: { displayName: string; webUsername: string | null; phoneShared: boolean }; error?: string };
+      const data = await response.json() as { user?: { displayName: string; webUsername: string | null; phoneShared: boolean; avatarUrl?: string | null }; error?: string };
       if (!response.ok || !data.user) throw new Error(data.error || 'Could not check account status.');
-      setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared });
+      setAccount({ webUsername: data.user.webUsername, phoneShared: data.user.phoneShared, avatarUrl: data.user.avatarUrl });
+      if (data.user.avatarUrl) setAccountAvatarUrl(data.user.avatarUrl);
       setDisplayName(data.user.displayName || 'Player');
       if (data.user.webUsername) setAccountUsername(data.user.webUsername);
       setAccountMessage(data.user.phoneShared ? 'Contact linked to your Telegram account.' : 'The bot has not received your contact yet.');
@@ -534,7 +539,7 @@ function App() {
   const signOutWeb = async () => {
     const refreshToken = readRefreshToken();
     clearAuth(true);
-    setSessionToken(null); setAccount(null); setDisplayName('Guest'); setPage('home'); setAccountMessage('');
+    setSessionToken(null); setAccount(null); setAccountAvatarUrl(null); setDisplayName('Guest'); setPage('home'); setAccountMessage('');
     if (telegramMiniApp) setTelegramAuthError(true);
     if (refreshToken) {
       await fetch('/api/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refreshToken }) }).catch(() => undefined);
@@ -571,7 +576,8 @@ function App() {
   if (location.pathname.startsWith('/agent')) return <Suspense fallback={<div className="route-loading">Loading…</div>}><AgentApp token={sessionToken} /></Suspense>;
 
   const telegramPhoto = window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
-  const showTelegramPhoto = Boolean(telegramPhoto && failedTelegramPhoto !== telegramPhoto);
+  const resolvedAvatarSrc = accountAvatarUrl || account?.avatarUrl || telegramPhoto || null;
+  const resolvedAvatarFallbackSrc = resolvedAvatarSrc === telegramPhoto ? null : telegramPhoto || null;
   const avatarInitial = (displayName.trim()[0] || 'P').toUpperCase();
   const accountStatus = sessionToken
     ? account ? (account.phoneShared ? t('contactLinked') : t('contactNotLinked')) : t('onlineConnecting')
@@ -585,12 +591,12 @@ function App() {
         <button type="button" className="dash-icon-btn bell-button" onClick={() => setOverlay('notifications')} aria-label={t('matches')}><Icon name="bell" size={18}/><span className="notification-dot"/></button>
         <div className="dash-profile" ref={profileRef}>
           <button type="button" className="dash-avatar" aria-expanded={profileOpen} aria-haspopup="menu" aria-label={t('profile')} onClick={() => setProfileOpen((open) => !open)}>
-            {showTelegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer" onError={() => setFailedTelegramPhoto(telegramPhoto || '')}/> : <span>{avatarInitial}</span>}
+            <PlayerAvatar src={resolvedAvatarSrc} fallbackSrc={resolvedAvatarFallbackSrc} fallback={avatarInitial} />
             <i className="dash-avatar-dot" aria-hidden="true"/>
           </button>
           {profileOpen && <div className="dash-profile-menu" role="menu" aria-label={t('profile')}>
             <div className="dash-profile-head">
-              <span className="dash-avatar dash-avatar-lg" aria-hidden="true">{showTelegramPhoto ? <img src={telegramPhoto} alt="" referrerPolicy="no-referrer" onError={() => setFailedTelegramPhoto(telegramPhoto || '')}/> : <span>{avatarInitial}</span>}</span>
+              <span className="dash-avatar dash-avatar-lg" aria-hidden="true"><PlayerAvatar src={resolvedAvatarSrc} fallbackSrc={resolvedAvatarFallbackSrc} fallback={avatarInitial} /></span>
               <div className="dash-profile-copy"><strong>{displayName}</strong><span>{accountStatus}</span></div>
             </div>
             <div className="dash-profile-divider" aria-hidden="true"/>
@@ -685,7 +691,7 @@ function App() {
     {page === 'xo' && <section className="screen game-screen">
       <button className="back-button" onClick={leaveGame}><Icon name="back" size={19}/>{t('exitGame')}</button>
       <div className="game-title-row"><div><span className="eyebrow">{t('freePractice')}</span><h1>XO</h1></div><span className="bot-pill"><span className="bot-dot"/>{t('bot')}</span></div>
-      <div className="player-pair"><div className="player-badge active-player"><span className="player-avatar">{t('you').slice(0,1)}</span><span><strong>{t('you')}</strong><small>X · {xo.turn === 'X' && !xo.winner ? t('yourTurn') : ' '}</small></span></div><span className="versus">VS</span><div className={`player-badge ${xo.turn === 'O' ? 'active-player' : ''}`}><span className="bot-avatar">✦</span><span><strong>{t('bot')}</strong><small>O · {xo.turn === 'O' && !xo.winner ? t('botTurn') : ' '}</small></span></div></div>
+      <div className="player-pair"><div className="player-badge active-player"><span className="player-avatar"><PlayerAvatar src={resolvedAvatarSrc} fallbackSrc={resolvedAvatarFallbackSrc} fallback={avatarInitial} /></span><span><strong>{t('you')}</strong><small>X · {xo.turn === 'X' && !xo.winner ? t('yourTurn') : ' '}</small></span></div><span className="versus">VS</span><div className={`player-badge ${xo.turn === 'O' ? 'active-player' : ''}`}><span className="bot-avatar">✦</span><span><strong>{t('bot')}</strong><small>O · {xo.turn === 'O' && !xo.winner ? t('botTurn') : ' '}</small></span></div></div>
       <div className="xo-board" role="grid" aria-label="XO">
         {xo.board.map((cell, index) => <button key={index} role="gridcell" className={`xo-cell ${cell ? `mark-${cell.toLowerCase()}` : ''} ${xo.winner && cell === xo.winner ? 'winning-cell' : ''}`} disabled={Boolean(cell) || Boolean(xo.winner) || xo.turn !== 'X'} onClick={() => quickMove(index)} aria-label={`XO ${index + 1}${cell ? ` ${cell}` : ''}`}>{cell === 'X' ? <span className="x-mark">×</span> : cell === 'O' ? <span className="o-mark">○</span> : ''}</button>)}
       </div>
@@ -698,11 +704,11 @@ function App() {
     {page === 'poker' && <PokerPractice t={t} onExit={leaveGame} reduceEffects={reduceEffects} />}
 
     {page === 'matches' && <OnlineMatches t={t} token={sessionToken} onRoom={enterOnlineRoom} />}
-    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} alertPrefs={roomAlertPrefs} onSaveAlertPrefs={saveRoomAlertPrefs} onRoomsSnapshot={processLudoRoomsForAlerts} onRoom={enterOnlineRoom} onPractice={() => { if (lobbyGameId === 'xo') { openXo(); return; } if (lobbyGameId === 'ludo') setLudoTutorial(true); openPractice(lobbyGameId); }} onExit={() => nav('home')} />}
+    {page === 'lobby' && <PublicRoomLobby gameId={lobbyGameId} token={sessionToken} t={t} displayName={displayName} avatarUrl={resolvedAvatarSrc || resolvedAvatarFallbackSrc} alertPrefs={roomAlertPrefs} onSaveAlertPrefs={saveRoomAlertPrefs} onRoomsSnapshot={processLudoRoomsForAlerts} onRoom={enterOnlineRoom} onPractice={() => { if (lobbyGameId === 'xo') { openXo(); return; } if (lobbyGameId === 'ludo') setLudoTutorial(true); openPractice(lobbyGameId); }} onExit={() => nav('home')} />}
     {page === 'online' && roomConfig && <OnlineRoom room={roomConfig} t={t} token={sessionToken} onExit={exitOnlineRoom} />}
     {page === 'rank' && <EmptyScreen icon="rank" title={t('rankTitle')} copy={t('rankEmpty')} action={t('home')} onAction={() => nav('home')} />}
     {page === 'wallet' && <WalletApp t={t} token={sessionToken} initialView={walletInitialView} onInitialViewConsumed={() => setWalletInitialView(undefined)} onSupport={() => setOverlay('support')} />}
-    {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}
+    {page === 'menu' && <MenuScreen t={t} language={language} onLanguage={() => setOverlay('language')} onTerms={() => setOverlay('terms')} onPrivacy={() => setOverlay('privacy')} onSupport={() => setOverlay('support')} onEffect={setEffectPreference} reduceEffects={reduceEffects} displayName={displayName} avatarSrc={resolvedAvatarSrc} avatarFallbackSrc={resolvedAvatarFallbackSrc} account={account} authenticated={Boolean(sessionToken)} onAccount={() => nav('account')} />}
     {page === 'account' && <AccountScreen t={t} displayName={displayName} authenticated={Boolean(sessionToken)} authPending={telegramAuthPending} account={account} username={accountUsername} pin={accountPin} message={accountMessage} setUsername={setAccountUsername} setPin={setAccountPin} onSave={saveWebLogin} onShareContact={requestPhoneContact} onRefresh={() => void refreshAccount()} onLogin={() => nav('login')} onSignOut={signOutWeb} onBack={() => nav('menu')} />}
     {page === 'login' && <WebLoginScreen t={t} username={loginUsername} pin={loginPin} message={loginMessage} setUsername={setLoginUsername} setPin={setLoginPin} onSubmit={signInWithWebLogin} onBack={() => nav('home')} />}
 
@@ -712,7 +718,7 @@ function App() {
     </nav>}
 
     {selected && <GameSheet game={selected} t={t} onClose={() => setSelected(null)} onRules={() => { setSelected(null); setOverlay('rules'); }} onPlay={() => selected.id === 'xo' ? openXo() : openPractice(selected.id as GameId)} />}
-    {overlay && <OverlaySheet overlay={overlay} t={t} language={language} displayName={displayName} authenticated={Boolean(sessionToken)} phoneShared={account?.phoneShared ?? null} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
+    {overlay && <OverlaySheet overlay={overlay} t={t} language={language} displayName={displayName} avatarSrc={resolvedAvatarSrc} avatarFallbackSrc={resolvedAvatarFallbackSrc} authenticated={Boolean(sessionToken)} phoneShared={account?.phoneShared ?? null} onLanguage={updateLanguage} onClose={() => setOverlay(null)} onNavigate={nav} onNotice={showUnavailable} />}
     {onboarding && <Onboarding step={onboardingStep} setStep={setOnboardingStep} language={language} setLanguage={setLanguage} t={t} onFinish={() => { localStorage.setItem('direbet.onboarded','true'); setOnboarding(false); }} />}
     {privateInviteCode && <div className="scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !privateInviteBusy && closePrivateInvite()}><section className="bottom-sheet simple-sheet" role="dialog" aria-modal="true" aria-labelledby="private-invite-title"><div className="sheet-handle"/><button className="sheet-close" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="private-invite-title">{t('joinRoom')}</h2><p>{t('privateRoomInviteConfirm').replace('{code}', privateInviteCode)}</p>{privateInviteError && <p className="auth-message" role="alert">{privateInviteError}</p>}<div className="game-actions"><button className="secondary-button" type="button" disabled={privateInviteBusy} onClick={closePrivateInvite}>{t('cancelAction')}</button><button className="primary-button" type="button" disabled={privateInviteBusy} onClick={() => void confirmPrivateInvite()}>{privateInviteBusy ? t('onlineConnecting') : t('joinRoom')}</button></div></section></div>}
     {activeRoomAlert && !isPlayingGame && (
@@ -755,8 +761,8 @@ function AccountScreen({ t, displayName, authenticated, authPending, account, us
   return <section className="screen auth-screen account-screen"><button className="back-button" onClick={onBack}><Icon name="back" size={19}/>{t('menuTitle')}</button><span className="eyebrow">DIRE BET</span><h1>{t('account')}</h1>{authenticated ? <><p className="auth-intro">{t('telegramAccount')} <strong>{displayName}</strong>. {t('webLoginOptional')}</p><div className="account-contact"><div><strong>{t('contactSharing')}</strong><span>{account?.phoneShared ? t('contactLinked') : account ? t('contactNotLinked') : t('onlineConnecting')}</span></div><div className="account-actions">{account && !account.phoneShared && <button className="secondary-button" type="button" onClick={onShareContact}>{t('shareContact')}</button>}<button className="text-button" type="button" onClick={onRefresh}>{t('refreshStatus')}</button></div></div><p className="auth-footnote">{t('contactPrivacy')}</p>{account?.phoneShared ? <form className="auth-form" onSubmit={onSave}><label>{t('username')}<input autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z][A-Za-z0-9_]{2,23}" required value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>{t('eightDigitPin')}<input autoComplete="new-password" type="password" inputMode="numeric" pattern="[0-9]{8}" minLength={8} maxLength={8} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))} /></label><small className="auth-footnote">{t('pinTip')}</small>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button wide" type="submit">{account.webUsername ? t('updateWebLogin') : t('saveWebLogin')}<span>→</span></button></form> : account ? <div className="account-prompt"><p>{t('contactNeeded')}</p><a className="secondary-button" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}</a>{message && <p className="auth-message" role="status">{message}</p>}</div> : <p className="auth-message" role="status">{t('onlineConnecting')}</p>}<button className="text-button account-signout" type="button" onClick={onSignOut}>{t('signOut')}</button></> : authPending ? <p className="auth-message" role="status">{t('onlineConnecting')}</p> : <><p className="auth-intro">{t('accountNeedsTelegram')}</p><a className="primary-button wide auth-telegram-link" href="https://t.me/Dire_Bet_bot" target="_blank" rel="noreferrer">{t('openTelegram')}<span>↗</span></a><button className="text-button" onClick={onLogin}>{t('webLogin')}</button>{message && <p className="auth-message" role="status">{message}</p>}</>}</section>;
 }
 
-function MenuScreen({ t, language, onLanguage, onTerms, onPrivacy, onSupport, onEffect, reduceEffects, displayName, account, authenticated, onAccount }: { t:(key:TranslationKey)=>string; language:Language; onLanguage:()=>void; onTerms:()=>void; onPrivacy:()=>void; onSupport:()=>void; onEffect:()=>void; reduceEffects:boolean; displayName:string; account:Account|null; authenticated:boolean; onAccount:()=>void }) {
-  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div><div className="menu-group"><button onClick={onAccount}><span className="menu-icon"><Icon name="person"/></span><span><strong>{t('account')}</strong><small>{t('webLogin')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · FREE PLAY</div></section>;
+function MenuScreen({ t, language, onLanguage, onTerms, onPrivacy, onSupport, onEffect, reduceEffects, displayName, avatarSrc, avatarFallbackSrc, account, authenticated, onAccount }: { t:(key:TranslationKey)=>string; language:Language; onLanguage:()=>void; onTerms:()=>void; onPrivacy:()=>void; onSupport:()=>void; onEffect:()=>void; reduceEffects:boolean; displayName:string; avatarSrc?:string|null; avatarFallbackSrc?:string|null; account:Account|null; authenticated:boolean; onAccount:()=>void }) {
+  return <section className="screen menu-screen"><span className="eyebrow">DIRE BET</span><h1>{t('menuTitle')}</h1><div className="profile-card"><div className="profile-avatar"><PlayerAvatar src={avatarSrc} fallbackSrc={avatarFallbackSrc} fallback={(displayName.trim()[0] || 'P').toUpperCase()} /></div><div><strong>{displayName}</strong><span>{authenticated ? account ? account.phoneShared ? t('contactLinked') : t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div><div className="menu-group"><button onClick={onAccount}><span className="menu-icon"><Icon name="person"/></span><span><strong>{t('account')}</strong><small>{t('webLogin')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onLanguage}><span className="menu-icon"><Icon name="globe"/></span><span><strong>{t('language')}</strong><small>{languageNames[language]}</small></span><Icon name="chevron"/></button><button onClick={onEffect} aria-pressed={reduceEffects}><span className="menu-icon">◌</span><span><strong>{t('reduceEffects')}</strong><small>{t('settings')}</small></span><span className={`toggle ${reduceEffects ? 'on' : ''}`} /></button><button onClick={onSupport}><span className="menu-icon"><Icon name="question"/></span><span><strong>{t('support')}</strong><small>{t('comingSoon')}</small></span><Icon name="chevron"/></button></div><div className="menu-group"><button onClick={onTerms}><span className="menu-icon">§</span><span><strong>{t('terms')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button><button onClick={onPrivacy}><span className="menu-icon">◈</span><span><strong>{t('privacy')}</strong><small>{t('legalNote')}</small></span><Icon name="chevron"/></button></div><div className="version">DIRE BET · FREE PLAY</div></section>;
 }
 
 function GameSheet({ game, t, onClose, onRules, onPlay }: { game:Game; t:(key:TranslationKey)=>string; onClose:()=>void; onRules:()=>void; onPlay:()=>void }) {
@@ -764,9 +770,9 @@ function GameSheet({ game, t, onClose, onRules, onPlay }: { game:Game; t:(key:Tr
   return <div className="scrim" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}><section className="bottom-sheet game-sheet" role="dialog" aria-modal="true" aria-labelledby="game-sheet-title"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><GameArt id={game.id}/><span className="eyebrow">{game.availability === 'playable' ? t('freePractice') : t('comingSoon')}</span><h2 id="game-sheet-title">{game.title}</h2><p>{description}</p>{game.id === 'xo' && <button className="rules-link" onClick={onRules}><Icon name="question" size={17}/>{t('howToPlay')}<Icon name="chevron" size={16}/></button>}{game.availability === 'playable' ? <button className="primary-button wide" onClick={onPlay}>{t('playNow')}<span>↗</span></button> : <button className="secondary-button wide" disabled>{t('comingSoon')}</button>}</section></div>;
 }
 
-function OverlaySheet({ overlay, t, language, displayName, authenticated, phoneShared, onLanguage, onClose, onNavigate, onNotice }: { overlay:Exclude<Overlay,null>; t:(key:TranslationKey)=>string; language:Language; displayName:string; authenticated:boolean; phoneShared:boolean|null; onLanguage:(language:Language)=>void; onClose:()=>void; onNavigate:(page:Page)=>void; onNotice:(message:string)=>void }) {
+function OverlaySheet({ overlay, t, language, displayName, avatarSrc, avatarFallbackSrc, authenticated, phoneShared, onLanguage, onClose, onNavigate, onNotice }: { overlay:Exclude<Overlay,null>; t:(key:TranslationKey)=>string; language:Language; displayName:string; avatarSrc?:string|null; avatarFallbackSrc?:string|null; authenticated:boolean; phoneShared:boolean|null; onLanguage:(language:Language)=>void; onClose:()=>void; onNavigate:(page:Page)=>void; onNotice:(message:string)=>void }) {
   if (overlay === 'language') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="bottom-sheet language-sheet" role="dialog" aria-modal="true" aria-labelledby="language-title"><div className="sheet-handle"/><button className="sheet-close" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button><span className="eyebrow">DIRE BET</span><h2 id="language-title">{t('selectLanguage')}</h2>{(['am','en','so','om'] as Language[]).map((lang) => <button key={lang} className={`language-option ${language === lang ? 'chosen' : ''}`} onClick={() => onLanguage(lang)}><span className="language-code">{languageCodes[lang]}</span><strong>{languageNames[lang]}</strong>{language === lang && <span className="check-mark">✓</span>}</button>)}</section></div>;
-  if (overlay === 'menu') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><aside className="drawer" role="dialog" aria-modal="true"><div className="drawer-head"><a className="wordmark" href="/" onClick={(e) => e.preventDefault()}><span>DIRE</span><b>BET</b><i>✦</i></a><button className="icon-button" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button></div><div className="profile-card"><div className="profile-avatar">{displayName.slice(0,1).toUpperCase()}</div><div><strong>{displayName}</strong><span>{authenticated ? phoneShared ? t('contactLinked') : phoneShared === false ? t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div>{(['wallet','matches','rank'] as Page[]).map((page) => <button key={page} className={`drawer-row ${page === 'wallet' ? 'wallet-drawer-row' : ''}`} onClick={() => onNavigate(page)}><Icon name={page}/><span>{t(page as TranslationKey)}</span><Icon name="chevron" size={17}/></button>)}<button className="drawer-row" onClick={() => { onClose(); onNotice(t('support')); }}><Icon name="question"/><span>{t('support')}</span><Icon name="chevron" size={17}/></button><button className="drawer-row" onClick={() => { onClose(); onNavigate('menu'); }}><Icon name="globe"/><span>{t('language')}</span><span className="drawer-current">{languageNames[language]}</span></button><div className="drawer-footer">DIRE BET · FREE PLAY</div></aside></div>;
+  if (overlay === 'menu') return <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><aside className="drawer" role="dialog" aria-modal="true"><div className="drawer-head"><a className="wordmark" href="/" onClick={(e) => e.preventDefault()}><span>DIRE</span><b>BET</b><i>✦</i></a><button className="icon-button" onClick={onClose} aria-label={t('close')}><Icon name="close"/></button></div><div className="profile-card"><div className="profile-avatar"><PlayerAvatar src={avatarSrc} fallbackSrc={avatarFallbackSrc} fallback={(displayName.trim()[0] || 'P').toUpperCase()} /></div><div><strong>{displayName}</strong><span>{authenticated ? phoneShared ? t('contactLinked') : phoneShared === false ? t('contactNotLinked') : t('onlineConnecting') : t('guestTitle')}</span></div></div>{(['wallet','matches','rank'] as Page[]).map((page) => <button key={page} className={`drawer-row ${page === 'wallet' ? 'wallet-drawer-row' : ''}`} onClick={() => onNavigate(page)}><Icon name={page}/><span>{t(page as TranslationKey)}</span><Icon name="chevron" size={17}/></button>)}<button className="drawer-row" onClick={() => { onClose(); onNotice(t('support')); }}><Icon name="question"/><span>{t('support')}</span><Icon name="chevron" size={17}/></button><button className="drawer-row" onClick={() => { onClose(); onNavigate('menu'); }}><Icon name="globe"/><span>{t('language')}</span><span className="drawer-current">{languageNames[language]}</span></button><div className="drawer-footer">DIRE BET · FREE PLAY</div></aside></div>;
   const isLegal = overlay === 'terms' || overlay === 'privacy';
   const title = overlay === 'support' ? t('support') : overlay === 'notifications' ? t('matches') : overlay === 'terms' ? t('terms') : overlay === 'privacy' ? t('privacy') : t('howToPlay');
   const copy = overlay === 'support' ? t('comingSoon') : overlay === 'notifications' ? t('matchesEmpty') : overlay === 'rules' ? xoRules[language] : t('legalNote');

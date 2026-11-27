@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameId } from '@dire-bet/shared';
 import type { TranslationKey } from '../i18n';
 import type { MarketplaceRoom, MarketplaceSettings, RoomConfig } from './marketplaceTypes';
+import { PlayerAvatar } from './PlayerAvatar';
 
 export type RoomAlertPrefs = { enabled: boolean; minEtb: number; maxEtb: number };
 
@@ -11,6 +12,7 @@ type Props = {
   token: string | null;
   t: Translator;
   displayName: string;
+  avatarUrl?: string | null;
   alertPrefs?: RoomAlertPrefs;
   onSaveAlertPrefs?: (prefs: RoomAlertPrefs) => Promise<void>;
   onRoomsSnapshot?: (rooms: MarketplaceRoom[]) => void;
@@ -26,7 +28,7 @@ const ALERT_ETB_OPTIONS = [0, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000, 1000
 const defaultAlertPrefs: RoomAlertPrefs = { enabled: false, minEtb: 30, maxEtb: 10000 };
 const defaultSettings: MarketplaceSettings = { standardAmounts: STANDARD_PAID_AMOUNTS, customEnabled: true, customMaximum: 1000, waitingSeconds: 90, realMoneyEnabled: false };
 
-export default function PublicRoomLobby({ gameId, token, t, displayName, alertPrefs = defaultAlertPrefs, onSaveAlertPrefs, onRoomsSnapshot, onRoom, onPractice, onExit }: Props) {
+export default function PublicRoomLobby({ gameId, token, t, displayName, avatarUrl, alertPrefs = defaultAlertPrefs, onSaveAlertPrefs, onRoomsSnapshot, onRoom, onPractice, onExit }: Props) {
   const isLudo = gameId === 'ludo';
   const [rooms, setRooms] = useState<MarketplaceRoom[]>([]);
   const [activeRoom, setActiveRoom] = useState<MarketplaceRoom | null>(null);
@@ -355,7 +357,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
           {activeRoom && ['WAITING', 'FULL', 'STARTING'].includes(activeRoom.status) && (
             <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
               <div className="market-room-primary">
-                <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>👑</span>
+                <span className="market-avatar" style={{ borderColor: '#ffc840' }}>
+                  <PlayerAvatar src={activeRoom.creatorAvatarUrl || avatarUrl} fallbackSrc={avatarUrl} fallback={((activeRoom.creatorName || displayName).trim()[0] || 'P').toUpperCase()} />
+                </span>
                 <div className="market-room-player">
                   <strong>{activeRoom.creatorName || displayName}</strong>
                   <small style={{ color: '#ffc840' }}>⏳ {t('marketWaiting')}</small>
@@ -386,7 +390,9 @@ export default function PublicRoomLobby({ gameId, token, t, displayName, alertPr
           )}
           {activeRoom?.status === 'IN_PROGRESS' && <article className="public-room-card my-active-room" style={{ borderColor: '#ffc840', background: 'linear-gradient(115deg, #2b2612ed, #161c2bed)' }}>
             <div className="market-room-primary">
-              <span className="market-avatar" style={{ borderColor: '#ffc840', background: '#e5a812', color: '#000', fontWeight: 'bold' }}>🎮</span>
+              <span className="market-avatar" style={{ borderColor: '#ffc840' }}>
+                <PlayerAvatar src={activeRoom.creatorAvatarUrl || avatarUrl} fallbackSrc={avatarUrl} fallback={((activeRoom.creatorName || displayName).trim()[0] || 'P').toUpperCase()} />
+              </span>
               <div className="market-room-player"><strong>{activeRoom.creatorName || displayName}</strong><small style={{ color: '#ffc840' }}>{t('marketInProgress')}</small></div>
               <div className="market-room-stake"><strong>{activeRoom.entryCredits === 0 ? t('marketFree') : formatCredits(activeRoom.entryCredits)}</strong><small>{activeRoom.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div>
               <button className="market-join-button" disabled={busy || !token} onClick={() => void resume()}>{busy ? '…' : t('marketResumeMatch')}</button>
@@ -491,7 +497,7 @@ function RoomCard({ room, now, busy, canJoin, onJoin, t }: { room: MarketplaceRo
   const target = room.options.crownTarget === 1 || room.options.crownTarget === 2 || room.options.crownTarget === 4 ? room.options.crownTarget : 4;
   const pair = room.options.player0Color === 'blue' ? `${t('marketBlue')} vs ${t('marketGreen')}` : room.options.player0Color === 'green' ? t('marketGreenVsBlue') : t('marketYellowVsRed');
   return <article className="public-room-card">
-    <div className="market-room-primary"><span className="market-avatar">{room.creatorAvatar}</span><div className="market-room-player"><strong>{room.creatorName}</strong><small>{room.gameId === 'ludo' ? <><span aria-hidden="true">♛</span> {target} · {pair}</> : gameMode(room.gameId)}</small></div><div className="market-room-stake"><strong>{room.entryCredits === 0 ? t('marketFree') : formatCredits(room.entryCredits)}</strong><small>{room.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div><div className="market-room-time"><strong>{formatTimeLeft(seconds)}</strong><small>{t('marketTimeLeft')}</small></div><button className="market-join-button" disabled={busy || !canJoin} onClick={onJoin}>{canJoin ? t('joinRoom') : t('marketTelegramRequired')}</button></div>
+    <div className="market-room-primary"><span className="market-avatar"><PlayerAvatar src={room.creatorAvatarUrl} fallback={room.creatorAvatar} /></span><div className="market-room-player"><strong>{room.creatorName}</strong><small>{room.gameId === 'ludo' ? <><span aria-hidden="true">♛</span> {target} · {pair}</> : gameMode(room.gameId)}</small></div><div className="market-room-stake"><strong>{room.entryCredits === 0 ? t('marketFree') : formatCredits(room.entryCredits)}</strong><small>{room.entryCredits === 0 ? t('marketNoEntry') : t('marketDemoCredits')}</small></div><div className="market-room-time"><strong>{formatTimeLeft(seconds)}</strong><small>{t('marketTimeLeft')}</small></div><button className="market-join-button" disabled={busy || !canJoin} onClick={onJoin}>{canJoin ? t('joinRoom') : t('marketTelegramRequired')}</button></div>
     <div className="market-room-details"><span>#{room.code}</span><span>{gameTitle(room.gameId)} · {room.mode}</span><span>{room.playerCount}/{room.capacity} {t('marketPlayersRequired')}</span></div>
   </article>;
 }
@@ -523,7 +529,8 @@ function WaitingRoom({
   const viewerSeat = room.viewerSeat ?? (room.viewerIsCreator ? 0 : 1);
   const me = room.players.find((p) => p.seat === viewerSeat) || {
     name: displayName || room.creatorName || t('marketYou'),
-    avatar: room.creatorAvatar || '👤',
+    avatar: room.creatorAvatar || 'P',
+    avatarUrl: room.creatorAvatarUrl,
     seat: viewerSeat,
   };
   const opponent = room.players.find((p) => p.seat !== viewerSeat);
@@ -601,7 +608,7 @@ function WaitingRoom({
         {/* Player 1 (You) */}
         <div className="baron-fighter-card baron-fighter-left">
           <div className="baron-avatar-wrap pulse-glow">
-            <span className="baron-avatar">{me.avatar || '👤'}</span>
+            <span className="baron-avatar"><PlayerAvatar src={me.avatarUrl} fallback={me.avatar || ((me.name?.trim()[0] || 'P').toUpperCase())} /></span>
             <span className="baron-you-crown">👑 YOU</span>
           </div>
           <strong className="baron-fighter-name">{me.name}</strong>
@@ -636,7 +643,7 @@ function WaitingRoom({
           {opponent ? (
             <div className="baron-fighter-loaded">
               <div className="baron-avatar-wrap opponent-glow">
-                <span className="baron-avatar">{opponent.avatar || '👤'}</span>
+                <span className="baron-avatar"><PlayerAvatar src={opponent.avatarUrl} fallback={opponent.avatar || ((opponent.name?.trim()[0] || 'P').toUpperCase())} /></span>
                 <span className="baron-challenger-tag">CHALLENGER</span>
               </div>
               <strong className="baron-fighter-name">{opponent.name}</strong>
