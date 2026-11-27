@@ -1,41 +1,30 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { legalLudoActions, type LudoPlayer, type LudoState } from '@dire-bet/engines/ludo';
+import { LUDO_HOME, legalLudoActions, type LudoPlayer, type LudoState } from '@dire-bet/engines/ludo';
 
 export type LudoBoardColor = 'red' | 'yellow' | 'green' | 'blue';
 type BoardColor = LudoBoardColor;
 
 export function LudoPawnPin({ color }: { color: LudoBoardColor }) {
-  const palette: Record<LudoBoardColor, { light: string; main: string; dark: string }> = {
-    red: { light: '#ff7a84', main: '#e61c24', dark: '#8c0d14' },
-    yellow: { light: '#fff066', main: '#facc15', dark: '#a16207' },
-    blue: { light: '#7dd3fc', main: '#1d8cf8', dark: '#1e3a8a' },
-    green: { light: '#6ee7b7', main: '#00a645', dark: '#065f46' },
+  const palette: Record<LudoBoardColor, { main: string }> = {
+    red: { main: '#e61c24' },
+    yellow: { main: '#facc15' },
+    blue: { main: '#1d8cf8' },
+    green: { main: '#00a645' },
   };
-  const { light, main, dark } = palette[color] || palette.red;
-  const gradId = `ludo-pawn-grad-${color}`;
+  const { main } = palette[color] || palette.red;
 
   return (
     <svg className="ludo-pawn-svg" viewBox="3 1 34 45" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id={gradId} cx="35%" cy="28%" r="72%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.86" />
-          <stop offset="28%" stopColor={light} />
-          <stop offset="72%" stopColor={main} />
-          <stop offset="100%" stopColor={dark} />
-        </radialGradient>
-      </defs>
-      <ellipse cx="20" cy="41.5" rx="14.5" ry="4.8" fill={dark} stroke="rgba(15,23,42,0.5)" strokeWidth="1" />
-      <ellipse cx="20" cy="39.8" rx="13.5" ry="4.2" fill={`url(#${gradId})`} />
+      <ellipse cx="20" cy="36.5" rx="11.8" ry="6.8" fill={main} stroke="#111827" strokeWidth="1.35" />
+      <ellipse cx="20" cy="36.5" rx="7.8" ry="4.3" fill={main} stroke="#111827" strokeWidth="1.15" />
       <path
-        d="M 9.5 38.5 C 10.8 27.5 14.8 21 15.8 17 L 24.2 17 C 25.2 21 29.2 27.5 30.5 38.5 Z"
-        fill={`url(#${gradId})`}
-        stroke={dark}
-        strokeWidth="1"
+        d="M 20 35.5 C 15.5 29.5 9.2 21.8 9.2 14.5 C 9.2 8.2 14.0 3.2 20 3.2 C 26.0 3.2 30.8 8.2 30.8 14.5 C 30.8 21.8 24.5 29.5 20 35.5 Z"
+        fill="#ffffff"
+        stroke="#111827"
+        strokeWidth="1.45"
         strokeLinejoin="round"
       />
-      <ellipse cx="20" cy="17.5" rx="7" ry="2.3" fill={light} stroke={dark} strokeWidth="0.8" />
-      <circle cx="20" cy="10.6" r="7.8" fill={`url(#${gradId})`} stroke={dark} strokeWidth="1" />
-      <ellipse cx="17.2" cy="7.8" rx="2.5" ry="1.6" fill="#ffffff" opacity="0.72" transform="rotate(-24 17.2 7.8)" />
+      <circle cx="20" cy="14.2" r="5.6" fill={main} stroke="#111827" strokeWidth="1.25" />
     </svg>
   );
 }
@@ -52,8 +41,13 @@ const TRACK: [number, number][] = [
 ];
 
 const HOME_LANES: [[number, number][], [number, number][]] = [
-  [[7, 1], [7, 2], [7, 3], [7, 4], [7, 5], [7, 6]],
-  [[7, 13], [7, 12], [7, 11], [7, 10], [7, 9], [7, 8]],
+  [[7, 1], [7, 2], [7, 3], [7, 4], [7, 5]],
+  [[7, 13], [7, 12], [7, 11], [7, 10], [7, 9]],
+];
+
+const FINISH_TRIANGLES: [[number, number], [number, number]] = [
+  [7, 6],
+  [7, 8],
 ];
 
 const HOME_SPACES: [number, number][][] = [
@@ -272,12 +266,13 @@ export function TraditionalLudoBoard({ game, seat, playerZeroColor, onMove }: {
         const pathIndex = (position + player * 26) % 52;
         const [row, col] = rotate(TRACK[pathIndex], rotation);
         rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: pathIndex });
-      } else if (position < 57) {
+      } else if (position < LUDO_HOME) {
         const [row, col] = rotate(HOME_LANES[player][position - 51], rotation);
         rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -2 });
       } else {
-        // Center finish area (7, 7)
-        rawTokens.push({ player: player as LudoPlayer, token, row: 7, col: 7, pathPosition: -3 });
+        // Player's colored finish triangle inside center 3x3 finish area
+        const [row, col] = rotate(FINISH_TRIANGLES[player], rotation);
+        rawTokens.push({ player: player as LudoPlayer, token, row, col, pathPosition: -3 });
       }
     }
   }

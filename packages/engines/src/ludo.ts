@@ -13,7 +13,8 @@ export type LudoState = {
   lastMove: { player: LudoPlayer; token: number; captured?: { player: LudoPlayer; token: number } } | null;
 };
 
-const HOME = 57;
+export const LUDO_HOME = 56;
+const HOME = LUDO_HOME;
 const TRACK_LENGTH = 52;
 const STARTS: [number, number] = [0, 26];
 const SAFE_TRACK_CELLS = new Set([0, 8, 13, 21, 26, 34, 39, 47]);

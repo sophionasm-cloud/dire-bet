@@ -662,6 +662,18 @@
 .ludo-die-pips>i{width:9px;height:9px;border-radius:50%}
 .ludo-die-pips>i.pip{background:radial-gradient(circle at 35% 35%,#334155 0%,#0f172a 80%);box-shadow:inset 0 1px 2px rgba(0,0,0,0.65),0 1px 0 rgba(255,255,255,0.6)}
 .ludo-dice-glow-ring{width:82px;height:15px;margin-top:-4px;border-radius:50%;background:radial-gradient(ellipse at center,rgba(251,191,36,0.42) 0%,rgba(251,191,36,0.1) 60%,transparent 80%);border:1.5px solid rgba(251,191,36,0.75);box-shadow:0 0 16px rgba(251,191,36,0.6),inset 0 0 8px rgba(251,191,36,0.3)}
+.ludo-dice-stage.red .ludo-die-face{background:linear-gradient(145deg,#ff6b74 0%,#e61c24 62%,#9f1119 100%);border-color:rgba(254,202,202,0.8);box-shadow:inset 0 2px 4px rgba(255,255,255,0.42),inset 0 -3px 5px rgba(69,10,10,0.42),0 3px 6px rgba(0,0,0,0.38)}
+.ludo-dice-stage.red .ludo-die-pips>i.pip{background:radial-gradient(circle at 35% 35%,#ffffff 0%,#f1f5f9 82%);box-shadow:inset 0 1px 1px rgba(255,255,255,0.85),0 1px 2px rgba(69,10,10,0.5)}
+.ludo-dice-stage.red .ludo-dice-glow-ring{background:radial-gradient(ellipse at center,rgba(239,68,68,0.44) 0%,rgba(239,68,68,0.1) 60%,transparent 80%);border-color:rgba(248,113,113,0.8);box-shadow:0 0 16px rgba(239,68,68,0.65),inset 0 0 8px rgba(239,68,68,0.3)}
+.ludo-dice-stage.yellow .ludo-die-face{background:linear-gradient(145deg,#fef08a 0%,#facc15 62%,#ca8a04 100%);border-color:rgba(254,249,195,0.88);box-shadow:inset 0 2px 4px rgba(255,255,255,0.62),inset 0 -3px 5px rgba(113,63,18,0.34),0 3px 6px rgba(0,0,0,0.35)}
+.ludo-dice-stage.yellow .ludo-die-pips>i.pip{background:radial-gradient(circle at 35% 35%,#334155 0%,#0f172a 82%);box-shadow:inset 0 1px 2px rgba(0,0,0,0.65),0 1px 0 rgba(255,255,255,0.45)}
+.ludo-dice-stage.yellow .ludo-dice-glow-ring{background:radial-gradient(ellipse at center,rgba(250,204,21,0.45) 0%,rgba(250,204,21,0.12) 60%,transparent 80%);border-color:rgba(253,224,71,0.85);box-shadow:0 0 16px rgba(250,204,21,0.65),inset 0 0 8px rgba(250,204,21,0.3)}
+.ludo-dice-stage.blue .ludo-die-face{background:linear-gradient(145deg,#7dd3fc 0%,#1d8cf8 62%,#1e40af 100%);border-color:rgba(191,219,254,0.82);box-shadow:inset 0 2px 4px rgba(255,255,255,0.45),inset 0 -3px 5px rgba(15,23,42,0.4),0 3px 6px rgba(0,0,0,0.38)}
+.ludo-dice-stage.blue .ludo-die-pips>i.pip{background:radial-gradient(circle at 35% 35%,#ffffff 0%,#e0f2fe 82%);box-shadow:inset 0 1px 1px rgba(255,255,255,0.85),0 1px 2px rgba(15,23,42,0.5)}
+.ludo-dice-stage.blue .ludo-dice-glow-ring{background:radial-gradient(ellipse at center,rgba(59,130,246,0.44) 0%,rgba(59,130,246,0.1) 60%,transparent 80%);border-color:rgba(96,165,250,0.82);box-shadow:0 0 16px rgba(59,130,246,0.65),inset 0 0 8px rgba(59,130,246,0.3)}
+.ludo-dice-stage.green .ludo-die-face{background:linear-gradient(145deg,#6ee7b7 0%,#00a645 62%,#065f46 100%);border-color:rgba(167,243,208,0.82);box-shadow:inset 0 2px 4px rgba(255,255,255,0.45),inset 0 -3px 5px rgba(6,78,59,0.42),0 3px 6px rgba(0,0,0,0.38)}
+.ludo-dice-stage.green .ludo-die-pips>i.pip{background:radial-gradient(circle at 35% 35%,#ffffff 0%,#ecfdf5 82%);box-shadow:inset 0 1px 1px rgba(255,255,255,0.85),0 1px 2px rgba(6,78,59,0.5)}
+.ludo-dice-stage.green .ludo-dice-glow-ring{background:radial-gradient(ellipse at center,rgba(34,197,94,0.44) 0%,rgba(34,197,94,0.1) 60%,transparent 80%);border-color:rgba(74,222,128,0.82);box-shadow:0 0 16px rgba(34,197,94,0.65),inset 0 0 8px rgba(34,197,94,0.3)}
 @keyframes ludo-cube-roll{
   0%{transform:rotateX(-16deg) rotateY(22deg) scale(0.92)}
   25%{transform:translateY(-22px) rotateX(190deg) rotateY(180deg) scale(1.12)}
@@ -2097,6 +2109,11 @@
 .lobby-game-ludo::before,.lobby-game-xo::before,.lobby-game-checkers::before{display:none}
 .game-live-players{display:inline-flex;align-items:center;gap:5px;color:#8ee8b5!important;font-weight:600}
 .live-player-dot{width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.85);flex:none}
+.profile-avatar,.market-avatar,.ludo-player-avatar,.checkers-avatar,.baron-avatar,.player-avatar{overflow:hidden}
+.avatar-photo{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+.xo-seat-avatar{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:50%;border:1px solid #4d6b8f;background:#16253b;color:#f3f7ff;font-size:13px;font-weight:800;overflow:hidden}
+.xo-seat-avatar.x-seat{border-color:#ff7b72}
+.xo-seat-avatar.o-seat{border-color:#58a6ff}
 
 /* Forfeit Confirmation Modal */
 .forfeit-modal-overlay {

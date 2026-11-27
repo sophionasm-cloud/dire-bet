@@ -53,28 +53,36 @@ describe('Ludo rules', () => {
   });
 
   it('grants an extra turn when a token reaches home without winning yet', () => {
-    const state = { ...initLudo(0, 4), tokens: [[55, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 2 };
+    const state = { ...initLudo(0, 4), tokens: [[54, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 2 };
     const moved = moveLudo(state, 0);
-    expect(moved.tokens[0][0]).toBe(57);
+    expect(moved.tokens[0][0]).toBe(56);
     expect(moved.lastEvent).toBe('home');
     expect(moved.winner).toBeNull();
     expect(moved.turn).toBe(0);
   });
 
+  it('finishes in six steps from the home-lane entry arrow without requiring a second move', () => {
+    const state = { ...initLudo(0, 1), tokens: [[50, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 6 };
+    const moved = moveLudo(state, 0);
+    expect(moved.tokens[0][0]).toBe(56);
+    expect(moved.lastEvent).toBe('win');
+    expect(moved.winner).toBe(0);
+  });
+
   it('requires an exact roll to enter home', () => {
-    const state = { ...initLudo(), tokens: [[56, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 2 };
+    const state = { ...initLudo(), tokens: [[55, -1, -1, -1], [-1, -1, -1, -1]] as [number[], number[]], dice: 2 };
     expect(legalLudoActions(state)).toEqual([]);
     expect(() => moveLudo(state, 0)).toThrow('Illegal move');
   });
 
   it.each([1, 2, 4] as const)('ends at the selected %i-crown target', (target) => {
-    const tokens: [number[], number[]] = [[...Array(target - 1).fill(57), 56, ...Array(4 - target).fill(-1)], [-1, -1, -1, -1]];
+    const tokens: [number[], number[]] = [[...Array(target - 1).fill(56), 55, ...Array(4 - target).fill(-1)], [-1, -1, -1, -1]];
     expect(moveLudo({ ...initLudo(0, target), tokens, dice: 1 }, target - 1).winner).toBe(0);
   });
 
   it.each([2, 4] as const)('does not end before the selected %i-crown target', (target) => {
     const finished = target - 2;
-    const tokens: [number[], number[]] = [[...Array(finished).fill(57), 56, ...Array(3 - finished).fill(-1)], [-1, -1, -1, -1]];
+    const tokens: [number[], number[]] = [[...Array(finished).fill(56), 55, ...Array(3 - finished).fill(-1)], [-1, -1, -1, -1]];
     expect(moveLudo({ ...initLudo(0, target), tokens, dice: 1 }, finished).winner).toBeNull();
   });
 });

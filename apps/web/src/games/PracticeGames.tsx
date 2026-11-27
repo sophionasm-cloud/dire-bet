@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { botLudoToken, initLudo, legalLudoActions, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
+import { LUDO_HOME, botLudoToken, initLudo, legalLudoActions, moveLudo, rollLudo, type LudoState } from '@dire-bet/engines/ludo';
 import { applyPokerAction, botPokerAction, initTexasHoldem, legalPokerActions, type Card, type PokerAction, type PokerState, type Suit } from '@dire-bet/engines/poker';
 import type { TranslationKey } from '../i18n';
 import { TraditionalLudoBoard } from './TraditionalLudoBoard';
@@ -38,7 +38,7 @@ export function LudoPractice({ t, onExit, reduceEffects, tutorialMode = false, o
 
   const legalActions = state.turn === 0 ? legalLudoActions(state) : [];
   const allAtBase = state.tokens[0].every((pos) => pos === -1);
-  const nearHome = state.tokens[0].some((pos) => pos >= 46 && pos < 57);
+  const nearHome = state.tokens[0].some((pos) => pos >= 46 && pos < LUDO_HOME);
 
   let tutorialHint = '';
   if (tutorialMode) {
@@ -89,13 +89,13 @@ export function LudoPractice({ t, onExit, reduceEffects, tutorialMode = false, o
       </div>
     )}
     <div className="ludo-match-header">
-      <PracticeLudoPlayerPanel name={t('you')} color="yellow" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
+      <PracticeLudoPlayerPanel name={t('you')} color="yellow" active={state.turn === 0 && state.winner === null} finished={state.tokens[0].filter((position) => position === LUDO_HOME).length} t={t}/>
       <div className="ludo-bet-card">
         <span className="ludo-bet-label">{tutorialMode ? t('ludoTutorialBadge') : t('freePractice')}</span>
         <strong className="ludo-bet-amount">{t('bot')}</strong>
         <span className="ludo-bet-timer">◷ {turnSeconds}s</span>
       </div>
-      <PracticeLudoPlayerPanel name={t('bot')} color="red" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === 57).length} t={t} bot/>
+      <PracticeLudoPlayerPanel name={t('bot')} color="red" active={state.turn === 1 && state.winner === null} finished={state.tokens[1].filter((position) => position === LUDO_HOME).length} t={t} bot/>
     </div>
     <div className="ludo-board-stage">
       <TraditionalLudoBoard game={state} seat={0} playerZeroColor="yellow" onMove={(token) => setState((current) => moveLudo(current, token))}/>

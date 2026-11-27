@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { winningLine, type XOState } from '@dire-bet/engines/xo';
-import { type LudoState } from '@dire-bet/engines/ludo';
+import { LUDO_HOME, type LudoState } from '@dire-bet/engines/ludo';
 import type { CheckersState } from '@dire-bet/engines/checkers';
 import { viewPoker, type Card, type PokerAction, type Suit } from '@dire-bet/engines/poker';
 import type { GameId } from '@dire-bet/shared';
@@ -10,6 +10,7 @@ import { TraditionalLudoBoard, type LudoBoardColor } from './TraditionalLudoBoar
 import { LudoDie, useLudoTurnClock } from './LudoDie';
 import { CheckersRoom, type CheckersSnapshot } from './CheckersRoom';
 import { MatchResultModal } from './MatchResultModal';
+import { PlayerAvatar } from './PlayerAvatar';
 
 export type { RoomConfig } from './marketplaceTypes';
 
@@ -199,13 +200,13 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
         </div>
       </header>
       <div className="ludo-match-header">
-        <LudoPlayerPanel player={snapshot.players[0]} seat={0} color={colorAt(0)} crownTarget={state.crownTarget ?? 4} active={state.turn === 0 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 0} finished={state.tokens[0].filter((position) => position === 57).length} t={t}/>
+        <LudoPlayerPanel player={snapshot.players[0]} seat={0} color={colorAt(0)} crownTarget={state.crownTarget ?? 4} active={state.turn === 0 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 0} finished={state.tokens[0].filter((position) => position === LUDO_HOME).length} t={t}/>
         <div className="ludo-bet-card">
           <span className="ludo-bet-label">{roomMeta.entryCredits ? t('marketEntryAmount') : 'Mode'}</span>
           <strong className="ludo-bet-amount">{betText}</strong>
           <span className="ludo-bet-timer">◷ {turnSeconds}s</span>
         </div>
-        <LudoPlayerPanel player={snapshot.players[1]} seat={1} color={colorAt(1)} crownTarget={state.crownTarget ?? 4} active={state.turn === 1 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 1} finished={state.tokens[1].filter((position) => position === 57).length} t={t}/>
+        <LudoPlayerPanel player={snapshot.players[1]} seat={1} color={colorAt(1)} crownTarget={state.crownTarget ?? 4} active={state.turn === 1 && snapshot.status === 'active' && state.winner === null} own={snapshot.seat === 1} finished={state.tokens[1].filter((position) => position === LUDO_HOME).length} t={t}/>
       </div>
       <div className="ludo-board-stage">
         {snapshot.status === 'active' ? <OnlineLudo game={state} seat={snapshot.seat} playerZeroColor={playerZeroColor} notice={notice} t={t} send={send}/> : <div className="ludo-game-preparing" role="status">{t('marketPreparingGame')}</div>}
@@ -231,7 +232,7 @@ export function OnlineRoom({ room, token, t, onExit }: Props & { room: RoomConfi
     <div className="practice-heading"><div><span className="eyebrow">{t('onlineMatches')} · {gameTitle(room.gameId)}</span><h1>{t('roomCodeLabel')}</h1></div><span className={`connection-pill ${connection}`}><i/>{connection === 'connected' ? t('onlineConnected') : connection === 'connecting' ? t('onlineConnecting') : t('onlineDisconnected')}</span></div>
     <div className="room-code-card"><strong>{room.code}</strong><div><button className="secondary-button" onClick={() => void copy()}>{t('copyCode')}</button><button className="primary-button" onClick={() => void share()}>{t('shareInvite')}</button></div></div>
     <p className="practice-note">{t('freeRoomNotice')}</p>
-    {snapshot && <div className="room-seats">{snapshot.players.map((player, index) => <div className="room-seat" key={player.id}><i className={`player-dot ${player.mark === 'X' || (player.mark === null && index === 0) ? 'red-dot' : 'blue-dot'} ${player.online ? 'online' : ''}`}/><span><strong>{player.name}</strong><small>{player.mark ? `${player.mark === snapshot.you ? t('you') : t('opponent')} · ${player.mark}` : player.id === snapshot.players[snapshot.seat]?.id ? t('you') : t('opponent')}</small></span><b>{player.mark || (player.online ? '●' : '·')}</b></div>)}{snapshot.status === 'waiting' && snapshot.players.length < 2 && <div className="room-seat waiting-seat"><span className="seat-placeholder">＋</span><span><strong>{t('waitingForPlayer')}</strong><small>{t('shareInvite')}</small></span></div>}</div>}
+    {snapshot && <div className="room-seats">{snapshot.players.map((player, index) => <div className="room-seat" key={player.id}><span className={`xo-seat-avatar ${player.mark === 'X' || (player.mark === null && index === 0) ? 'x-seat' : 'o-seat'}`}><PlayerAvatar src={player.id ? `/api/avatar/${player.id}` : undefined} fallback={(player.name.trim()[0] || 'P').toUpperCase()} /></span><span><strong>{player.name}</strong><small>{player.mark ? `${player.mark === snapshot.you ? t('you') : t('opponent')} · ${player.mark}` : player.id === snapshot.players[snapshot.seat]?.id ? t('you') : t('opponent')}</small></span><b>{player.mark || (player.online ? '●' : '·')}</b></div>)}{snapshot.status === 'waiting' && snapshot.players.length < 2 && <div className="room-seat waiting-seat"><span className="seat-placeholder">＋</span><span><strong>{t('waitingForPlayer')}</strong><small>{t('shareInvite')}</small></span></div>}</div>}
     {snapshot?.status === 'active' && <>
       <div className="online-game-status" aria-live="polite">{statusText}{snapshot.gameId === 'ludo' && <span className="ludo-turn-clock">◷ {turnSeconds}s</span>}</div>
       {snapshot.gameId === 'xo' && <XOBoard game={snapshot.game as XOState} enabled={isMyTurn(snapshot)} winning={winning} onMove={(index) => send({ type: 'move', index })} />}
@@ -275,9 +276,12 @@ function OnlineLudo({ game, seat, playerZeroColor, notice, t, send }: { game: Lu
 
 function LudoPlayerPanel({ player, seat, color, crownTarget, active, own, finished, t }: { player?: RoomPlayer; seat: number; color: LudoBoardColor; crownTarget: number; active: boolean; own: boolean; finished: number; t: Translator }) {
   const name = player?.name || t('marketPlayer');
+  const fallback = player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2');
   return <article className={`ludo-player-panel ${color} ${active ? 'turn-active' : ''}`}>
     <div className="ludo-player-top">
-      <span className={`ludo-player-avatar ${color}`}>{player?.name?.trim().slice(0, 1).toUpperCase() || (seat === 0 ? '1' : '2')}</span>
+      <span className={`ludo-player-avatar ${color}`}>
+        <PlayerAvatar src={player?.id ? `/api/avatar/${player.id}` : undefined} fallback={fallback} />
+      </span>
       <div className="ludo-player-copy">
         <strong>{name}{own ? ` · ${t('marketYou')}` : ''}</strong>
         <small><i className={`player-online-dot ${player?.online ? 'online' : ''}`}/>{player?.online ? t('onlineConnected') : t('marketConnecting')} · {finished}/{crownTarget}</small>
